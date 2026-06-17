@@ -1,0 +1,60 @@
+export const translations = {
+  it: {
+    brandName: "VeloDent",
+    brandStandard: "Precision",
+    healthChecking: "Verifica sistema",
+    healthReady: "Sistema Pronto",
+    healthDegraded: "Sistema da verificare",
+    navAgenda: "Agenda",
+    navPatients: "Pazienti",
+    navClinical: "Clinica",
+    navRx: "RX",
+    navBilling: "Fatturazione",
+    navInventory: "Magazzino",
+    navSettings: "Impostazioni",
+    searchAriaLabel: "Ricerca globale paziente",
+    searchPlaceholder: "Cerca paziente, codice fiscale o azione...",
+    sidebarClinicStationLabel: "Postazione",
+    sidebarClinicStationValue: "PC principale studio",
+    workspaceEyebrow: "Workspace clinico",
+    workspaceTitle: "Dashboard operativa",
+    workspaceSubtitle: "Base Tauri attiva con tema VeloDent Precision, navigazione primaria e health check backend pronto per i moduli clinici.",
+    metricAgendaLabel: "Agenda oggi",
+    metricAgendaValue: "0",
+    metricSyncLabel: "LAN / Sync",
+    metricSyncValue: "Pronta",
+    metricClinicalLabel: "Cartelle aperte",
+    metricClinicalValue: "0"
+  },
+  en: {
+    brandName: "VeloDent",
+    brandStandard: "Precision",
+    healthChecking: "Checking system",
+    healthReady: "System Ready",
+    healthDegraded: "System needs review",
+    navAgenda: "Agenda",
+    navPatients: "Patients",
+    navClinical: "Clinical",
+    navRx: "RX",
+    navBilling: "Billing",
+    navInventory: "Inventory",
+    navSettings: "Settings",
+    searchAriaLabel: "Global patient search",
+    searchPlaceholder: "Search patient, tax code or action...",
+    sidebarClinicStationLabel: "Station",
+    sidebarClinicStationValue: "Main clinic PC",
+    workspaceEyebrow: "Clinical workspace",
+    workspaceTitle: "Operational dashboard",
+    workspaceSubtitle: "Tauri base active with the VeloDent Precision theme, primary navigation and backend health check ready for clinical modules.",
+    metricAgendaLabel: "Today agenda",
+    metricAgendaValue: "0",
+    metricSyncLabel: "LAN / Sync",
+    metricSyncValue: "Ready",
+    metricClinicalLabel: "Open records",
+    metricClinicalValue: "0"
+  }
+} as const;
+
+export type Locale = keyof typeof translations;
+export type L10nKey = keyof (typeof translations)["it"];
+
