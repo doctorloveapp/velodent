@@ -1,5 +1,17 @@
 # VeloDent
 
+<p align="center">
+  <img src="assets/image/logo.png" alt="VeloDent Logo" width="500">
+</p>
+
+<h1 align="center">VeloDent</h1>
+
+<p align="center">
+  <strong>Dental Management System</strong><br>
+  <sub>High-Speed Software for Modern Dental Clinics</sub>
+</p>
+
+---
 VeloDent e' un gestionale odontoiatrico professionale locale-first. L'app desktop Tauri sul PC principale e' il nodo autorevole per dati clinici, agenda, radiografie, preventivi, fatture, pagamenti e accesso mobile in LAN.
 
 La priorita' architetturale e' la protezione dei dati sanitari: database cifrato, file clinici tracciati su file system, audit log, repository backend Rust e nessun accesso diretto dal frontend a dati sensibili.
