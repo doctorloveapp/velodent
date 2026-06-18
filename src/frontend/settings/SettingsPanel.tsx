@@ -27,11 +27,15 @@ import {
 
 const roleOptions: Role[] = ["admin", "odontoiatra", "aso"];
 
-export function SettingsPanel() {
+interface SettingsPanelProps {
+  currentUser: User | null;
+  onCurrentUserChange: (user: User) => void;
+}
+
+export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPanelProps) {
   const { t } = useL10n();
   const [backendAvailable] = useState(isTauriRuntime());
   const [needsFirstAdmin, setNeedsFirstAdmin] = useState(false);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [googleAccounts, setGoogleAccounts] = useState<AuthorizedGoogleAccount[]>([]);
   const [devices, setDevices] = useState<AuthorizedDevice[]>([]);
@@ -108,14 +112,14 @@ export function SettingsPanel() {
       password: adminForm.password,
       google_email: adminForm.googleEmail || undefined
     });
-    setCurrentUser(user);
+    onCurrentUserChange(user);
     setStatusMessage(t("settingsFirstAdminCreated"));
     await refresh();
   }
 
   async function handleLogin() {
     const user = await login(loginForm);
-    setCurrentUser(user);
+    onCurrentUserChange(user);
     setStatusMessage(t("settingsLoginSuccess"));
     await refresh();
   }

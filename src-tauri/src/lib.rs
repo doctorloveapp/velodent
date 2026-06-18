@@ -24,6 +24,8 @@ pub fn run() {
             health::health_check,
             commands::database_status,
             commands::upsert_test_patient,
+            commands::search_patients,
+            commands::ensure_development_patient,
             commands::bootstrap_status,
             commands::create_first_admin,
             commands::login,

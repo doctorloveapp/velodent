@@ -713,6 +713,46 @@ impl Database {
             .map_err(DbError::from)
     }
 
+    pub fn search_patients(&self, query: &str, limit: i64) -> DbResult<Vec<Patient>> {
+        let normalized_limit = limit.clamp(1, 25);
+        let pattern = format!("%{}%", query.trim());
+
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                id,
+                first_name,
+                last_name,
+                tax_code,
+                date_of_birth,
+                phone,
+                email,
+                address,
+                privacy_consent_signed,
+                created_at,
+                updated_at
+            FROM patients
+            WHERE
+                ?1 = '%%'
+                OR first_name LIKE ?1
+                OR last_name LIKE ?1
+                OR tax_code LIKE ?1
+            ORDER BY last_name ASC, first_name ASC
+            LIMIT ?2
+            "#,
+        )?;
+
+        let patients = statement
+            .query_map(params![pattern, normalized_limit], patient_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(patients)
+    }
+
+    pub fn ensure_development_patient(&self) -> DbResult<Patient> {
+        self.upsert_test_patient()
+    }
+
     pub fn upsert_test_patient(&self) -> DbResult<Patient> {
         let tax_code = "TESTVELODENT0001";
 

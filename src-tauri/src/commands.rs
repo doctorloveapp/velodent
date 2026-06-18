@@ -22,6 +22,26 @@ pub fn upsert_test_patient(state: State<'_, AppState>) -> Result<Patient, String
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub fn search_patients(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<i64>,
+) -> Result<Vec<Patient>, String> {
+    state
+        .database()?
+        .search_patients(&query, limit.unwrap_or(10))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn ensure_development_patient(state: State<'_, AppState>) -> Result<Patient, String> {
+    state
+        .database()?
+        .ensure_development_patient()
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateFirstAdminRequest {
     username: String,

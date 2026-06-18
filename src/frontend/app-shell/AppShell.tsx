@@ -1,4 +1,5 @@
-import { Activity, CalendarDays, CircleDollarSign, ClipboardList, Images, Package, Search, Settings, UsersRound } from "lucide-react";
+import { Activity, CalendarDays, CircleDollarSign, ClipboardList, Images, Search, Settings, UserRound, UsersRound, Wifi } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { getHealthStatus, type HealthStatus } from "@/frontend/shared/api/health";
 import { Badge } from "@/frontend/shared/ui/badge";
@@ -6,6 +7,9 @@ import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { SettingsPanel } from "@/frontend/settings/SettingsPanel";
+import type { User } from "@/frontend/settings/settingsApi";
+import { CommandPalette } from "./CommandPalette";
+import type { Patient } from "@/frontend/patients/patientsApi";
 
 const navItems = [
   { key: "agenda", icon: CalendarDays, labelKey: "navAgenda" },
@@ -13,13 +17,20 @@ const navItems = [
   { key: "clinical", icon: ClipboardList, labelKey: "navClinical" },
   { key: "rx", icon: Images, labelKey: "navRx" },
   { key: "billing", icon: CircleDollarSign, labelKey: "navBilling" },
-  { key: "inventory", icon: Package, labelKey: "navInventory" },
   { key: "settings", icon: Settings, labelKey: "navSettings" }
 ] as const;
 
+const LAST_SECTION_STORAGE_KEY = "velodent:last-section";
+
 export function AppShell() {
   const { t } = useL10n();
-  const [activeKey, setActiveKey] = useState<(typeof navItems)[number]["key"]>("agenda");
+  const [activeKey, setActiveKey] = useState<(typeof navItems)[number]["key"]>(() => {
+    const stored = window.localStorage.getItem(LAST_SECTION_STORAGE_KEY);
+    return navItems.some((item) => item.key === stored) ? (stored as (typeof navItems)[number]["key"]) : "agenda";
+  });
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [health, setHealth] = useState<HealthStatus>({
     status: "checking",
     message: t("healthChecking")
@@ -38,6 +49,22 @@ export function AppShell() {
       mounted = false;
     };
   }, [t]);
+
+  useEffect(() => {
+    window.localStorage.setItem(LAST_SECTION_STORAGE_KEY, activeKey);
+  }, [activeKey]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandPaletteOpen(true);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return (
     <div className="flex min-h-screen bg-ink-black-950 text-ink-black-50">
@@ -60,16 +87,22 @@ export function AppShell() {
             const active = activeKey === item.key;
 
             return (
-              <Button
+              <motion.div
                 key={item.key}
-                type="button"
-                variant={active ? "navActive" : "nav"}
-                className="justify-start"
-                onClick={() => setActiveKey(item.key)}
+                animate={{ opacity: 1, y: 0 }}
+                initial={{ opacity: 0, y: 6 }}
+                transition={{ duration: 0.24, delay: 0.05 }}
               >
-                <Icon aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
-                <span>{t(item.labelKey)}</span>
-              </Button>
+                <Button
+                  type="button"
+                  variant={active ? "navActive" : "nav"}
+                  className="w-full justify-start"
+                  onClick={() => setActiveKey(item.key)}
+                >
+                  <Icon aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+                  <span>{t(item.labelKey)}</span>
+                </Button>
+              </motion.div>
             );
           })}
         </nav>
@@ -90,11 +123,22 @@ export function AppShell() {
             <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-alabaster-grey-500" strokeWidth={1.5} />
             <Input
               aria-label={t("searchAriaLabel")}
-              className="h-10 pl-10"
+              className="h-10 cursor-pointer pl-10"
               placeholder={t("searchPlaceholder")}
+              readOnly
               type="search"
+              onFocus={() => setCommandPaletteOpen(true)}
+              onClick={() => setCommandPaletteOpen(true)}
             />
+            <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-alabaster-grey-500/20 px-2 py-1 font-mono text-[10px] text-alabaster-grey-500">
+              {t("searchShortcut")}
+            </kbd>
           </div>
+
+          <Badge variant="default" className="font-mono">
+            <Wifi aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
+            {t("syncReady")}
+          </Badge>
 
           <Badge
             variant={health.status === "ready" ? "success" : "warning"}
@@ -103,17 +147,44 @@ export function AppShell() {
             <span className="h-2 w-2 rounded-full bg-current shadow-[0_0_12px_currentColor]" />
             {health.message}
           </Badge>
+
+          <Badge variant={currentUser ? "success" : "warning"}>
+            <UserRound aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
+            {currentUser ? currentUser.username : t("topBarNoUser")}
+          </Badge>
         </header>
 
         <main className="flex-1 overflow-y-auto bg-ink-black-950 p-6">
-          {activeKey === "settings" ? <SettingsPanel /> : <DashboardWorkspace />}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeKey}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              initial={{ opacity: 0, y: 10 }}
+              transition={{ duration: 0.3 }}
+            >
+              {activeKey === "settings" ? (
+                <SettingsPanel currentUser={currentUser} onCurrentUserChange={setCurrentUser} />
+              ) : (
+                <DashboardWorkspace selectedPatient={selectedPatient} />
+              )}
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
+      <CommandPalette
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        onPatientSelected={(patient) => {
+          setSelectedPatient(patient);
+          setActiveKey("patients");
+        }}
+      />
     </div>
   );
 }
 
-function DashboardWorkspace() {
+function DashboardWorkspace({ selectedPatient }: { selectedPatient: Patient | null }) {
   const { t } = useL10n();
 
   return (
@@ -127,6 +198,18 @@ function DashboardWorkspace() {
           {t("workspaceSubtitle")}
         </p>
       </div>
+
+      {selectedPatient ? (
+        <div className="rounded-xl border border-powder-blue-500/25 bg-powder-blue-950 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
+            {t("selectedPatientEyebrow")}
+          </p>
+          <p className="mt-2 text-lg font-semibold text-white">
+            {selectedPatient.last_name} {selectedPatient.first_name}
+          </p>
+          <p className="mt-1 font-mono text-xs text-alabaster-grey-500">{selectedPatient.tax_code}</p>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-3 gap-4">
         <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
