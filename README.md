@@ -21,7 +21,7 @@ La priorita' architetturale e' la protezione dei dati sanitari: database cifrato
 - Desktop: Tauri 2.
 - Frontend: React, TypeScript, Vite, Tailwind CSS, shadcn/ui-style primitives.
 - Backend: Rust con Tauri commands.
-- Database: SQLite tramite `rusqlite` con feature `bundled-sqlcipher`.
+- Database: SQLite tramite `rusqlite` con feature `bundled-sqlcipher-vendored-openssl`.
 - Persistenza file: directory dati locale gestita dal backend.
 - Test: Vitest per frontend; test Rust per database e repository quando la toolchain Rust e' disponibile.
 
@@ -58,6 +58,7 @@ Per avviare o compilare l'app desktop Tauri servono:
 - `cargo` e `rustc` disponibili nel `PATH`.
 - Visual Studio Build Tools 2022 con componenti MSVC C++ e Windows SDK.
 - WebView2 Runtime.
+- Perl disponibile nel `PATH` se si compila SQLCipher con OpenSSL vendorizzato.
 
 Verifica ambiente:
 
@@ -142,11 +143,20 @@ Gli importi economici sono sempre `INTEGER` in centesimi. Non usare `REAL` per p
 - `health_check`: verifica minima del runtime Tauri.
 - `database_status`: restituisce stato apertura DB, cifratura, versione schema, stato foreign key e sorgente chiave.
 - `upsert_test_patient`: smoke test repository per inserire o recuperare un paziente tecnico di sviluppo.
+- `bootstrap_status`: indica se serve creare il primo admin.
+- `create_first_admin`: crea il primo account amministratore locale.
+- `login`: verifica credenziali locali e registra audit.
+- `create_user` / `list_users`: gestione utenti e ruoli.
+- `add_authorized_google_account` / `list_authorized_google_accounts`: allowlist Google.
+- `authorize_device` / `revoke_device` / `list_devices`: token dispositivo e revoca.
+- `get_studio_settings` / `update_studio_settings`: configurazione studio.
 
 ## Standard di sicurezza adottati
 
 - Il frontend non accede direttamente a database, file system, segreti o pagamenti.
 - Tutte le operazioni sensibili devono passare da servizi Rust e Tauri commands.
+- Le password locali sono hashate con Argon2.
+- I token dispositivo sono mostrati una sola volta e salvati solo come hash SHA-256.
 - I token, refresh token e chiavi non devono essere salvati in chiaro.
 - I dati sanitari non devono comparire nei log tecnici.
 - Ogni accesso o modifica clinica/fiscale dovra' generare eventi in `audit_log`.

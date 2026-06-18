@@ -1,3 +1,4 @@
+use crate::auth::{self, Role};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::{
@@ -15,6 +16,10 @@ pub enum DbError {
     Sql(String),
     InvalidEncryptionKey,
     MissingEncryptionKey,
+    Forbidden,
+    InvalidRole(String),
+    InvalidCredentials,
+    BootstrapAlreadyCompleted,
 }
 
 impl std::fmt::Display for DbError {
@@ -27,6 +32,10 @@ impl std::fmt::Display for DbError {
                 f,
                 "VELODENT_DB_KEY is required unless VELODENT_ALLOW_INSECURE_DEV_KEY=true"
             ),
+            Self::Forbidden => write!(f, "operation requires admin privileges"),
+            Self::InvalidRole(role) => write!(f, "invalid role: {role}"),
+            Self::InvalidCredentials => write!(f, "invalid credentials"),
+            Self::BootstrapAlreadyCompleted => write!(f, "first admin already exists"),
         }
     }
 }
@@ -150,6 +159,79 @@ pub struct NewPatient<'a> {
     pub address: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    pub google_email: Option<String>,
+    pub role: Role,
+    pub active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateUserInput<'a> {
+    pub username: &'a str,
+    pub password: Option<&'a str>,
+    pub google_email: Option<&'a str>,
+    pub role: Role,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BootstrapStatus {
+    pub needs_first_admin: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthorizedGoogleAccount {
+    pub id: i64,
+    pub email: String,
+    pub role: Role,
+    pub active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthorizedDevice {
+    pub id: i64,
+    pub user_id: Option<i64>,
+    pub label: String,
+    pub allowed_lan_cidr: Option<String>,
+    pub revoked_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub last_seen_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceAuthorization {
+    pub device: AuthorizedDevice,
+    pub token_once: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StudioSettings {
+    pub clinic_name: Option<String>,
+    pub logo_relative_path: Option<String>,
+    pub chair_count: i64,
+    pub data_directory: Option<String>,
+    pub holiday_periods_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StudioSettingsUpdate<'a> {
+    pub clinic_name: Option<&'a str>,
+    pub logo_relative_path: Option<&'a str>,
+    pub chair_count: i64,
+    pub data_directory: Option<&'a str>,
+    pub holiday_periods_json: &'a str,
+}
+
 impl Database {
     pub fn open_default() -> DbResult<Self> {
         let path = default_database_path();
@@ -203,6 +285,378 @@ impl Database {
             key_source: self.key_source,
             uses_development_key: self.uses_development_key,
         })
+    }
+
+    pub fn bootstrap_status(&self) -> DbResult<BootstrapStatus> {
+        Ok(BootstrapStatus {
+            needs_first_admin: !self.has_admin_user()?,
+        })
+    }
+
+    pub fn create_first_admin(
+        &self,
+        username: &str,
+        password: &str,
+        google_email: Option<&str>,
+    ) -> DbResult<User> {
+        if self.has_admin_user()? {
+            self.insert_audit(None, None, "auth.first_admin_rejected", Some("users"), None, "{}")?;
+            return Err(DbError::BootstrapAlreadyCompleted);
+        }
+
+        let password_hash = auth::hash_password(password).map_err(DbError::Sql)?;
+        self.conn.execute(
+            r#"
+            INSERT INTO users (username, password_hash, google_email, role)
+            VALUES (?1, ?2, ?3, 'admin')
+            "#,
+            params![username, password_hash, google_email],
+        )?;
+
+        let user_id = self.conn.last_insert_rowid();
+        self.insert_audit(
+            Some(user_id),
+            None,
+            "auth.first_admin_created",
+            Some("users"),
+            Some(user_id),
+            "{}",
+        )?;
+
+        self.get_user(user_id)?
+            .ok_or_else(|| DbError::Sql("created admin was not found".to_owned()))
+    }
+
+    pub fn login(&self, username: &str, password: &str) -> DbResult<User> {
+        let row = self
+            .conn
+            .query_row(
+                r#"
+                SELECT
+                    id,
+                    username,
+                    password_hash,
+                    google_email,
+                    role,
+                    active,
+                    created_at,
+                    updated_at
+                FROM users
+                WHERE username = ?1
+                "#,
+                [username],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((id, username, password_hash, google_email, role, active, created_at, updated_at)) = row else {
+            self.insert_audit(None, None, "auth.login_failed", Some("users"), None, "{}")?;
+            return Err(DbError::InvalidCredentials);
+        };
+
+        let valid = active == 1
+            && password_hash
+                .as_deref()
+                .map(|hash| auth::verify_password(password, hash))
+                .unwrap_or(false);
+
+        if !valid {
+            self.insert_audit(Some(id), None, "auth.login_failed", Some("users"), Some(id), "{}")?;
+            return Err(DbError::InvalidCredentials);
+        }
+
+        self.insert_audit(Some(id), None, "auth.login_success", Some("users"), Some(id), "{}")?;
+
+        Ok(User {
+            id,
+            username,
+            google_email,
+            role: parse_role(&role)?,
+            active: true,
+            created_at,
+            updated_at,
+        })
+    }
+
+    pub fn create_user(&self, actor_user_id: i64, input: &CreateUserInput<'_>) -> DbResult<User> {
+        self.assert_admin(actor_user_id)?;
+        let password_hash = input
+            .password
+            .map(auth::hash_password)
+            .transpose()
+            .map_err(DbError::Sql)?;
+
+        self.conn.execute(
+            r#"
+            INSERT INTO users (username, password_hash, google_email, role)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![
+                input.username,
+                password_hash,
+                input.google_email,
+                input.role.as_db_value()
+            ],
+        )?;
+
+        let user_id = self.conn.last_insert_rowid();
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.user_created",
+            Some("users"),
+            Some(user_id),
+            "{}",
+        )?;
+
+        self.get_user(user_id)?
+            .ok_or_else(|| DbError::Sql("created user was not found".to_owned()))
+    }
+
+    pub fn list_users(&self) -> DbResult<Vec<User>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, username, google_email, role, active, created_at, updated_at
+            FROM users
+            ORDER BY username ASC
+            "#,
+        )?;
+
+        let users = statement
+            .query_map([], user_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(users)
+    }
+
+    pub fn add_authorized_google_account(
+        &self,
+        actor_user_id: i64,
+        email: &str,
+        role: Role,
+    ) -> DbResult<AuthorizedGoogleAccount> {
+        self.assert_admin(actor_user_id)?;
+        self.conn.execute(
+            r#"
+            INSERT INTO authorized_google_accounts (email, role, created_by_user_id)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(email) DO UPDATE SET
+                role = excluded.role,
+                active = 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            params![email, role.as_db_value(), actor_user_id],
+        )?;
+
+        let account = self
+            .get_authorized_google_account(email)?
+            .ok_or_else(|| DbError::Sql("authorized google account not found".to_owned()))?;
+
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.google_account_authorized",
+            Some("authorized_google_accounts"),
+            Some(account.id),
+            "{}",
+        )?;
+
+        Ok(account)
+    }
+
+    pub fn list_authorized_google_accounts(&self) -> DbResult<Vec<AuthorizedGoogleAccount>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, email, role, active, created_at, updated_at
+            FROM authorized_google_accounts
+            ORDER BY email ASC
+            "#,
+        )?;
+
+        let accounts = statement
+            .query_map([], google_account_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(accounts)
+    }
+
+    pub fn authorize_device(
+        &self,
+        actor_user_id: i64,
+        user_id: Option<i64>,
+        label: &str,
+        allowed_lan_cidr: Option<&str>,
+        expires_at: Option<&str>,
+    ) -> DbResult<DeviceAuthorization> {
+        self.assert_admin(actor_user_id)?;
+        let generated = auth::generate_device_token();
+
+        self.conn.execute(
+            r#"
+            INSERT INTO authorized_devices (
+                user_id,
+                label,
+                device_token_hash,
+                allowed_lan_cidr,
+                expires_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![user_id, label, generated.hash, allowed_lan_cidr, expires_at],
+        )?;
+
+        let device_id = self.conn.last_insert_rowid();
+        self.insert_audit(
+            Some(actor_user_id),
+            Some(device_id),
+            "settings.device_authorized",
+            Some("authorized_devices"),
+            Some(device_id),
+            "{}",
+        )?;
+
+        let device = self
+            .get_device(device_id)?
+            .ok_or_else(|| DbError::Sql("authorized device not found".to_owned()))?;
+
+        Ok(DeviceAuthorization {
+            device,
+            token_once: generated.plaintext,
+        })
+    }
+
+    pub fn revoke_device(&self, actor_user_id: i64, device_id: i64) -> DbResult<AuthorizedDevice> {
+        self.assert_admin(actor_user_id)?;
+        self.conn.execute(
+            r#"
+            UPDATE authorized_devices
+            SET
+                revoked_at = COALESCE(revoked_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?1
+            "#,
+            [device_id],
+        )?;
+
+        self.insert_audit(
+            Some(actor_user_id),
+            Some(device_id),
+            "settings.device_revoked",
+            Some("authorized_devices"),
+            Some(device_id),
+            "{}",
+        )?;
+
+        self.get_device(device_id)?
+            .ok_or_else(|| DbError::Sql("device not found".to_owned()))
+    }
+
+    pub fn list_devices(&self) -> DbResult<Vec<AuthorizedDevice>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                id,
+                user_id,
+                label,
+                allowed_lan_cidr,
+                revoked_at,
+                expires_at,
+                last_seen_at,
+                created_at,
+                updated_at
+            FROM authorized_devices
+            ORDER BY created_at DESC
+            "#,
+        )?;
+
+        let devices = statement
+            .query_map([], device_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(devices)
+    }
+
+    pub fn studio_settings(&self) -> DbResult<StudioSettings> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                    clinic_name,
+                    logo_relative_path,
+                    chair_count,
+                    data_directory,
+                    holiday_periods_json,
+                    created_at,
+                    updated_at
+                FROM studio_settings
+                WHERE id = 1
+                "#,
+                [],
+                studio_settings_from_row,
+            )
+            .map_err(DbError::from)
+    }
+
+    pub fn update_studio_settings(
+        &self,
+        actor_user_id: i64,
+        input: &StudioSettingsUpdate<'_>,
+    ) -> DbResult<StudioSettings> {
+        self.assert_admin(actor_user_id)?;
+        self.conn.execute(
+            r#"
+            UPDATE studio_settings
+            SET
+                clinic_name = ?1,
+                logo_relative_path = ?2,
+                chair_count = ?3,
+                data_directory = ?4,
+                holiday_periods_json = ?5,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1
+            "#,
+            params![
+                input.clinic_name,
+                input.logo_relative_path,
+                input.chair_count,
+                input.data_directory,
+                input.holiday_periods_json,
+            ],
+        )?;
+
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.studio_updated",
+            Some("studio_settings"),
+            Some(1),
+            "{}",
+        )?;
+
+        self.studio_settings()
+    }
+
+    pub fn assert_admin(&self, user_id: i64) -> DbResult<()> {
+        let user = self
+            .get_user(user_id)?
+            .ok_or(DbError::Forbidden)?;
+
+        if user.active && user.role.is_admin() {
+            Ok(())
+        } else {
+            Err(DbError::Forbidden)
+        }
     }
 
     pub fn insert_patient(&self, patient: &NewPatient<'_>) -> DbResult<i64> {
@@ -318,6 +772,100 @@ impl Database {
             .optional()
             .map_err(DbError::from)
     }
+
+    fn has_admin_user(&self) -> DbResult<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1",
+            [],
+            |row| row.get(0),
+        )?;
+
+        Ok(count > 0)
+    }
+
+    fn get_user(&self, id: i64) -> DbResult<Option<User>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, username, google_email, role, active, created_at, updated_at
+                FROM users
+                WHERE id = ?1
+                "#,
+                [id],
+                user_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn get_authorized_google_account(
+        &self,
+        email: &str,
+    ) -> DbResult<Option<AuthorizedGoogleAccount>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, email, role, active, created_at, updated_at
+                FROM authorized_google_accounts
+                WHERE email = ?1
+                "#,
+                [email],
+                google_account_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn get_device(&self, id: i64) -> DbResult<Option<AuthorizedDevice>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                    id,
+                    user_id,
+                    label,
+                    allowed_lan_cidr,
+                    revoked_at,
+                    expires_at,
+                    last_seen_at,
+                    created_at,
+                    updated_at
+                FROM authorized_devices
+                WHERE id = ?1
+                "#,
+                [id],
+                device_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn insert_audit(
+        &self,
+        user_id: Option<i64>,
+        device_id: Option<i64>,
+        action: &str,
+        entity_type: Option<&str>,
+        entity_id: Option<i64>,
+        metadata_json: &str,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO audit_log (
+                user_id,
+                device_id,
+                action,
+                entity_type,
+                entity_id,
+                metadata_json
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            params![user_id, device_id, action, entity_type, entity_id, metadata_json],
+        )?;
+
+        Ok(())
+    }
 }
 
 fn default_database_path() -> PathBuf {
@@ -379,6 +927,81 @@ fn patient_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
     })
 }
 
+fn user_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
+    let role: String = row.get(3)?;
+    let active: i64 = row.get(4)?;
+
+    let role = Role::from_db_value(&role).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            3,
+            rusqlite::types::Type::Text,
+            Box::new(DbError::InvalidRole(role)),
+        )
+    })?;
+
+    Ok(User {
+        id: row.get(0)?,
+        username: row.get(1)?,
+        google_email: row.get(2)?,
+        role,
+        active: active == 1,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+fn google_account_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuthorizedGoogleAccount> {
+    let role: String = row.get(2)?;
+    let active: i64 = row.get(3)?;
+
+    let role = Role::from_db_value(&role).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::new(DbError::InvalidRole(role)),
+        )
+    })?;
+
+    Ok(AuthorizedGoogleAccount {
+        id: row.get(0)?,
+        email: row.get(1)?,
+        role,
+        active: active == 1,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
+}
+
+fn device_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuthorizedDevice> {
+    Ok(AuthorizedDevice {
+        id: row.get(0)?,
+        user_id: row.get(1)?,
+        label: row.get(2)?,
+        allowed_lan_cidr: row.get(3)?,
+        revoked_at: row.get(4)?,
+        expires_at: row.get(5)?,
+        last_seen_at: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+fn studio_settings_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StudioSettings> {
+    Ok(StudioSettings {
+        clinic_name: row.get(0)?,
+        logo_relative_path: row.get(1)?,
+        chair_count: row.get(2)?,
+        data_directory: row.get(3)?,
+        holiday_periods_json: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+fn parse_role(value: &str) -> DbResult<Role> {
+    Role::from_db_value(value).ok_or_else(|| DbError::InvalidRole(value.to_owned()))
+}
+
 const SCHEMA_SQL: &str = r#"
 PRAGMA foreign_keys = ON;
 
@@ -427,6 +1050,7 @@ CREATE TABLE IF NOT EXISTS authorized_devices (
 CREATE TABLE IF NOT EXISTS studio_settings (
     id INTEGER PRIMARY KEY CHECK(id = 1),
     clinic_name TEXT,
+    logo_relative_path TEXT,
     chair_count INTEGER NOT NULL DEFAULT 1 CHECK(chair_count > 0),
     data_directory TEXT,
     holiday_periods_json TEXT NOT NULL DEFAULT '[]',
@@ -717,6 +1341,79 @@ mod tests {
             .get_patient(patient_id)
             .expect("get patient after reopen")
             .is_some());
+    }
+
+    #[test]
+    fn admin_bootstrap_permissions_and_device_lifecycle_work() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+
+        assert!(db
+            .bootstrap_status()
+            .expect("bootstrap status")
+            .needs_first_admin);
+
+        let admin = db
+            .create_first_admin("admin", "change-me-now", Some("admin@example.test"))
+            .expect("create first admin");
+        assert_eq!(admin.role, Role::Admin);
+        assert!(!db
+            .bootstrap_status()
+            .expect("bootstrap status after admin")
+            .needs_first_admin);
+        assert!(matches!(
+            db.create_first_admin("second", "change-me-now", None),
+            Err(DbError::BootstrapAlreadyCompleted)
+        ));
+
+        let logged_in = db.login("admin", "change-me-now").expect("login admin");
+        assert_eq!(logged_in.id, admin.id);
+        assert!(matches!(
+            db.login("admin", "wrong-password"),
+            Err(DbError::InvalidCredentials)
+        ));
+
+        let aso = db
+            .create_user(
+                admin.id,
+                &CreateUserInput {
+                    username: "aso",
+                    password: Some("aso-password"),
+                    google_email: Some("aso@example.test"),
+                    role: Role::Aso,
+                },
+            )
+            .expect("create aso");
+        assert_eq!(aso.role, Role::Aso);
+        assert!(matches!(db.assert_admin(aso.id), Err(DbError::Forbidden)));
+
+        let google = db
+            .add_authorized_google_account(admin.id, "doctor@example.test", Role::Odontoiatra)
+            .expect("authorize google account");
+        assert_eq!(google.role, Role::Odontoiatra);
+
+        let authorization = db
+            .authorize_device(
+                admin.id,
+                Some(aso.id),
+                "Tablet sala 1",
+                Some("192.168.1.0/24"),
+                None,
+            )
+            .expect("authorize device");
+        assert!(authorization.token_once.len() > 32);
+        assert!(authorization.device.revoked_at.is_none());
+
+        let revoked = db
+            .revoke_device(admin.id, authorization.device.id)
+            .expect("revoke device");
+        assert!(revoked.revoked_at.is_some());
+
+        let audit_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
+            .expect("audit count");
+        assert!(audit_count >= 7);
     }
 
     fn test_database_path() -> PathBuf {

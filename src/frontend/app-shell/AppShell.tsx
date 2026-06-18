@@ -5,6 +5,7 @@ import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
+import { SettingsPanel } from "@/frontend/settings/SettingsPanel";
 
 const navItems = [
   { key: "agenda", icon: CalendarDays, labelKey: "navAgenda" },
@@ -105,41 +106,48 @@ export function AppShell() {
         </header>
 
         <main className="flex-1 overflow-y-auto bg-ink-black-950 p-6">
-          <section className="grid gap-4">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
-                {t("workspaceEyebrow")}
-              </p>
-              <h1 className="mt-2 text-2xl font-semibold text-white">{t("workspaceTitle")}</h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-alabaster-grey-500">
-                {t("workspaceSubtitle")}
-              </p>
-            </div>
-
-            <div className="grid grid-cols-3 gap-4">
-              <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
-                  {t("metricAgendaLabel")}
-                </p>
-                <p className="mt-3 text-2xl font-semibold text-white">{t("metricAgendaValue")}</p>
-              </div>
-              <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
-                  {t("metricSyncLabel")}
-                </p>
-                <p className="mt-3 text-2xl font-semibold text-white">{t("metricSyncValue")}</p>
-              </div>
-              <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
-                  {t("metricClinicalLabel")}
-                </p>
-                <p className="mt-3 text-2xl font-semibold text-white">{t("metricClinicalValue")}</p>
-              </div>
-            </div>
-          </section>
+          {activeKey === "settings" ? <SettingsPanel /> : <DashboardWorkspace />}
         </main>
       </div>
     </div>
   );
 }
 
+function DashboardWorkspace() {
+  const { t } = useL10n();
+
+  return (
+    <section className="grid gap-4">
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
+          {t("workspaceEyebrow")}
+        </p>
+        <h1 className="mt-2 text-2xl font-semibold text-white">{t("workspaceTitle")}</h1>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-alabaster-grey-500">
+          {t("workspaceSubtitle")}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
+        <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
+            {t("metricAgendaLabel")}
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-white">{t("metricAgendaValue")}</p>
+        </div>
+        <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
+            {t("metricSyncLabel")}
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-white">{t("metricSyncValue")}</p>
+        </div>
+        <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
+            {t("metricClinicalLabel")}
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-white">{t("metricClinicalValue")}</p>
+        </div>
+      </div>
+    </section>
+  );
+}
