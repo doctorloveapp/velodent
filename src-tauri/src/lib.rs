@@ -35,6 +35,7 @@ pub fn run() {
             commands::login,
             commands::google_login_authorization_url,
             commands::exchange_google_login_code,
+            commands::start_google_login,
             commands::create_user,
             commands::list_users,
             commands::add_authorized_google_account,
@@ -66,7 +67,10 @@ pub fn run() {
             commands::set_tooth_status,
             commands::create_clinical_record,
             commands::list_clinical_records,
-            commands::mark_clinical_record_ready_for_quote
+            commands::mark_clinical_record_ready_for_quote,
+            commands::import_rx_file,
+            commands::list_rx_assets,
+            commands::rx_asset_data_url
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VeloDent");

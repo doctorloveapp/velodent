@@ -29,6 +29,26 @@ export interface PatientTimelineEvent {
   created_at: string;
 }
 
+export interface RxAsset {
+  id: number;
+  patient_id: number;
+  file_asset_id: number;
+  relative_path: string;
+  mime_type: string | null;
+  sha256_hex: string | null;
+  size_bytes: number | null;
+  rx_type: string;
+  tooth_number: number | null;
+  acquired_at: string;
+  created_at: string;
+}
+
+export interface RxAssetDataUrl {
+  file_asset_id: number;
+  mime_type: string;
+  data_url: string;
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -69,4 +89,22 @@ export async function openPatientRecord(session_token: string, patient_id: numbe
 
 export async function patientTimeline(session_token: string, patient_id: number) {
   return invoke<PatientTimelineEvent[]>("patient_timeline", { request: { session_token, patient_id } });
+}
+
+export async function importRxFile(request: {
+  session_token: string;
+  patient_id: number;
+  source_path: string;
+  rx_type?: string;
+  tooth_number?: number;
+}) {
+  return invoke<RxAsset>("import_rx_file", { request });
+}
+
+export async function listRxAssets(session_token: string, patient_id: number) {
+  return invoke<RxAsset[]>("list_rx_assets", { request: { session_token, patient_id } });
+}
+
+export async function rxAssetDataUrl(session_token: string, file_asset_id: number) {
+  return invoke<RxAssetDataUrl>("rx_asset_data_url", { request: { session_token, file_asset_id } });
 }

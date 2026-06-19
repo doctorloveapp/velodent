@@ -25,6 +25,7 @@ pub enum DbError {
     InvalidToothNumber,
     InvalidClinicalStatus(String),
     InvalidToothState(String),
+    InvalidRxType(String),
     InvalidAppointmentStatus(String),
     InvalidAppointmentTimeRange,
     AppointmentConflict,
@@ -50,6 +51,7 @@ impl std::fmt::Display for DbError {
             Self::InvalidToothNumber => write!(f, "invalid ISO/FDI tooth number"),
             Self::InvalidClinicalStatus(status) => write!(f, "invalid clinical status: {status}"),
             Self::InvalidToothState(state) => write!(f, "invalid tooth state: {state}"),
+            Self::InvalidRxType(rx_type) => write!(f, "invalid rx type: {rx_type}"),
             Self::InvalidAppointmentStatus(status) => {
                 write!(f, "invalid appointment status: {status}")
             }
@@ -372,6 +374,33 @@ pub struct ClinicalRecord {
     pub operator_username: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewRxAsset<'a> {
+    pub patient_id: i64,
+    pub relative_path: &'a str,
+    pub mime_type: &'a str,
+    pub sha256_hex: &'a str,
+    pub size_bytes: i64,
+    pub original_filename: &'a str,
+    pub rx_type: &'a str,
+    pub tooth_number: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RxAsset {
+    pub id: i64,
+    pub patient_id: i64,
+    pub file_asset_id: i64,
+    pub relative_path: String,
+    pub mime_type: Option<String>,
+    pub sha256_hex: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub rx_type: String,
+    pub tooth_number: Option<i64>,
+    pub acquired_at: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1471,6 +1500,156 @@ impl Database {
             .ok_or(DbError::NotFound)
     }
 
+    pub fn register_rx_asset(
+        &self,
+        actor_user_id: i64,
+        input: &NewRxAsset<'_>,
+    ) -> DbResult<RxAsset> {
+        self.validate_rx_import(
+            actor_user_id,
+            input.patient_id,
+            input.rx_type,
+            input.tooth_number,
+        )?;
+        let rx_type = normalize_rx_type(input.rx_type)?;
+
+        let metadata_json = serde_json::json!({
+            "original_filename": input.original_filename,
+        })
+        .to_string();
+        let import_metadata_json = serde_json::json!({
+            "relative_path": input.relative_path,
+            "rx_type": rx_type,
+            "tooth_number": input.tooth_number,
+            "size_bytes": input.size_bytes,
+        })
+        .to_string();
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.conn.execute(
+                r#"
+                INSERT INTO file_assets (
+                    patient_id,
+                    relative_path,
+                    file_kind,
+                    mime_type,
+                    sha256_hex,
+                    size_bytes,
+                    metadata_json,
+                    created_by_user_id
+                )
+                VALUES (?1, ?2, 'rx', ?3, ?4, ?5, ?6, ?7)
+                "#,
+                params![
+                    input.patient_id,
+                    input.relative_path,
+                    input.mime_type,
+                    input.sha256_hex,
+                    input.size_bytes,
+                    metadata_json,
+                    actor_user_id
+                ],
+            )?;
+            let file_asset_id = self.conn.last_insert_rowid();
+            self.conn.execute(
+                r#"
+                INSERT INTO rx_assets (
+                    patient_id,
+                    file_asset_id,
+                    rx_type,
+                    tooth_number
+                )
+                VALUES (?1, ?2, ?3, ?4)
+                "#,
+                params![input.patient_id, file_asset_id, rx_type, input.tooth_number],
+            )?;
+            let rx_asset_id = self.conn.last_insert_rowid();
+            self.insert_patient_audit(
+                actor_user_id,
+                input.patient_id,
+                "FILE_IMPORT",
+                &import_metadata_json,
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(rx_asset_id)
+        })();
+
+        match result {
+            Ok(rx_asset_id) => self.get_rx_asset(rx_asset_id)?.ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn validate_rx_import(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+        rx_type: &str,
+        tooth_number: Option<i64>,
+    ) -> DbResult<()> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        normalize_rx_type(rx_type)?;
+        if let Some(tooth_number) = tooth_number {
+            validate_tooth_number(tooth_number)?;
+        }
+        Ok(())
+    }
+
+    pub fn list_rx_assets(&self, actor_user_id: i64, patient_id: i64) -> DbResult<Vec<RxAsset>> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                rx_assets.id,
+                rx_assets.patient_id,
+                rx_assets.file_asset_id,
+                file_assets.relative_path,
+                file_assets.mime_type,
+                file_assets.sha256_hex,
+                file_assets.size_bytes,
+                rx_assets.rx_type,
+                rx_assets.tooth_number,
+                rx_assets.acquired_at,
+                rx_assets.created_at
+            FROM rx_assets
+            JOIN file_assets ON file_assets.id = rx_assets.file_asset_id
+            WHERE rx_assets.patient_id = ?1
+            ORDER BY rx_assets.acquired_at DESC, rx_assets.id DESC
+            "#,
+        )?;
+
+        let assets = statement
+            .query_map([patient_id], rx_asset_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(assets)
+    }
+
+    pub fn rx_asset_for_access(&self, actor_user_id: i64, file_asset_id: i64) -> DbResult<RxAsset> {
+        self.assert_active_user(actor_user_id)?;
+        let asset = self
+            .rx_asset_by_file_asset_id(file_asset_id)?
+            .ok_or(DbError::NotFound)?;
+        self.insert_patient_audit(
+            actor_user_id,
+            asset.patient_id,
+            "FILE_ACCESS",
+            &serde_json::json!({
+                "file_asset_id": file_asset_id,
+                "rx_asset_id": asset.id,
+                "relative_path": asset.relative_path,
+            })
+            .to_string(),
+        )?;
+        Ok(asset)
+    }
+
     pub fn chair_config(&self, actor_user_id: i64) -> DbResult<ChairConfig> {
         self.assert_active_user(actor_user_id)?;
         Ok(ChairConfig {
@@ -2266,6 +2445,60 @@ impl Database {
             .map_err(DbError::from)
     }
 
+    fn get_rx_asset(&self, id: i64) -> DbResult<Option<RxAsset>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                    rx_assets.id,
+                    rx_assets.patient_id,
+                    rx_assets.file_asset_id,
+                    file_assets.relative_path,
+                    file_assets.mime_type,
+                    file_assets.sha256_hex,
+                    file_assets.size_bytes,
+                    rx_assets.rx_type,
+                    rx_assets.tooth_number,
+                    rx_assets.acquired_at,
+                    rx_assets.created_at
+                FROM rx_assets
+                JOIN file_assets ON file_assets.id = rx_assets.file_asset_id
+                WHERE rx_assets.id = ?1
+                "#,
+                [id],
+                rx_asset_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn rx_asset_by_file_asset_id(&self, file_asset_id: i64) -> DbResult<Option<RxAsset>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                    rx_assets.id,
+                    rx_assets.patient_id,
+                    rx_assets.file_asset_id,
+                    file_assets.relative_path,
+                    file_assets.mime_type,
+                    file_assets.sha256_hex,
+                    file_assets.size_bytes,
+                    rx_assets.rx_type,
+                    rx_assets.tooth_number,
+                    rx_assets.acquired_at,
+                    rx_assets.created_at
+                FROM rx_assets
+                JOIN file_assets ON file_assets.id = rx_assets.file_asset_id
+                WHERE rx_assets.file_asset_id = ?1
+                "#,
+                [file_asset_id],
+                rx_asset_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
     fn get_appointment(&self, id: i64) -> DbResult<Option<Appointment>> {
         self.conn
             .query_row(
@@ -2593,6 +2826,16 @@ fn normalize_clinical_status(status: &str) -> DbResult<&'static str> {
     }
 }
 
+fn normalize_rx_type(rx_type: &str) -> DbResult<&'static str> {
+    match rx_type.trim() {
+        "endoral" => Ok("endoral"),
+        "panoramic" => Ok("panoramic"),
+        "cbct" => Ok("cbct"),
+        "photo" => Ok("photo"),
+        value => Err(DbError::InvalidRxType(value.to_owned())),
+    }
+}
+
 fn normalize_appointment_status(status: &str) -> DbResult<&'static str> {
     match status.trim() {
         "booked" => Ok("booked"),
@@ -2839,6 +3082,22 @@ fn clinical_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Clinica
         operator_username: row.get(12)?,
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
+    })
+}
+
+fn rx_asset_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RxAsset> {
+    Ok(RxAsset {
+        id: row.get(0)?,
+        patient_id: row.get(1)?,
+        file_asset_id: row.get(2)?,
+        relative_path: row.get(3)?,
+        mime_type: row.get(4)?,
+        sha256_hex: row.get(5)?,
+        size_bytes: row.get(6)?,
+        rx_type: row.get(7)?,
+        tooth_number: row.get(8)?,
+        acquired_at: row.get(9)?,
+        created_at: row.get(10)?,
     })
 }
 

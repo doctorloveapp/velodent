@@ -4,13 +4,21 @@ use crate::{
         Appointment, AppointmentInput, AuthSession, AuthorizedDevice, AuthorizedGoogleAccount,
         BootstrapStatus, ChairConfig, ClinicalRecord, ClinicalRecordFilters, ClinicalService,
         CreateUserInput, DatabaseStatus, DeviceAuthorization, GoogleCalendarSyncStatus,
-        LicenseStatus, NewClinicalRecord, NewPatient, Patient, PatientTimelineEvent,
-        StudioSettings, StudioSettingsUpdate, ToothStatus, User,
+        LicenseStatus, NewClinicalRecord, NewPatient, NewRxAsset, Patient, PatientTimelineEvent,
+        RxAsset, StudioSettings, StudioSettingsUpdate, ToothStatus, User,
     },
+    files,
     integrations::google::{self, GoogleAuthorizationUrl, GoogleOAuthStatus},
     state::AppState,
 };
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    io::{Read, Write},
+    net::TcpListener,
+    time::{Duration, Instant},
+};
 use tauri::State;
 
 #[tauri::command]
@@ -91,6 +99,11 @@ pub struct GoogleLoginAuthorizationUrlRequest {
 #[derive(Debug, Deserialize)]
 pub struct ExchangeGoogleLoginCodeRequest {
     code: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StartGoogleLoginRequest {
+    state: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +235,34 @@ pub struct MarkClinicalRecordQuoteRequest {
     session_token: String,
     record_id: i64,
     ready_for_quote: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportRxFileRequest {
+    session_token: String,
+    patient_id: i64,
+    source_path: String,
+    rx_type: Option<String>,
+    tooth_number: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListRxAssetsRequest {
+    session_token: String,
+    patient_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RxAssetDataUrlRequest {
+    session_token: String,
+    file_asset_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RxAssetDataUrl {
+    file_asset_id: i64,
+    mime_type: String,
+    data_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -387,6 +428,54 @@ pub async fn exchange_google_login_code(
 ) -> Result<AuthSession, String> {
     require_license(&state)?;
     let token = google::exchange_authorization_code(request.code.trim())
+        .await
+        .map_err(|error| error.to_string())?;
+    let user_info = google::user_info(&token.access_token)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !user_info.email_verified.unwrap_or(false) {
+        return Err("google email is not verified".to_owned());
+    }
+
+    let database = state.database()?;
+    let user = database
+        .login_with_google_email(&user_info.email)
+        .map_err(|error| error.to_string())?;
+    database
+        .create_session(user.id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn start_google_login(
+    state: State<'_, AppState>,
+    request: StartGoogleLoginRequest,
+) -> Result<AuthSession, String> {
+    require_license(&state)?;
+    let expected_state = request
+        .state
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("velodent-login")
+        .to_owned();
+    let authorization =
+        google::authorization_url(&expected_state).map_err(|error| error.to_string())?;
+    let listener = TcpListener::bind(("127.0.0.1", 1421))
+        .map_err(|error| format!("unable to start Google login listener on port 1421: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
+    opener::open(&authorization.authorization_url)
+        .map_err(|error| format!("unable to open the default browser: {error}"))?;
+
+    let code = tauri::async_runtime::spawn_blocking(move || {
+        wait_for_google_oauth_code(listener, &expected_state)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+
+    let token = google::exchange_authorization_code(code.trim())
         .await
         .map_err(|error| error.to_string())?;
     let user_info = google::user_info(&token.access_token)
@@ -865,6 +954,84 @@ pub fn mark_clinical_record_ready_for_quote(
 }
 
 #[tauri::command]
+pub fn import_rx_file(
+    state: State<'_, AppState>,
+    request: ImportRxFileRequest,
+) -> Result<RxAsset, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    {
+        let database = state.database()?;
+        database
+            .validate_rx_import(
+                actor.id,
+                request.patient_id,
+                request.rx_type.as_deref().unwrap_or("endoral"),
+                request.tooth_number,
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    let stored = files::store_patient_rx_file(request.patient_id, &request.source_path)?;
+    state
+        .database()?
+        .register_rx_asset(
+            actor.id,
+            &NewRxAsset {
+                patient_id: request.patient_id,
+                relative_path: &stored.relative_path,
+                mime_type: &stored.mime_type,
+                sha256_hex: &stored.sha256_hex,
+                size_bytes: stored.size_bytes,
+                original_filename: &stored.original_filename,
+                rx_type: request.rx_type.as_deref().unwrap_or("endoral"),
+                tooth_number: request.tooth_number,
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn list_rx_assets(
+    state: State<'_, AppState>,
+    request: ListRxAssetsRequest,
+) -> Result<Vec<RxAsset>, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .list_rx_assets(actor.id, request.patient_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn rx_asset_data_url(
+    state: State<'_, AppState>,
+    request: RxAssetDataUrlRequest,
+) -> Result<RxAssetDataUrl, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let asset = state
+        .database()?
+        .rx_asset_for_access(actor.id, request.file_asset_id)
+        .map_err(|error| error.to_string())?;
+    let mime_type = asset
+        .mime_type
+        .clone()
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    if !mime_type.starts_with("image/") {
+        return Err("clinical file preview is available only for image RX assets".to_owned());
+    }
+    let bytes = files::read_patient_file(&asset.relative_path)?;
+    let data_url = format!(
+        "data:{};base64,{}",
+        mime_type,
+        general_purpose::STANDARD.encode(bytes)
+    );
+    Ok(RxAssetDataUrl {
+        file_asset_id: request.file_asset_id,
+        mime_type,
+        data_url,
+    })
+}
+
+#[tauri::command]
 pub async fn process_google_calendar_sync(
     state: State<'_, AppState>,
     request: ProcessGoogleCalendarSyncRequest,
@@ -944,4 +1111,123 @@ fn google_payload_for_appointment(appointment: &Appointment) -> google::GoogleCa
             time_zone: "Europe/Rome".to_owned(),
         },
     }
+}
+
+fn wait_for_google_oauth_code(
+    listener: TcpListener,
+    expected_state: &str,
+) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err("google login timed out".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+    let mut buffer = [0_u8; 4096];
+    let read = stream
+        .read(&mut buffer)
+        .map_err(|error| error.to_string())?;
+    let request = String::from_utf8_lossy(&buffer[..read]);
+    let request_line = request
+        .lines()
+        .next()
+        .ok_or_else(|| "google callback request was empty".to_owned())?;
+    let target = request_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| "google callback request was not valid".to_owned())?;
+    let query = target
+        .split_once('?')
+        .map(|(_, query)| query)
+        .unwrap_or_default();
+    let parameters = parse_query_parameters(query);
+
+    if let Some(error) = parameters.get("error") {
+        write_oauth_response(&mut stream, false)?;
+        return Err(format!("google login rejected: {error}"));
+    }
+
+    let state = parameters
+        .get("state")
+        .map(String::as_str)
+        .unwrap_or_default();
+    if state != expected_state {
+        write_oauth_response(&mut stream, false)?;
+        return Err("google login state mismatch".to_owned());
+    }
+
+    let code = parameters
+        .get("code")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "google callback did not include an authorization code".to_owned())?
+        .to_owned();
+    write_oauth_response(&mut stream, true)?;
+    Ok(code)
+}
+
+fn parse_query_parameters(query: &str) -> HashMap<String, String> {
+    query
+        .split('&')
+        .filter_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            Some((percent_decode(key), percent_decode(value)))
+        })
+        .collect()
+}
+
+fn percent_decode(value: &str) -> String {
+    let mut output = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = &value[index + 1..index + 3];
+            if let Ok(decoded) = u8::from_str_radix(hex, 16) {
+                output.push(decoded);
+                index += 3;
+                continue;
+            }
+        }
+        output.push(if bytes[index] == b'+' {
+            b' '
+        } else {
+            bytes[index]
+        });
+        index += 1;
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
+
+fn write_oauth_response(stream: &mut impl Write, success: bool) -> Result<(), String> {
+    let (status, title, body) = if success {
+        (
+            "200 OK",
+            "VeloDent Google login completed",
+            "You can close this browser tab and return to VeloDent.",
+        )
+    } else {
+        (
+            "400 Bad Request",
+            "VeloDent Google login not completed",
+            "Return to VeloDent and try Google login again.",
+        )
+    };
+    let html = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body style=\"font-family:system-ui;background:#05070b;color:#eef6ff;padding:40px\"><h1>{title}</h1><p>{body}</p></body></html>"
+    );
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
+        html.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .map_err(|error| error.to_string())
 }

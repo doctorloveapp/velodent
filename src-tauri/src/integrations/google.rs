@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:1420/google/oauth/callback";
+const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:1421/google/oauth/callback";
 const GOOGLE_AUTH_URI: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URI: &str = "https://www.googleapis.com/oauth2/v3/userinfo";

@@ -112,6 +112,10 @@ export async function exchangeGoogleLoginCode(code: string) {
   return toSessionUser(await invoke<AuthSession>("exchange_google_login_code", { request: { code } }));
 }
 
+export async function startGoogleLogin(state = "velodent-login") {
+  return toSessionUser(await invoke<AuthSession>("start_google_login", { request: { state } }));
+}
+
 export async function listUsers(session_token: string) {
   return invoke<BackendUser[]>("list_users", { request: { session_token } });
 }
