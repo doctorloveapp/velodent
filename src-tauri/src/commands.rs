@@ -1,9 +1,10 @@
 use crate::{
     auth::Role,
     db::{
-        AuthorizedDevice, AuthorizedGoogleAccount, BootstrapStatus, CreateUserInput,
-        DatabaseStatus, DeviceAuthorization, NewPatient, Patient, PatientTimelineEvent,
-        StudioSettings, StudioSettingsUpdate, User,
+        AuthorizedDevice, AuthorizedGoogleAccount, BootstrapStatus, ClinicalRecord,
+        ClinicalRecordFilters, ClinicalService, CreateUserInput, DatabaseStatus,
+        DeviceAuthorization, NewClinicalRecord, NewPatient, Patient, PatientTimelineEvent,
+        StudioSettings, StudioSettingsUpdate, ToothStatus, User,
     },
     integrations::google::{self, GoogleOAuthStatus},
     state::AppState,
@@ -140,6 +141,55 @@ pub struct ValidateTaxCodeRequest {
 #[derive(Debug, Deserialize)]
 pub struct GoogleOAuthStatusRequest {
     actor_user_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActorRequest {
+    actor_user_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClinicalViewRequest {
+    actor_user_id: i64,
+    patient_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetToothStatusRequest {
+    actor_user_id: i64,
+    patient_id: i64,
+    tooth_number: i64,
+    state: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateClinicalRecordRequest {
+    actor_user_id: i64,
+    patient_id: i64,
+    service_id: Option<i64>,
+    tooth_number: Option<i64>,
+    tooth_surface: Option<String>,
+    pathology_description: Option<String>,
+    status: String,
+    ready_for_quote: bool,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListClinicalRecordsRequest {
+    actor_user_id: i64,
+    patient_id: i64,
+    date_from: Option<String>,
+    date_to: Option<String>,
+    tooth_number: Option<i64>,
+    operator_user_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MarkClinicalRecordQuoteRequest {
+    actor_user_id: i64,
+    record_id: i64,
+    ready_for_quote: bool,
 }
 
 #[tauri::command]
@@ -374,5 +424,112 @@ pub fn patient_timeline(
     state
         .database()?
         .patient_timeline(request.actor_user_id, request.patient_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn list_clinical_services(
+    state: State<'_, AppState>,
+    request: ActorRequest,
+) -> Result<Vec<ClinicalService>, String> {
+    state
+        .database()?
+        .list_clinical_services(request.actor_user_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn open_clinical_view(
+    state: State<'_, AppState>,
+    request: ClinicalViewRequest,
+) -> Result<(), String> {
+    state
+        .database()?
+        .open_clinical_view(request.actor_user_id, request.patient_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_tooth_statuses(
+    state: State<'_, AppState>,
+    request: ClinicalViewRequest,
+) -> Result<Vec<ToothStatus>, String> {
+    state
+        .database()?
+        .get_tooth_statuses(request.actor_user_id, request.patient_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_tooth_status(
+    state: State<'_, AppState>,
+    request: SetToothStatusRequest,
+) -> Result<ToothStatus, String> {
+    state
+        .database()?
+        .set_tooth_status(
+            request.actor_user_id,
+            request.patient_id,
+            request.tooth_number,
+            request.state.trim(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn create_clinical_record(
+    state: State<'_, AppState>,
+    request: CreateClinicalRecordRequest,
+) -> Result<ClinicalRecord, String> {
+    state
+        .database()?
+        .create_clinical_record(
+            request.actor_user_id,
+            &NewClinicalRecord {
+                patient_id: request.patient_id,
+                service_id: request.service_id,
+                tooth_number: request.tooth_number,
+                tooth_surface: request.tooth_surface.as_deref(),
+                pathology_description: request.pathology_description.as_deref(),
+                status: request.status.trim(),
+                ready_for_quote: request.ready_for_quote,
+                notes: request.notes.as_deref(),
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn list_clinical_records(
+    state: State<'_, AppState>,
+    request: ListClinicalRecordsRequest,
+) -> Result<Vec<ClinicalRecord>, String> {
+    state
+        .database()?
+        .list_clinical_records(
+            request.actor_user_id,
+            request.patient_id,
+            &ClinicalRecordFilters {
+                date_from: request.date_from.as_deref(),
+                date_to: request.date_to.as_deref(),
+                tooth_number: request.tooth_number,
+                operator_user_id: request.operator_user_id,
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn mark_clinical_record_ready_for_quote(
+    state: State<'_, AppState>,
+    request: MarkClinicalRecordQuoteRequest,
+) -> Result<ClinicalRecord, String> {
+    state
+        .database()?
+        .mark_clinical_record_ready_for_quote(
+            request.actor_user_id,
+            request.record_id,
+            request.ready_for_quote,
+        )
         .map_err(|error| error.to_string())
 }

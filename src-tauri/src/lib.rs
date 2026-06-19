@@ -45,7 +45,14 @@ pub fn run() {
             commands::update_patient,
             commands::delete_patient,
             commands::open_patient_record,
-            commands::patient_timeline
+            commands::patient_timeline,
+            commands::list_clinical_services,
+            commands::open_clinical_view,
+            commands::get_tooth_statuses,
+            commands::set_tooth_status,
+            commands::create_clinical_record,
+            commands::list_clinical_records,
+            commands::mark_clinical_record_ready_for_quote
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VeloDent");

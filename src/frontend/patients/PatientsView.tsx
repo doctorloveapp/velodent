@@ -5,6 +5,7 @@ import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { useL10n, type L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
+import { ClinicalPanel } from "@/frontend/clinical/ClinicalPanel";
 import {
   createPatient,
   deletePatient,
@@ -292,7 +293,7 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
                 </Button>
               ))}
             </div>
-            <PatientTabPanel patient={selectedPatient} tab={activeTab} />
+            <PatientTabPanel currentUser={currentUser} patient={selectedPatient} tab={activeTab} />
           </PatientSurface>
 
           <PatientSurface
@@ -322,7 +323,7 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
   );
 }
 
-function PatientTabPanel({ patient, tab }: { patient: Patient | null; tab: PatientTab }) {
+function PatientTabPanel({ currentUser, patient, tab }: { currentUser: User | null; patient: Patient | null; tab: PatientTab }) {
   const { t } = useL10n();
 
   if (!patient) {
@@ -342,7 +343,7 @@ function PatientTabPanel({ patient, tab }: { patient: Patient | null; tab: Patie
   }
 
   if (tab === "clinical") {
-    return <EmptyTab icon={<Stethoscope aria-hidden="true" className="h-5 w-5" />} text={t("patientsClinicalEmpty")} />;
+    return <ClinicalPanel currentUser={currentUser} patient={patient} />;
   }
 
   if (tab === "documents") {

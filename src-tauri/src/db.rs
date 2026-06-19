@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -18,6 +18,9 @@ pub enum DbError {
     Forbidden,
     InvalidRole(String),
     InvalidTaxCode,
+    InvalidToothNumber,
+    InvalidClinicalStatus(String),
+    InvalidToothState(String),
     InvalidCredentials,
     BootstrapAlreadyCompleted,
     NotFound,
@@ -36,6 +39,9 @@ impl std::fmt::Display for DbError {
             Self::Forbidden => write!(f, "operation requires admin privileges"),
             Self::InvalidRole(role) => write!(f, "invalid role: {role}"),
             Self::InvalidTaxCode => write!(f, "invalid italian tax code"),
+            Self::InvalidToothNumber => write!(f, "invalid ISO/FDI tooth number"),
+            Self::InvalidClinicalStatus(status) => write!(f, "invalid clinical status: {status}"),
+            Self::InvalidToothState(state) => write!(f, "invalid tooth state: {state}"),
             Self::InvalidCredentials => write!(f, "invalid credentials"),
             Self::BootstrapAlreadyCompleted => write!(f, "first admin already exists"),
             Self::NotFound => write!(f, "record not found"),
@@ -239,6 +245,64 @@ pub struct StudioSettingsUpdate<'a> {
     pub chair_count: i64,
     pub data_directory: Option<&'a str>,
     pub holiday_periods_json: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClinicalService {
+    pub id: i64,
+    pub code: String,
+    pub name: String,
+    pub category: Option<String>,
+    pub base_price_cents: i64,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ToothStatus {
+    pub patient_id: i64,
+    pub tooth_number: i64,
+    pub state: String,
+    pub updated_by_user_id: Option<i64>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewClinicalRecord<'a> {
+    pub patient_id: i64,
+    pub service_id: Option<i64>,
+    pub tooth_number: Option<i64>,
+    pub tooth_surface: Option<&'a str>,
+    pub pathology_description: Option<&'a str>,
+    pub status: &'a str,
+    pub ready_for_quote: bool,
+    pub notes: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClinicalRecordFilters<'a> {
+    pub date_from: Option<&'a str>,
+    pub date_to: Option<&'a str>,
+    pub tooth_number: Option<i64>,
+    pub operator_user_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClinicalRecord {
+    pub id: i64,
+    pub patient_id: i64,
+    pub service_id: Option<i64>,
+    pub service_code: Option<String>,
+    pub service_name: Option<String>,
+    pub tooth_number: Option<i64>,
+    pub tooth_surface: Option<String>,
+    pub pathology_description: Option<String>,
+    pub status: String,
+    pub ready_for_quote: bool,
+    pub notes: Option<String>,
+    pub operator_user_id: Option<i64>,
+    pub operator_username: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 impl Database {
@@ -866,6 +930,272 @@ impl Database {
         Ok(events)
     }
 
+    pub fn open_clinical_view(&self, actor_user_id: i64, patient_id: i64) -> DbResult<()> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        self.insert_patient_audit(actor_user_id, patient_id, "CLINICAL_VIEW_OPENED", "{}")
+    }
+
+    pub fn list_clinical_services(&self, actor_user_id: i64) -> DbResult<Vec<ClinicalService>> {
+        self.assert_active_user(actor_user_id)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, code, name, category, base_price_cents, active
+            FROM clinical_services_catalog
+            WHERE active = 1
+            ORDER BY category ASC, name ASC
+            "#,
+        )?;
+
+        let services = statement
+            .query_map([], clinical_service_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(services)
+    }
+
+    pub fn get_tooth_statuses(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+    ) -> DbResult<Vec<ToothStatus>> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT patient_id, tooth_number, state, updated_by_user_id, updated_at
+            FROM clinical_tooth_statuses
+            WHERE patient_id = ?1
+            ORDER BY tooth_number ASC
+            "#,
+        )?;
+
+        let statuses = statement
+            .query_map([patient_id], tooth_status_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(statuses)
+    }
+
+    pub fn set_tooth_status(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+        tooth_number: i64,
+        state: &str,
+    ) -> DbResult<ToothStatus> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        validate_tooth_number(tooth_number)?;
+        let state = normalize_tooth_state(state)?;
+
+        self.conn.execute(
+            r#"
+            INSERT INTO clinical_tooth_statuses (
+                patient_id,
+                tooth_number,
+                state,
+                updated_by_user_id
+            )
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(patient_id, tooth_number) DO UPDATE SET
+                state = excluded.state,
+                updated_by_user_id = excluded.updated_by_user_id,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            params![patient_id, tooth_number, state, actor_user_id],
+        )?;
+
+        self.insert_patient_audit(
+            actor_user_id,
+            patient_id,
+            "clinical.tooth_status_updated",
+            &format!(r#"{{"tooth_number":{tooth_number},"state":"{state}"}}"#),
+        )?;
+
+        self.get_tooth_status(patient_id, tooth_number)?
+            .ok_or(DbError::NotFound)
+    }
+
+    pub fn create_clinical_record(
+        &self,
+        actor_user_id: i64,
+        input: &NewClinicalRecord<'_>,
+    ) -> DbResult<ClinicalRecord> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(input.patient_id)?
+            .ok_or(DbError::NotFound)?;
+        if let Some(tooth_number) = input.tooth_number {
+            validate_tooth_number(tooth_number)?;
+        }
+        let status = normalize_clinical_status(input.status)?;
+        if let Some(service_id) = input.service_id {
+            self.get_clinical_service(service_id)?
+                .ok_or(DbError::NotFound)?;
+        }
+
+        let tooth_surface = normalize_optional(input.tooth_surface);
+        let pathology_description = normalize_optional(input.pathology_description);
+        let notes = normalize_optional(input.notes);
+        let ready_for_quote = if status == "diagnosed" {
+            input.ready_for_quote
+        } else {
+            false
+        };
+
+        self.conn.execute(
+            r#"
+            INSERT INTO clinical_records (
+                patient_id,
+                service_id,
+                tooth_number,
+                tooth_surface,
+                pathology_description,
+                status,
+                ready_for_quote,
+                notes,
+                created_by_user_id
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                input.patient_id,
+                input.service_id,
+                input.tooth_number,
+                tooth_surface.as_deref(),
+                pathology_description.as_deref(),
+                status,
+                ready_for_quote as i64,
+                notes.as_deref(),
+                actor_user_id,
+            ],
+        )?;
+
+        let record_id = self.conn.last_insert_rowid();
+        if let Some(tooth_number) = input.tooth_number {
+            let derived_state = tooth_state_for_clinical_status(status);
+            self.upsert_tooth_status_without_audit(
+                input.patient_id,
+                tooth_number,
+                derived_state,
+                actor_user_id,
+            )?;
+        }
+
+        self.insert_patient_audit(
+            actor_user_id,
+            input.patient_id,
+            "clinical.record_created",
+            &clinical_audit_metadata(input.tooth_number, input.service_id, status),
+        )?;
+
+        self.get_clinical_record(record_id)?
+            .ok_or(DbError::NotFound)
+    }
+
+    pub fn list_clinical_records(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+        filters: &ClinicalRecordFilters<'_>,
+    ) -> DbResult<Vec<ClinicalRecord>> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        if let Some(tooth_number) = filters.tooth_number {
+            validate_tooth_number(tooth_number)?;
+        }
+
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                cr.id,
+                cr.patient_id,
+                cr.service_id,
+                sc.code,
+                sc.name,
+                cr.tooth_number,
+                cr.tooth_surface,
+                cr.pathology_description,
+                cr.status,
+                cr.ready_for_quote,
+                cr.notes,
+                cr.created_by_user_id,
+                users.username,
+                cr.created_at,
+                cr.updated_at
+            FROM clinical_records cr
+            LEFT JOIN clinical_services_catalog sc ON sc.id = cr.service_id
+            LEFT JOIN users ON users.id = cr.created_by_user_id
+            WHERE
+                cr.patient_id = ?1
+                AND (?2 IS NULL OR cr.created_at >= ?2)
+                AND (?3 IS NULL OR cr.created_at <= ?3)
+                AND (?4 IS NULL OR cr.tooth_number = ?4)
+                AND (?5 IS NULL OR cr.created_by_user_id = ?5)
+            ORDER BY cr.created_at DESC
+            LIMIT 200
+            "#,
+        )?;
+
+        let records = statement
+            .query_map(
+                params![
+                    patient_id,
+                    filters.date_from,
+                    filters.date_to,
+                    filters.tooth_number,
+                    filters.operator_user_id
+                ],
+                clinical_record_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(records)
+    }
+
+    pub fn mark_clinical_record_ready_for_quote(
+        &self,
+        actor_user_id: i64,
+        record_id: i64,
+        ready_for_quote: bool,
+    ) -> DbResult<ClinicalRecord> {
+        self.assert_active_user(actor_user_id)?;
+        let record = self
+            .get_clinical_record(record_id)?
+            .ok_or(DbError::NotFound)?;
+        if record.status != "diagnosed" {
+            return Err(DbError::InvalidClinicalStatus(record.status));
+        }
+
+        self.conn.execute(
+            r#"
+            UPDATE clinical_records
+            SET
+                ready_for_quote = ?1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2
+            "#,
+            params![ready_for_quote as i64, record_id],
+        )?;
+
+        self.insert_patient_audit(
+            actor_user_id,
+            record.patient_id,
+            "clinical.record_quote_flag_updated",
+            &format!(
+                r#"{{"record_id":{record_id},"tooth_number":{},"ready_for_quote":{}}}"#,
+                record
+                    .tooth_number
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "null".to_owned()),
+                ready_for_quote
+            ),
+        )?;
+
+        self.get_clinical_record(record_id)?
+            .ok_or(DbError::NotFound)
+    }
+
     pub fn get_patient(&self, id: i64) -> DbResult<Option<Patient>> {
         self.conn
             .query_row(
@@ -1062,6 +1392,99 @@ impl Database {
             .map_err(DbError::from)
     }
 
+    fn get_clinical_service(&self, id: i64) -> DbResult<Option<ClinicalService>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, code, name, category, base_price_cents, active
+                FROM clinical_services_catalog
+                WHERE id = ?1 AND active = 1
+                "#,
+                [id],
+                clinical_service_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn get_tooth_status(
+        &self,
+        patient_id: i64,
+        tooth_number: i64,
+    ) -> DbResult<Option<ToothStatus>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT patient_id, tooth_number, state, updated_by_user_id, updated_at
+                FROM clinical_tooth_statuses
+                WHERE patient_id = ?1 AND tooth_number = ?2
+                "#,
+                params![patient_id, tooth_number],
+                tooth_status_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn upsert_tooth_status_without_audit(
+        &self,
+        patient_id: i64,
+        tooth_number: i64,
+        state: &str,
+        actor_user_id: i64,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO clinical_tooth_statuses (
+                patient_id,
+                tooth_number,
+                state,
+                updated_by_user_id
+            )
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(patient_id, tooth_number) DO UPDATE SET
+                state = excluded.state,
+                updated_by_user_id = excluded.updated_by_user_id,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            params![patient_id, tooth_number, state, actor_user_id],
+        )?;
+
+        Ok(())
+    }
+
+    fn get_clinical_record(&self, id: i64) -> DbResult<Option<ClinicalRecord>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                    cr.id,
+                    cr.patient_id,
+                    cr.service_id,
+                    sc.code,
+                    sc.name,
+                    cr.tooth_number,
+                    cr.tooth_surface,
+                    cr.pathology_description,
+                    cr.status,
+                    cr.ready_for_quote,
+                    cr.notes,
+                    cr.created_by_user_id,
+                    users.username,
+                    cr.created_at,
+                    cr.updated_at
+                FROM clinical_records cr
+                LEFT JOIN clinical_services_catalog sc ON sc.id = cr.service_id
+                LEFT JOIN users ON users.id = cr.created_by_user_id
+                WHERE cr.id = ?1
+                "#,
+                [id],
+                clinical_record_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
     fn insert_audit(
         &self,
         user_id: Option<i64>,
@@ -1218,6 +1641,60 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn validate_tooth_number(tooth_number: i64) -> DbResult<()> {
+    let quadrant = tooth_number / 10;
+    let position = tooth_number % 10;
+
+    if (1..=4).contains(&quadrant) && (1..=8).contains(&position) {
+        Ok(())
+    } else {
+        Err(DbError::InvalidToothNumber)
+    }
+}
+
+fn normalize_tooth_state(state: &str) -> DbResult<String> {
+    match state.trim() {
+        "healthy" | "pathology" | "in_progress" | "performed" | "missing" => {
+            Ok(state.trim().to_owned())
+        }
+        value => Err(DbError::InvalidToothState(value.to_owned())),
+    }
+}
+
+fn normalize_clinical_status(status: &str) -> DbResult<&'static str> {
+    match status.trim() {
+        "diagnosed" => Ok("diagnosed"),
+        "in_quote" => Ok("in_quote"),
+        "performed" => Ok("performed"),
+        value => Err(DbError::InvalidClinicalStatus(value.to_owned())),
+    }
+}
+
+fn tooth_state_for_clinical_status(status: &str) -> &'static str {
+    match status {
+        "performed" => "performed",
+        "in_quote" => "in_progress",
+        _ => "pathology",
+    }
+}
+
+fn clinical_audit_metadata(
+    tooth_number: Option<i64>,
+    service_id: Option<i64>,
+    status: &str,
+) -> String {
+    format!(
+        r#"{{"tooth_number":{},"service_id":{},"status":"{}"}}"#,
+        tooth_number
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "null".to_owned()),
+        service_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "null".to_owned()),
+        status
+    )
+}
+
 fn default_database_path() -> PathBuf {
     if let Ok(path) = env::var("VELODENT_DB_PATH") {
         return PathBuf::from(path);
@@ -1250,12 +1727,21 @@ fn configure_connection(conn: &Connection) -> DbResult<()> {
 fn run_migrations(conn: &Connection) -> DbResult<()> {
     conn.execute_batch(SCHEMA_SQL)?;
     ensure_column(conn, "patients", "deleted_at", "TEXT")?;
+    ensure_column(
+        conn,
+        "clinical_records",
+        "ready_for_quote",
+        "INTEGER NOT NULL DEFAULT 0 CHECK(ready_for_quote IN (0, 1))",
+    )?;
     conn.execute(
         r#"
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "patient_soft_delete_and_audit_view"],
+        params![
+            CURRENT_SCHEMA_VERSION,
+            "clinical_odontogram_diary_and_catalog"
+        ],
     )?;
     Ok(())
 }
@@ -1298,6 +1784,51 @@ fn patient_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
         privacy_consent_signed: privacy_consent_signed == 1,
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
+    })
+}
+
+fn clinical_service_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClinicalService> {
+    let active: i64 = row.get(5)?;
+
+    Ok(ClinicalService {
+        id: row.get(0)?,
+        code: row.get(1)?,
+        name: row.get(2)?,
+        category: row.get(3)?,
+        base_price_cents: row.get(4)?,
+        active: active == 1,
+    })
+}
+
+fn tooth_status_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ToothStatus> {
+    Ok(ToothStatus {
+        patient_id: row.get(0)?,
+        tooth_number: row.get(1)?,
+        state: row.get(2)?,
+        updated_by_user_id: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
+}
+
+fn clinical_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClinicalRecord> {
+    let ready_for_quote: i64 = row.get(9)?;
+
+    Ok(ClinicalRecord {
+        id: row.get(0)?,
+        patient_id: row.get(1)?,
+        service_id: row.get(2)?,
+        service_code: row.get(3)?,
+        service_name: row.get(4)?,
+        tooth_number: row.get(5)?,
+        tooth_surface: row.get(6)?,
+        pathology_description: row.get(7)?,
+        status: row.get(8)?,
+        ready_for_quote: ready_for_quote == 1,
+        notes: row.get(10)?,
+        operator_user_id: row.get(11)?,
+        operator_username: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -1477,6 +2008,14 @@ CREATE TABLE IF NOT EXISTS clinical_services_catalog (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+INSERT OR IGNORE INTO clinical_services_catalog (code, name, category, base_price_cents)
+VALUES
+    ('ABL-001', 'Pulizia professionale', 'igiene', 7000),
+    ('EXT-001', 'Estrazione semplice', 'chirurgia', 12000),
+    ('OTT-001', 'Otturazione composito', 'conservativa', 9500),
+    ('DEV-001', 'Devitalizzazione', 'endodonzia', 25000),
+    ('VIS-001', 'Visita diagnostica', 'diagnosi', 5000);
+
 CREATE TABLE IF NOT EXISTS clinical_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     patient_id INTEGER NOT NULL,
@@ -1485,6 +2024,7 @@ CREATE TABLE IF NOT EXISTS clinical_records (
     tooth_surface TEXT,
     pathology_description TEXT,
     status TEXT NOT NULL DEFAULT 'diagnosed' CHECK(status IN ('diagnosed', 'in_quote', 'performed')),
+    ready_for_quote INTEGER NOT NULL DEFAULT 0 CHECK(ready_for_quote IN (0, 1)),
     notes TEXT,
     created_by_user_id INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -1492,6 +2032,18 @@ CREATE TABLE IF NOT EXISTS clinical_records (
     FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
     FOREIGN KEY (service_id) REFERENCES clinical_services_catalog(id) ON DELETE SET NULL,
     FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS clinical_tooth_statuses (
+    patient_id INTEGER NOT NULL,
+    tooth_number INTEGER NOT NULL CHECK(tooth_number BETWEEN 11 AND 48),
+    state TEXT NOT NULL CHECK(state IN ('healthy', 'pathology', 'in_progress', 'performed', 'missing')),
+    updated_by_user_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (patient_id, tooth_number),
+    FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+    FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS file_assets (
@@ -1664,6 +2216,10 @@ CREATE INDEX IF NOT EXISTS idx_patients_tax_code ON patients(tax_code);
 CREATE INDEX IF NOT EXISTS idx_appointments_starts_at ON appointments(starts_at);
 CREATE INDEX IF NOT EXISTS idx_appointments_patient ON appointments(patient_id);
 CREATE INDEX IF NOT EXISTS idx_clinical_records_patient ON clinical_records(patient_id);
+CREATE INDEX IF NOT EXISTS idx_clinical_records_patient_created ON clinical_records(patient_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_clinical_records_tooth ON clinical_records(patient_id, tooth_number);
+CREATE INDEX IF NOT EXISTS idx_clinical_records_quote_ready ON clinical_records(ready_for_quote, status);
+CREATE INDEX IF NOT EXISTS idx_clinical_tooth_statuses_patient ON clinical_tooth_statuses(patient_id);
 CREATE INDEX IF NOT EXISTS idx_rx_assets_patient ON rx_assets(patient_id);
 CREATE INDEX IF NOT EXISTS idx_quotes_patient ON quotes(patient_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_patient ON invoices(patient_id);
@@ -1870,6 +2426,96 @@ mod tests {
             .get_patient(patient.id)
             .expect("deleted patient lookup")
             .is_none());
+    }
+
+    #[test]
+    fn odontogram_diary_catalog_and_audit_work() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Giulia",
+                    last_name: "Bianchi",
+                    tax_code: "BNCLGU85T41H501W",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+
+        db.open_clinical_view(admin.id, patient.id)
+            .expect("audit clinical view");
+        let services = db
+            .list_clinical_services(admin.id)
+            .expect("clinical services");
+        assert!(services.iter().any(|service| service.code == "OTT-001"));
+
+        let tooth = db
+            .set_tooth_status(admin.id, patient.id, 16, "pathology")
+            .expect("set tooth status");
+        assert_eq!(tooth.state, "pathology");
+        assert!(matches!(
+            db.set_tooth_status(admin.id, patient.id, 19, "pathology"),
+            Err(DbError::InvalidToothNumber)
+        ));
+
+        let service = services
+            .iter()
+            .find(|service| service.code == "OTT-001")
+            .expect("filling service");
+        let record = db
+            .create_clinical_record(
+                admin.id,
+                &NewClinicalRecord {
+                    patient_id: patient.id,
+                    service_id: Some(service.id),
+                    tooth_number: Some(16),
+                    tooth_surface: Some("occlusale"),
+                    pathology_description: Some("Carie primaria"),
+                    status: "diagnosed",
+                    ready_for_quote: true,
+                    notes: Some("Da valutare in preventivo"),
+                },
+            )
+            .expect("create clinical record");
+        assert_eq!(record.tooth_number, Some(16));
+        assert!(record.ready_for_quote);
+
+        let records = db
+            .list_clinical_records(
+                admin.id,
+                patient.id,
+                &ClinicalRecordFilters {
+                    date_from: None,
+                    date_to: None,
+                    tooth_number: Some(16),
+                    operator_user_id: Some(admin.id),
+                },
+            )
+            .expect("clinical diary");
+        assert_eq!(records.len(), 1);
+
+        let flagged = db
+            .mark_clinical_record_ready_for_quote(admin.id, record.id, false)
+            .expect("unmark quote flow");
+        assert!(!flagged.ready_for_quote);
+
+        let audit_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE patient_id = ?1 AND action = 'CLINICAL_VIEW_OPENED'",
+                [patient.id],
+                |row| row.get(0),
+            )
+            .expect("clinical view audit count");
+        assert_eq!(audit_count, 1);
     }
 
     fn test_database_path() -> PathBuf {
