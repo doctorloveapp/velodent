@@ -17,6 +17,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            integrations::google::load_dotenv();
             app.manage(state::AppState::initialize()?);
             Ok(())
         })
@@ -37,7 +38,14 @@ pub fn run() {
             commands::revoke_device,
             commands::list_devices,
             commands::get_studio_settings,
-            commands::update_studio_settings
+            commands::update_studio_settings,
+            commands::google_oauth_status,
+            commands::validate_tax_code,
+            commands::create_patient,
+            commands::update_patient,
+            commands::delete_patient,
+            commands::open_patient_record,
+            commands::patient_timeline
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VeloDent");

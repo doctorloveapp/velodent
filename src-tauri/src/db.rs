@@ -2,12 +2,11 @@ use crate::auth::{self, Role};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 1;
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -18,8 +17,10 @@ pub enum DbError {
     MissingEncryptionKey,
     Forbidden,
     InvalidRole(String),
+    InvalidTaxCode,
     InvalidCredentials,
     BootstrapAlreadyCompleted,
+    NotFound,
 }
 
 impl std::fmt::Display for DbError {
@@ -34,8 +35,10 @@ impl std::fmt::Display for DbError {
             ),
             Self::Forbidden => write!(f, "operation requires admin privileges"),
             Self::InvalidRole(role) => write!(f, "invalid role: {role}"),
+            Self::InvalidTaxCode => write!(f, "invalid italian tax code"),
             Self::InvalidCredentials => write!(f, "invalid credentials"),
             Self::BootstrapAlreadyCompleted => write!(f, "first admin already exists"),
+            Self::NotFound => write!(f, "record not found"),
         }
     }
 }
@@ -160,6 +163,12 @@ pub struct NewPatient<'a> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PatientTimelineEvent {
+    pub action: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct User {
     pub id: i64,
     pub username: String,
@@ -260,9 +269,11 @@ impl Database {
     pub fn status(&self) -> DbResult<DatabaseStatus> {
         let schema_version: i64 = self
             .conn
-            .query_row("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
             .optional()?
             .unwrap_or(0);
 
@@ -300,7 +311,14 @@ impl Database {
         google_email: Option<&str>,
     ) -> DbResult<User> {
         if self.has_admin_user()? {
-            self.insert_audit(None, None, "auth.first_admin_rejected", Some("users"), None, "{}")?;
+            self.insert_audit(
+                None,
+                None,
+                "auth.first_admin_rejected",
+                Some("users"),
+                None,
+                "{}",
+            )?;
             return Err(DbError::BootstrapAlreadyCompleted);
         }
 
@@ -360,7 +378,9 @@ impl Database {
             )
             .optional()?;
 
-        let Some((id, username, password_hash, google_email, role, active, created_at, updated_at)) = row else {
+        let Some((id, username, password_hash, google_email, role, active, created_at, updated_at)) =
+            row
+        else {
             self.insert_audit(None, None, "auth.login_failed", Some("users"), None, "{}")?;
             return Err(DbError::InvalidCredentials);
         };
@@ -372,11 +392,25 @@ impl Database {
                 .unwrap_or(false);
 
         if !valid {
-            self.insert_audit(Some(id), None, "auth.login_failed", Some("users"), Some(id), "{}")?;
+            self.insert_audit(
+                Some(id),
+                None,
+                "auth.login_failed",
+                Some("users"),
+                Some(id),
+                "{}",
+            )?;
             return Err(DbError::InvalidCredentials);
         }
 
-        self.insert_audit(Some(id), None, "auth.login_success", Some("users"), Some(id), "{}")?;
+        self.insert_audit(
+            Some(id),
+            None,
+            "auth.login_success",
+            Some("users"),
+            Some(id),
+            "{}",
+        )?;
 
         Ok(User {
             id,
@@ -648,9 +682,7 @@ impl Database {
     }
 
     pub fn assert_admin(&self, user_id: i64) -> DbResult<()> {
-        let user = self
-            .get_user(user_id)?
-            .ok_or(DbError::Forbidden)?;
+        let user = self.get_user(user_id)?.ok_or(DbError::Forbidden)?;
 
         if user.active && user.role.is_admin() {
             Ok(())
@@ -659,7 +691,35 @@ impl Database {
         }
     }
 
+    pub fn assert_active_user(&self, user_id: i64) -> DbResult<()> {
+        let user = self.get_user(user_id)?.ok_or(DbError::Forbidden)?;
+
+        if user.active {
+            Ok(())
+        } else {
+            Err(DbError::Forbidden)
+        }
+    }
+
+    pub fn create_patient(
+        &self,
+        actor_user_id: i64,
+        patient: &NewPatient<'_>,
+    ) -> DbResult<Patient> {
+        self.assert_active_user(actor_user_id)?;
+        let id = self.insert_patient(patient)?;
+        self.insert_patient_audit(actor_user_id, id, "patient.created", "{}")?;
+
+        self.get_patient(id)?
+            .ok_or_else(|| DbError::Sql("created patient was not found".to_owned()))
+    }
+
     pub fn insert_patient(&self, patient: &NewPatient<'_>) -> DbResult<i64> {
+        let tax_code = normalize_tax_code(patient.tax_code)?;
+        let phone = normalize_optional(patient.phone);
+        let email = normalize_optional(patient.email);
+        let address = normalize_optional(patient.address);
+
         self.conn.execute(
             r#"
             INSERT INTO patients (
@@ -674,17 +734,136 @@ impl Database {
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
-                patient.first_name,
-                patient.last_name,
-                patient.tax_code,
-                patient.date_of_birth,
-                patient.phone,
-                patient.email,
-                patient.address,
+                patient.first_name.trim(),
+                patient.last_name.trim(),
+                tax_code,
+                patient.date_of_birth.trim(),
+                phone.as_deref(),
+                email.as_deref(),
+                address.as_deref(),
             ],
         )?;
 
         Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_patient(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+        patient: &NewPatient<'_>,
+    ) -> DbResult<Patient> {
+        self.assert_active_user(actor_user_id)?;
+        let tax_code = normalize_tax_code(patient.tax_code)?;
+        let phone = normalize_optional(patient.phone);
+        let email = normalize_optional(patient.email);
+        let address = normalize_optional(patient.address);
+
+        let affected = self.conn.execute(
+            r#"
+            UPDATE patients
+            SET
+                first_name = ?1,
+                last_name = ?2,
+                tax_code = ?3,
+                date_of_birth = ?4,
+                phone = ?5,
+                email = ?6,
+                address = ?7,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?8 AND deleted_at IS NULL
+            "#,
+            params![
+                patient.first_name.trim(),
+                patient.last_name.trim(),
+                tax_code,
+                patient.date_of_birth.trim(),
+                phone.as_deref(),
+                email.as_deref(),
+                address.as_deref(),
+                patient_id,
+            ],
+        )?;
+
+        if affected == 0 {
+            return Err(DbError::NotFound);
+        }
+
+        self.insert_patient_audit(actor_user_id, patient_id, "patient.updated", "{}")?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn delete_patient(&self, actor_user_id: i64, patient_id: i64) -> DbResult<Patient> {
+        self.assert_active_user(actor_user_id)?;
+        let patient = self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+
+        let affected = self.conn.execute(
+            r#"
+            UPDATE patients
+            SET
+                deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?1 AND deleted_at IS NULL
+            "#,
+            [patient_id],
+        )?;
+
+        if affected == 0 {
+            return Err(DbError::NotFound);
+        }
+
+        self.insert_patient_audit(actor_user_id, patient_id, "patient.deleted", "{}")?;
+        Ok(patient)
+    }
+
+    pub fn open_patient_record(&self, actor_user_id: i64, patient_id: i64) -> DbResult<Patient> {
+        self.assert_active_user(actor_user_id)?;
+        let patient = self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        self.insert_patient_audit(actor_user_id, patient_id, "PATIENT_RECORD_VIEW", "{}")?;
+        Ok(patient)
+    }
+
+    pub fn patient_timeline(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+    ) -> DbResult<Vec<PatientTimelineEvent>> {
+        self.assert_active_user(actor_user_id)?;
+        let patient = self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        let mut events = vec![PatientTimelineEvent {
+            action: "patient.created".to_owned(),
+            created_at: patient.created_at.clone(),
+        }];
+
+        if patient.updated_at != patient.created_at {
+            events.push(PatientTimelineEvent {
+                action: "patient.updated".to_owned(),
+                created_at: patient.updated_at.clone(),
+            });
+        }
+
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT action, created_at
+            FROM audit_log
+            WHERE patient_id = ?1
+            ORDER BY created_at DESC
+            LIMIT 25
+            "#,
+        )?;
+
+        let mut audit_events = statement
+            .query_map([patient_id], |row| {
+                Ok(PatientTimelineEvent {
+                    action: row.get(0)?,
+                    created_at: row.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        events.append(&mut audit_events);
+        events.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        Ok(events)
     }
 
     pub fn get_patient(&self, id: i64) -> DbResult<Option<Patient>> {
@@ -704,7 +883,7 @@ impl Database {
                     created_at,
                     updated_at
                 FROM patients
-                WHERE id = ?1
+                WHERE id = ?1 AND deleted_at IS NULL
                 "#,
                 [id],
                 patient_from_row,
@@ -733,10 +912,13 @@ impl Database {
                 updated_at
             FROM patients
             WHERE
-                ?1 = '%%'
-                OR first_name LIKE ?1
-                OR last_name LIKE ?1
-                OR tax_code LIKE ?1
+                deleted_at IS NULL
+                AND (
+                    ?1 = '%%'
+                    OR first_name LIKE ?1
+                    OR last_name LIKE ?1
+                    OR tax_code LIKE ?1
+                )
             ORDER BY last_name ASC, first_name ASC
             LIMIT ?2
             "#,
@@ -754,17 +936,17 @@ impl Database {
     }
 
     pub fn upsert_test_patient(&self) -> DbResult<Patient> {
-        let tax_code = "TESTVELODENT0001";
+        let tax_code = "RSSMRA85M01H501Q";
 
         if let Some(existing) = self.find_patient_by_tax_code(tax_code)? {
             return Ok(existing);
         }
 
         let id = self.insert_patient(&NewPatient {
-            first_name: "Test",
-            last_name: "VeloDent",
+            first_name: "Mario",
+            last_name: "Rossi",
             tax_code,
-            date_of_birth: "1990-01-01",
+            date_of_birth: "1985-08-01",
             phone: None,
             email: None,
             address: None,
@@ -804,7 +986,7 @@ impl Database {
                     created_at,
                     updated_at
                 FROM patients
-                WHERE tax_code = ?1
+                WHERE tax_code = ?1 AND deleted_at IS NULL
                 "#,
                 [tax_code],
                 patient_from_row,
@@ -901,11 +1083,139 @@ impl Database {
             )
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             "#,
-            params![user_id, device_id, action, entity_type, entity_id, metadata_json],
+            params![
+                user_id,
+                device_id,
+                action,
+                entity_type,
+                entity_id,
+                metadata_json
+            ],
         )?;
 
         Ok(())
     }
+
+    fn insert_patient_audit(
+        &self,
+        user_id: i64,
+        patient_id: i64,
+        action: &str,
+        metadata_json: &str,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO audit_log (
+                user_id,
+                patient_id,
+                action,
+                entity_type,
+                entity_id,
+                metadata_json
+            )
+            VALUES (?1, ?2, ?3, 'patients', ?2, ?4)
+            "#,
+            params![user_id, patient_id, action, metadata_json],
+        )?;
+
+        Ok(())
+    }
+}
+
+pub fn validate_tax_code(tax_code: &str) -> bool {
+    normalize_tax_code(tax_code).is_ok()
+}
+
+fn normalize_tax_code(tax_code: &str) -> DbResult<String> {
+    let normalized = tax_code.trim().to_ascii_uppercase();
+
+    if normalized.len() != 16
+        || !normalized
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+    {
+        return Err(DbError::InvalidTaxCode);
+    }
+
+    let chars = normalized.chars().collect::<Vec<_>>();
+    let valid_shape = chars[..6]
+        .iter()
+        .all(|character| character.is_ascii_alphabetic())
+        && matches!(
+            chars[8],
+            'A' | 'B' | 'C' | 'D' | 'E' | 'H' | 'L' | 'M' | 'P' | 'R' | 'S' | 'T'
+        )
+        && chars[11].is_ascii_alphabetic()
+        && chars[15].is_ascii_alphabetic();
+
+    if !valid_shape {
+        return Err(DbError::InvalidTaxCode);
+    }
+
+    let mut checksum = 0;
+    for (index, character) in chars.iter().take(15).enumerate() {
+        checksum += if index % 2 == 0 {
+            odd_tax_code_value(*character).ok_or(DbError::InvalidTaxCode)?
+        } else {
+            even_tax_code_value(*character).ok_or(DbError::InvalidTaxCode)?
+        };
+    }
+
+    let expected = (b'A' + (checksum % 26) as u8) as char;
+    if expected != chars[15] {
+        return Err(DbError::InvalidTaxCode);
+    }
+
+    Ok(normalized)
+}
+
+fn even_tax_code_value(character: char) -> Option<i32> {
+    if character.is_ascii_digit() {
+        character.to_digit(10).map(|value| value as i32)
+    } else if character.is_ascii_uppercase() {
+        Some((character as u8 - b'A') as i32)
+    } else {
+        None
+    }
+}
+
+fn odd_tax_code_value(character: char) -> Option<i32> {
+    Some(match character {
+        '0' | 'A' => 1,
+        '1' | 'B' => 0,
+        '2' | 'C' => 5,
+        '3' | 'D' => 7,
+        '4' | 'E' => 9,
+        '5' | 'F' => 13,
+        '6' | 'G' => 15,
+        '7' | 'H' => 17,
+        '8' | 'I' => 19,
+        '9' | 'J' => 21,
+        'K' => 2,
+        'L' => 4,
+        'M' => 18,
+        'N' => 20,
+        'O' => 11,
+        'P' => 3,
+        'Q' => 6,
+        'R' => 8,
+        'S' => 12,
+        'T' => 14,
+        'U' => 16,
+        'V' => 10,
+        'W' => 22,
+        'X' => 25,
+        'Y' => 24,
+        'Z' => 23,
+        _ => return None,
+    })
+}
+
+fn normalize_optional(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn default_database_path() -> PathBuf {
@@ -939,13 +1249,37 @@ fn configure_connection(conn: &Connection) -> DbResult<()> {
 
 fn run_migrations(conn: &Connection) -> DbResult<()> {
     conn.execute_batch(SCHEMA_SQL)?;
+    ensure_column(conn, "patients", "deleted_at", "TEXT")?;
     conn.execute(
         r#"
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "initial_secure_schema"],
+        params![CURRENT_SCHEMA_VERSION, "patient_soft_delete_and_audit_view"],
     )?;
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+    column_definition: &str,
+) -> DbResult<()> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table_name})"))?;
+    let exists = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == column_name);
+
+    if !exists {
+        conn.execute(
+            &format!("ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"),
+            [],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1110,6 +1444,7 @@ CREATE TABLE IF NOT EXISTS patients (
     email TEXT,
     address TEXT,
     privacy_consent_signed INTEGER NOT NULL DEFAULT 0 CHECK(privacy_consent_signed IN (0, 1)),
+    deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
@@ -1348,7 +1683,8 @@ mod tests {
     fn migrations_are_idempotent_and_patient_repository_round_trips() {
         let path = test_database_path();
 
-        let db = Database::open(path.clone(), EncryptionKey::for_tests()).expect("open encrypted db");
+        let db =
+            Database::open(path.clone(), EncryptionKey::for_tests()).expect("open encrypted db");
         let status = db.status().expect("database status");
         assert!(status.open);
         assert!(status.encrypted);
@@ -1359,7 +1695,7 @@ mod tests {
             .insert_patient(&NewPatient {
                 first_name: "Ada",
                 last_name: "Lovelace",
-                tax_code: "TESTADA00000001",
+                tax_code: "RSSMRA85M01H501Q",
                 date_of_birth: "1815-12-10",
                 phone: None,
                 email: Some("ada@example.test"),
@@ -1371,10 +1707,11 @@ mod tests {
             .get_patient(patient_id)
             .expect("get patient")
             .expect("patient exists");
-        assert_eq!(patient.tax_code, "TESTADA00000001");
+        assert_eq!(patient.tax_code, "RSSMRA85M01H501Q");
         drop(db);
 
-        let reopened = Database::open(path, EncryptionKey::for_tests()).expect("reopen encrypted db");
+        let reopened =
+            Database::open(path, EncryptionKey::for_tests()).expect("reopen encrypted db");
         let reopened_status = reopened.status().expect("reopened status");
         assert_eq!(reopened_status.schema_version, CURRENT_SCHEMA_VERSION);
         assert!(reopened
@@ -1388,19 +1725,21 @@ mod tests {
         let db = Database::open(test_database_path(), EncryptionKey::for_tests())
             .expect("open encrypted db");
 
-        assert!(db
-            .bootstrap_status()
-            .expect("bootstrap status")
-            .needs_first_admin);
+        assert!(
+            db.bootstrap_status()
+                .expect("bootstrap status")
+                .needs_first_admin
+        );
 
         let admin = db
             .create_first_admin("admin", "change-me-now", Some("admin@example.test"))
             .expect("create first admin");
         assert_eq!(admin.role, Role::Admin);
-        assert!(!db
-            .bootstrap_status()
-            .expect("bootstrap status after admin")
-            .needs_first_admin);
+        assert!(
+            !db.bootstrap_status()
+                .expect("bootstrap status after admin")
+                .needs_first_admin
+        );
         assert!(matches!(
             db.create_first_admin("second", "change-me-now", None),
             Err(DbError::BootstrapAlreadyCompleted)
@@ -1454,6 +1793,83 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
             .expect("audit count");
         assert!(audit_count >= 7);
+    }
+
+    #[test]
+    fn patient_crud_audit_and_tax_code_validation_work() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+
+        assert!(validate_tax_code("RSSMRA85M01H501Q"));
+        assert!(validate_tax_code("rssmra85m01h501q"));
+        assert!(!validate_tax_code("RSSMRA85M01H501Z"));
+
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Mario",
+                    last_name: "Rossi",
+                    tax_code: "rssmra85m01h501q",
+                    date_of_birth: "1985-08-01",
+                    phone: Some("+39 060000000"),
+                    email: Some("mario.rossi@example.test"),
+                    address: Some("Via Roma 1"),
+                },
+            )
+            .expect("create patient");
+        assert_eq!(patient.tax_code, "RSSMRA85M01H501Q");
+
+        let opened = db
+            .open_patient_record(admin.id, patient.id)
+            .expect("open patient record");
+        assert_eq!(opened.id, patient.id);
+
+        let updated = db
+            .update_patient(
+                admin.id,
+                patient.id,
+                &NewPatient {
+                    first_name: "Mario",
+                    last_name: "Rossi",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-08-01",
+                    phone: Some("+39 061111111"),
+                    email: Some("mario.rossi@example.test"),
+                    address: Some("Via Milano 2"),
+                },
+            )
+            .expect("update patient");
+        assert_eq!(updated.phone.as_deref(), Some("+39 061111111"));
+
+        let timeline = db
+            .patient_timeline(admin.id, patient.id)
+            .expect("patient timeline");
+        assert!(timeline
+            .iter()
+            .any(|event| event.action == "PATIENT_RECORD_VIEW"));
+
+        let audit_patient_id: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE patient_id = ?1 AND action = 'PATIENT_RECORD_VIEW'",
+                [patient.id],
+                |row| row.get(0),
+            )
+            .expect("view audit count");
+        assert_eq!(audit_patient_id, 1);
+
+        let deleted = db
+            .delete_patient(admin.id, patient.id)
+            .expect("soft delete patient");
+        assert_eq!(deleted.id, patient.id);
+        assert!(db
+            .get_patient(patient.id)
+            .expect("deleted patient lookup")
+            .is_none());
     }
 
     fn test_database_path() -> PathBuf {

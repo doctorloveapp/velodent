@@ -13,4 +13,3 @@ pub fn health_check() -> HealthStatus {
         message_key: "healthReady",
     }
 }
-

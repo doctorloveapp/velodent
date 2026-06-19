@@ -18,4 +18,3 @@ impl AppState {
             .map_err(|_| "database lock poisoned".to_owned())
     }
 }
-

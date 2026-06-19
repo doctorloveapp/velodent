@@ -9,6 +9,7 @@ import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { SettingsPanel } from "@/frontend/settings/SettingsPanel";
 import type { User } from "@/frontend/settings/settingsApi";
 import { CommandPalette } from "./CommandPalette";
+import { PatientsView } from "@/frontend/patients/PatientsView";
 import type { Patient } from "@/frontend/patients/patientsApi";
 
 const navItems = [
@@ -165,6 +166,12 @@ export function AppShell() {
             >
               {activeKey === "settings" ? (
                 <SettingsPanel currentUser={currentUser} onCurrentUserChange={setCurrentUser} />
+              ) : activeKey === "patients" ? (
+                <PatientsView
+                  currentUser={currentUser}
+                  selectedPatient={selectedPatient}
+                  onPatientSelected={setSelectedPatient}
+                />
               ) : (
                 <DashboardWorkspace selectedPatient={selectedPatient} />
               )}

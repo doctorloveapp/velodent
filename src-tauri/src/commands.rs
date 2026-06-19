@@ -2,8 +2,10 @@ use crate::{
     auth::Role,
     db::{
         AuthorizedDevice, AuthorizedGoogleAccount, BootstrapStatus, CreateUserInput,
-        DatabaseStatus, DeviceAuthorization, Patient, StudioSettings, StudioSettingsUpdate, User,
+        DatabaseStatus, DeviceAuthorization, NewPatient, Patient, PatientTimelineEvent,
+        StudioSettings, StudioSettingsUpdate, User,
     },
+    integrations::google::{self, GoogleOAuthStatus},
     state::AppState,
 };
 use serde::Deserialize;
@@ -11,7 +13,10 @@ use tauri::State;
 
 #[tauri::command]
 pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, String> {
-    state.database()?.status().map_err(|error| error.to_string())
+    state
+        .database()?
+        .status()
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -94,6 +99,47 @@ pub struct UpdateStudioSettingsRequest {
     chair_count: i64,
     data_directory: Option<String>,
     holiday_periods_json: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatientRequest {
+    actor_user_id: i64,
+    first_name: String,
+    last_name: String,
+    tax_code: String,
+    date_of_birth: String,
+    phone: Option<String>,
+    email: Option<String>,
+    address: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePatientRequest {
+    actor_user_id: i64,
+    patient_id: i64,
+    first_name: String,
+    last_name: String,
+    tax_code: String,
+    date_of_birth: String,
+    phone: Option<String>,
+    email: Option<String>,
+    address: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatientIdRequest {
+    actor_user_id: i64,
+    patient_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ValidateTaxCodeRequest {
+    tax_code: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GoogleOAuthStatusRequest {
+    actor_user_id: i64,
 }
 
 #[tauri::command]
@@ -233,5 +279,100 @@ pub fn update_studio_settings(
                 holiday_periods_json: &request.holiday_periods_json,
             },
         )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn google_oauth_status(
+    state: State<'_, AppState>,
+    request: GoogleOAuthStatusRequest,
+) -> Result<GoogleOAuthStatus, String> {
+    state
+        .database()?
+        .assert_admin(request.actor_user_id)
+        .map_err(|error| error.to_string())?;
+    Ok(google::oauth_status())
+}
+
+#[tauri::command]
+pub fn validate_tax_code(request: ValidateTaxCodeRequest) -> bool {
+    crate::db::validate_tax_code(&request.tax_code)
+}
+
+#[tauri::command]
+pub fn create_patient(
+    state: State<'_, AppState>,
+    request: PatientRequest,
+) -> Result<Patient, String> {
+    state
+        .database()?
+        .create_patient(
+            request.actor_user_id,
+            &NewPatient {
+                first_name: request.first_name.trim(),
+                last_name: request.last_name.trim(),
+                tax_code: request.tax_code.trim(),
+                date_of_birth: request.date_of_birth.trim(),
+                phone: request.phone.as_deref(),
+                email: request.email.as_deref(),
+                address: request.address.as_deref(),
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn update_patient(
+    state: State<'_, AppState>,
+    request: UpdatePatientRequest,
+) -> Result<Patient, String> {
+    state
+        .database()?
+        .update_patient(
+            request.actor_user_id,
+            request.patient_id,
+            &NewPatient {
+                first_name: request.first_name.trim(),
+                last_name: request.last_name.trim(),
+                tax_code: request.tax_code.trim(),
+                date_of_birth: request.date_of_birth.trim(),
+                phone: request.phone.as_deref(),
+                email: request.email.as_deref(),
+                address: request.address.as_deref(),
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn delete_patient(
+    state: State<'_, AppState>,
+    request: PatientIdRequest,
+) -> Result<Patient, String> {
+    state
+        .database()?
+        .delete_patient(request.actor_user_id, request.patient_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn open_patient_record(
+    state: State<'_, AppState>,
+    request: PatientIdRequest,
+) -> Result<Patient, String> {
+    state
+        .database()?
+        .open_patient_record(request.actor_user_id, request.patient_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn patient_timeline(
+    state: State<'_, AppState>,
+    request: PatientIdRequest,
+) -> Result<Vec<PatientTimelineEvent>, String> {
+    state
+        .database()?
+        .patient_timeline(request.actor_user_id, request.patient_id)
         .map_err(|error| error.to_string())
 }
