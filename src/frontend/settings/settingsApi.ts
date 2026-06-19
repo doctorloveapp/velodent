@@ -57,6 +57,12 @@ export interface DeviceAuthorization {
   token_once: string;
 }
 
+export interface GoogleAuthorizationUrl {
+  authorization_url: string;
+  redirect_uri: string;
+  scopes: string[];
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -81,6 +87,14 @@ export async function createFirstAdmin(request: {
 
 export async function login(request: { username: string; password: string }) {
   return toSessionUser(await invoke<AuthSession>("login", { request }));
+}
+
+export async function googleLoginAuthorizationUrl(state = "velodent-login") {
+  return invoke<GoogleAuthorizationUrl>("google_login_authorization_url", { request: { state } });
+}
+
+export async function exchangeGoogleLoginCode(code: string) {
+  return toSessionUser(await invoke<AuthSession>("exchange_google_login_code", { request: { code } }));
 }
 
 export async function listUsers(session_token: string) {

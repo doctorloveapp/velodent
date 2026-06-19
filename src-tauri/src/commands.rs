@@ -78,6 +78,16 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct GoogleLoginAuthorizationUrlRequest {
+    state: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExchangeGoogleLoginCodeRequest {
+    code: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
     session_token: String,
     username: String,
@@ -315,6 +325,38 @@ pub fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<AuthSe
     let database = state.database()?;
     let user = database
         .login(request.username.trim(), &request.password)
+        .map_err(|error| error.to_string())?;
+    database
+        .create_session(user.id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn google_login_authorization_url(
+    request: GoogleLoginAuthorizationUrlRequest,
+) -> Result<GoogleAuthorizationUrl, String> {
+    google::authorization_url(request.state.as_deref().unwrap_or("velodent-login"))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn exchange_google_login_code(
+    state: State<'_, AppState>,
+    request: ExchangeGoogleLoginCodeRequest,
+) -> Result<AuthSession, String> {
+    let token = google::exchange_authorization_code(request.code.trim())
+        .await
+        .map_err(|error| error.to_string())?;
+    let user_info = google::user_info(&token.access_token)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !user_info.email_verified.unwrap_or(false) {
+        return Err("google email is not verified".to_owned());
+    }
+
+    let database = state.database()?;
+    let user = database
+        .login_with_google_email(&user_info.email)
         .map_err(|error| error.to_string())?;
     database
         .create_session(user.id)

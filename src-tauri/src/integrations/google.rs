@@ -7,6 +7,7 @@ use std::{
 const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:1420/google/oauth/callback";
 const GOOGLE_AUTH_URI: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
+const GOOGLE_USERINFO_URI: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
 const GOOGLE_CALENDAR_EVENTS_URI: &str = "https://www.googleapis.com/calendar/v3/calendars";
 const GOOGLE_SCOPES: [&str; 2] = [
     "openid email profile",
@@ -75,6 +76,12 @@ struct GoogleTokenResponse {
 #[derive(Debug, Deserialize)]
 struct GoogleEventResponse {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GoogleUserInfo {
+    pub email: String,
+    pub email_verified: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -262,6 +269,32 @@ pub async fn exchange_authorization_code(
         scope: token.scope,
         expires_at_epoch_seconds,
     })
+}
+
+pub async fn user_info(access_token: &str) -> Result<GoogleUserInfo, GoogleApiError> {
+    let response = reqwest::Client::new()
+        .get(GOOGLE_USERINFO_URI)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|error| GoogleApiError::Request(error.to_string()))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "redacted google error".to_owned());
+        return Err(GoogleApiError::HttpStatus(
+            status.as_u16(),
+            sanitize_google_error(&body),
+        ));
+    }
+
+    response
+        .json::<GoogleUserInfo>()
+        .await
+        .map_err(|error| GoogleApiError::Request(error.to_string()))
 }
 
 pub async fn upsert_calendar_event(

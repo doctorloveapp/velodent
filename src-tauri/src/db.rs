@@ -432,7 +432,7 @@ impl Database {
 
     pub fn bootstrap_status(&self) -> DbResult<BootstrapStatus> {
         Ok(BootstrapStatus {
-            needs_first_admin: !self.has_admin_user()?,
+            needs_first_admin: !self.has_admin_user()? || !self.has_completed_admin_session()?,
         })
     }
 
@@ -442,7 +442,8 @@ impl Database {
         password: &str,
         google_email: Option<&str>,
     ) -> DbResult<User> {
-        if self.has_admin_user()? {
+        let existing_bootstrap_admin_id = self.incomplete_bootstrap_admin_id()?;
+        if self.has_admin_user()? && existing_bootstrap_admin_id.is_none() {
             self.insert_audit(
                 None,
                 None,
@@ -455,15 +456,32 @@ impl Database {
         }
 
         let password_hash = auth::hash_password(password).map_err(DbError::Sql)?;
-        self.conn.execute(
-            r#"
-            INSERT INTO users (username, password_hash, google_email, role)
-            VALUES (?1, ?2, ?3, 'admin')
-            "#,
-            params![username, password_hash, google_email],
-        )?;
-
-        let user_id = self.conn.last_insert_rowid();
+        let user_id = if let Some(user_id) = existing_bootstrap_admin_id {
+            self.conn.execute(
+                r#"
+                UPDATE users
+                SET
+                    username = ?1,
+                    password_hash = ?2,
+                    google_email = ?3,
+                    role = 'admin',
+                    active = 1,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?4
+                "#,
+                params![username, password_hash, google_email, user_id],
+            )?;
+            user_id
+        } else {
+            self.conn.execute(
+                r#"
+                INSERT INTO users (username, password_hash, google_email, role)
+                VALUES (?1, ?2, ?3, 'admin')
+                "#,
+                params![username, password_hash, google_email],
+            )?;
+            self.conn.last_insert_rowid()
+        };
         self.insert_audit(
             Some(user_id),
             None,
@@ -567,6 +585,43 @@ impl Database {
             created_at,
             updated_at,
         })
+    }
+
+    pub fn login_with_google_email(&self, email: &str) -> DbResult<User> {
+        let email = normalize_email(email)?;
+        let account = self
+            .get_authorized_google_account(&email)?
+            .filter(|account| account.active)
+            .ok_or(DbError::Forbidden)?;
+
+        let existing = self.get_user_by_google_email(&email)?;
+        let user = if let Some(user) = existing {
+            if !user.active {
+                return Err(DbError::Forbidden);
+            }
+            user
+        } else {
+            let username = self.unique_google_username(&email)?;
+            self.conn.execute(
+                r#"
+                INSERT INTO users (username, password_hash, google_email, role)
+                VALUES (?1, NULL, ?2, ?3)
+                "#,
+                params![username, email, account.role.as_db_value()],
+            )?;
+            self.get_user(self.conn.last_insert_rowid())?
+                .ok_or_else(|| DbError::Sql("google user was not found".to_owned()))?
+        };
+
+        self.insert_audit(
+            Some(user.id),
+            None,
+            "auth.google_login_success",
+            Some("users"),
+            Some(user.id),
+            "{}",
+        )?;
+        Ok(user)
     }
 
     pub fn create_session(&self, user_id: i64) -> DbResult<AuthSession> {
@@ -1899,6 +1954,42 @@ impl Database {
         Ok(count > 0)
     }
 
+    fn has_completed_admin_session(&self) -> DbResult<bool> {
+        let count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM user_sessions
+            INNER JOIN users ON users.id = user_sessions.user_id
+            WHERE users.role = 'admin' AND users.active = 1
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+
+        Ok(count > 0)
+    }
+
+    fn incomplete_bootstrap_admin_id(&self) -> DbResult<Option<i64>> {
+        if !self.has_admin_user()? || self.has_completed_admin_session()? {
+            return Ok(None);
+        }
+
+        self.conn
+            .query_row(
+                r#"
+                SELECT id
+                FROM users
+                WHERE role = 'admin' AND active = 1
+                ORDER BY id ASC
+                LIMIT 1
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
     fn get_user(&self, id: i64) -> DbResult<Option<User>> {
         self.conn
             .query_row(
@@ -1912,6 +2003,59 @@ impl Database {
             )
             .optional()
             .map_err(DbError::from)
+    }
+
+    fn get_user_by_google_email(&self, email: &str) -> DbResult<Option<User>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, username, google_email, role, active, created_at, updated_at
+                FROM users
+                WHERE google_email = ?1
+                "#,
+                [email],
+                user_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn unique_google_username(&self, email: &str) -> DbResult<String> {
+        let base = email
+            .split('@')
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("google-user")
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+
+        for index in 0..100 {
+            let candidate = if index == 0 {
+                base.clone()
+            } else {
+                format!("{base}-{index}")
+            };
+            let exists: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM users WHERE username = ?1",
+                [&candidate],
+                |row| row.get(0),
+            )?;
+            if exists == 0 {
+                return Ok(candidate);
+            }
+        }
+
+        Err(DbError::Sql(
+            "unable to allocate google username".to_owned(),
+        ))
     }
 
     fn get_authorized_google_account(
@@ -2336,6 +2480,15 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn normalize_email(email: &str) -> DbResult<String> {
+    let normalized = email.trim().to_ascii_lowercase();
+    if normalized.contains('@') && normalized.len() <= 254 {
+        Ok(normalized)
+    } else {
+        Err(DbError::InvalidCredentials)
+    }
 }
 
 fn validate_tooth_number(tooth_number: i64) -> DbResult<()> {
@@ -3129,18 +3282,27 @@ mod tests {
             .expect("create first admin");
         assert_eq!(admin.role, Role::Admin);
         assert!(
-            !db.bootstrap_status()
+            db.bootstrap_status()
                 .expect("bootstrap status after admin")
                 .needs_first_admin
         );
         assert!(matches!(
             db.create_first_admin("second", "change-me-now", None),
-            Err(DbError::BootstrapAlreadyCompleted)
+            Ok(user) if user.username == "second"
         ));
 
-        let logged_in = db.login("admin", "change-me-now").expect("login admin");
+        let logged_in = db.login("second", "change-me-now").expect("login admin");
         assert_eq!(logged_in.id, admin.id);
         let session = db.create_session(logged_in.id).expect("create session");
+        assert!(
+            !db.bootstrap_status()
+                .expect("bootstrap status after session")
+                .needs_first_admin
+        );
+        assert!(matches!(
+            db.create_first_admin("third", "change-me-now", None),
+            Err(DbError::BootstrapAlreadyCompleted)
+        ));
         assert_eq!(
             db.user_for_session(&session.session_token)
                 .expect("session user")
@@ -3152,7 +3314,7 @@ mod tests {
             Err(DbError::Forbidden)
         ));
         assert!(matches!(
-            db.login("admin", "wrong-password"),
+            db.login("second", "wrong-password"),
             Err(DbError::InvalidCredentials)
         ));
 

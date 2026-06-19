@@ -30,6 +30,8 @@ pub fn run() {
             commands::bootstrap_status,
             commands::create_first_admin,
             commands::login,
+            commands::google_login_authorization_url,
+            commands::exchange_google_login_code,
             commands::create_user,
             commands::list_users,
             commands::add_authorized_google_account,

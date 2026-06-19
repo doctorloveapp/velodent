@@ -1,0 +1,5 @@
+src-tauri/data/**
+src-tauri/data/
+src-tauri/**/*.sqlite
+src-tauri/**/*.sqlite-shm
+src-tauri/**/*.sqlite-wal

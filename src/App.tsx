@@ -3,7 +3,15 @@ import { L10nProvider } from "@/frontend/shared/i18n/L10nProvider";
 import { useEffect, useState, type ReactNode } from "react";
 import { Activity, KeyRound, ShieldCheck } from "lucide-react";
 import { DEFAULT_FIRST_ADMIN_GOOGLE_EMAIL } from "@/frontend/settings/authConfig";
-import { bootstrapStatus, createFirstAdmin, isTauriRuntime, login, type User } from "@/frontend/settings/settingsApi";
+import {
+  bootstrapStatus,
+  createFirstAdmin,
+  exchangeGoogleLoginCode,
+  googleLoginAuthorizationUrl,
+  isTauriRuntime,
+  login,
+  type User
+} from "@/frontend/settings/settingsApi";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
@@ -23,6 +31,8 @@ function AuthGate() {
   const [needsFirstAdmin, setNeedsFirstAdmin] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
+  const [googleCodeInput, setGoogleCodeInput] = useState("");
+  const [googleLoginOpen, setGoogleLoginOpen] = useState(false);
   const [adminForm, setAdminForm] = useState({
     username: "admin",
     password: "",
@@ -60,6 +70,22 @@ function AuthGate() {
     setCurrentUser(await login(loginForm));
   }
 
+  async function handleStartGoogleLogin() {
+    const authorization = await googleLoginAuthorizationUrl();
+    window.open(authorization.authorization_url, "_blank", "noopener,noreferrer");
+    setGoogleLoginOpen(true);
+    setStatusMessage(t("authGateGoogleCodeHelp"));
+  }
+
+  async function handleCompleteGoogleLogin() {
+    const code = extractGoogleCode(googleCodeInput);
+    if (!code) {
+      setStatusMessage(t("authGateGoogleCodeMissing"));
+      return;
+    }
+    setCurrentUser(await exchangeGoogleLoginCode(code));
+  }
+
   if (currentUser?.session_token) {
     return <AppShell currentUser={currentUser} />;
   }
@@ -95,6 +121,7 @@ function AuthGate() {
       eyebrow={t("settingsSecurityEyebrow")}
     >
       <div className="grid gap-3">
+        <p className="text-sm leading-6 text-alabaster-grey-500">{t("authGateFirstAdminHelp")}</p>
         <Input placeholder={t("settingsUsername")} value={adminForm.username} onChange={(event) => setAdminForm({ ...adminForm, username: event.target.value })} />
         <Input placeholder={t("settingsPassword")} type="password" value={adminForm.password} onChange={(event) => setAdminForm({ ...adminForm, password: event.target.value })} />
         <Input placeholder={t("settingsGoogleEmail")} value={adminForm.googleEmail} onChange={(event) => setAdminForm({ ...adminForm, googleEmail: event.target.value })} />
@@ -116,7 +143,14 @@ function AuthGate() {
         <Button type="button" onClick={() => void handleLogin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}>
           {t("settingsLoginAction")}
         </Button>
-        {statusMessage ? <p className="text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
+        <GoogleLoginControls
+          googleCodeInput={googleCodeInput}
+          googleLoginOpen={googleLoginOpen}
+          statusMessage={statusMessage}
+          onCodeChange={setGoogleCodeInput}
+          onComplete={() => void handleCompleteGoogleLogin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
+          onStart={() => void handleStartGoogleLogin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
+        />
       </div>
     </AuthSurface>
   );
@@ -144,4 +178,57 @@ function AuthSurface({ children, eyebrow, icon, title }: { children: ReactNode; 
       </section>
     </main>
   );
+}
+
+function GoogleLoginControls({
+  googleCodeInput,
+  googleLoginOpen,
+  onCodeChange,
+  onComplete,
+  onStart,
+  statusMessage
+}: {
+  googleCodeInput: string;
+  googleLoginOpen: boolean;
+  onCodeChange: (value: string) => void;
+  onComplete: () => void;
+  onStart: () => void;
+  statusMessage: string;
+}) {
+  const { t } = useL10n();
+
+  return (
+    <div className="grid gap-3 border-t border-alabaster-grey-500/15 pt-4">
+      <Button type="button" variant="secondary" className="h-11 justify-center border-powder-blue-500/40 bg-powder-blue-950 text-white hover:bg-powder-blue-900" onClick={onStart}>
+        {t("authGateGoogleLogin")}
+      </Button>
+      {googleLoginOpen ? (
+        <div className="grid gap-2">
+          <Input
+            placeholder={t("authGateGoogleCodePlaceholder")}
+            value={googleCodeInput}
+            onChange={(event) => onCodeChange(event.target.value)}
+          />
+          <Button type="button" onClick={onComplete}>
+            {t("authGateGoogleComplete")}
+          </Button>
+        </div>
+      ) : null}
+      {statusMessage ? <p className="text-xs leading-5 text-alabaster-grey-500">{statusMessage}</p> : null}
+    </div>
+  );
+}
+
+function extractGoogleCode(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.searchParams.get("code")?.trim() ?? trimmed;
+  } catch {
+    return trimmed;
+  }
 }
