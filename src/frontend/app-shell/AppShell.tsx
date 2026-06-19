@@ -11,6 +11,7 @@ import type { User } from "@/frontend/settings/settingsApi";
 import { CommandPalette } from "./CommandPalette";
 import { PatientsView } from "@/frontend/patients/PatientsView";
 import type { Patient } from "@/frontend/patients/patientsApi";
+import { AgendaView } from "@/frontend/agenda/AgendaView";
 
 const navItems = [
   { key: "agenda", icon: CalendarDays, labelKey: "navAgenda" },
@@ -164,7 +165,9 @@ export function AppShell() {
               initial={{ opacity: 0, y: 10 }}
               transition={{ duration: 0.3 }}
             >
-              {activeKey === "settings" ? (
+              {activeKey === "agenda" ? (
+                <AgendaView currentUser={currentUser} />
+              ) : activeKey === "settings" ? (
                 <SettingsPanel currentUser={currentUser} onCurrentUserChange={setCurrentUser} />
               ) : activeKey === "patients" ? (
                 <PatientsView

@@ -1,15 +1,16 @@
 use crate::{
     auth::Role,
     db::{
-        AuthorizedDevice, AuthorizedGoogleAccount, BootstrapStatus, ClinicalRecord,
-        ClinicalRecordFilters, ClinicalService, CreateUserInput, DatabaseStatus,
-        DeviceAuthorization, NewClinicalRecord, NewPatient, Patient, PatientTimelineEvent,
-        StudioSettings, StudioSettingsUpdate, ToothStatus, User,
+        Appointment, AppointmentInput, AuthorizedDevice, AuthorizedGoogleAccount, BootstrapStatus,
+        ChairConfig, ClinicalRecord, ClinicalRecordFilters, ClinicalService, CreateUserInput,
+        DatabaseStatus, DeviceAuthorization, GoogleCalendarSyncStatus, NewClinicalRecord,
+        NewPatient, Patient, PatientTimelineEvent, StudioSettings, StudioSettingsUpdate,
+        ToothStatus, User,
     },
-    integrations::google::{self, GoogleOAuthStatus},
+    integrations::google::{self, GoogleAuthorizationUrl, GoogleOAuthStatus},
     state::AppState,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 #[tauri::command]
@@ -192,6 +193,66 @@ pub struct MarkClinicalRecordQuoteRequest {
     ready_for_quote: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ListAppointmentsRequest {
+    actor_user_id: i64,
+    starts_from: String,
+    starts_to: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateAppointmentRequest {
+    actor_user_id: i64,
+    patient_id: Option<i64>,
+    chair_number: i64,
+    title: String,
+    starts_at: String,
+    ends_at: String,
+    status: String,
+    color_tag: Option<String>,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MoveAppointmentRequest {
+    actor_user_id: i64,
+    appointment_id: i64,
+    chair_number: i64,
+    starts_at: String,
+    ends_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAppointmentStatusRequest {
+    actor_user_id: i64,
+    appointment_id: i64,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GoogleAuthorizationUrlRequest {
+    actor_user_id: i64,
+    state: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExchangeGoogleOAuthCodeRequest {
+    actor_user_id: i64,
+    code: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProcessGoogleCalendarSyncRequest {
+    actor_user_id: i64,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GoogleCalendarSyncRunResult {
+    processed: i64,
+    failed: i64,
+}
+
 #[tauri::command]
 pub fn bootstrap_status(state: State<'_, AppState>) -> Result<BootstrapStatus, String> {
     state
@@ -345,8 +406,138 @@ pub fn google_oauth_status(
 }
 
 #[tauri::command]
+pub fn google_calendar_sync_status(
+    state: State<'_, AppState>,
+    request: GoogleOAuthStatusRequest,
+) -> Result<GoogleCalendarSyncStatus, String> {
+    state
+        .database()?
+        .google_calendar_sync_status(request.actor_user_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn google_calendar_authorization_url(
+    state: State<'_, AppState>,
+    request: GoogleAuthorizationUrlRequest,
+) -> Result<GoogleAuthorizationUrl, String> {
+    state
+        .database()?
+        .assert_admin(request.actor_user_id)
+        .map_err(|error| error.to_string())?;
+    google::authorization_url(request.state.as_deref().unwrap_or("velodent-local"))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn exchange_google_oauth_code(
+    state: State<'_, AppState>,
+    request: ExchangeGoogleOAuthCodeRequest,
+) -> Result<GoogleCalendarSyncStatus, String> {
+    {
+        state
+            .database()?
+            .assert_admin(request.actor_user_id)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let token = google::exchange_authorization_code(request.code.trim())
+        .await
+        .map_err(|error| error.to_string())?;
+    let token_json = serde_json::to_string(&token).map_err(|error| error.to_string())?;
+    let database = state.database()?;
+    database
+        .store_google_calendar_token(request.actor_user_id, &token_json)
+        .map_err(|error| error.to_string())?;
+    database
+        .google_calendar_sync_status(request.actor_user_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn validate_tax_code(request: ValidateTaxCodeRequest) -> bool {
     crate::db::validate_tax_code(&request.tax_code)
+}
+
+#[tauri::command]
+pub fn get_chair_config(
+    state: State<'_, AppState>,
+    request: ActorRequest,
+) -> Result<ChairConfig, String> {
+    state
+        .database()?
+        .chair_config(request.actor_user_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn list_appointments(
+    state: State<'_, AppState>,
+    request: ListAppointmentsRequest,
+) -> Result<Vec<Appointment>, String> {
+    state
+        .database()?
+        .list_appointments(
+            request.actor_user_id,
+            request.starts_from.trim(),
+            request.starts_to.trim(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn create_appointment(
+    state: State<'_, AppState>,
+    request: CreateAppointmentRequest,
+) -> Result<Appointment, String> {
+    state
+        .database()?
+        .create_appointment(
+            request.actor_user_id,
+            &AppointmentInput {
+                patient_id: request.patient_id,
+                chair_number: request.chair_number,
+                title: request.title.trim(),
+                starts_at: request.starts_at.trim(),
+                ends_at: request.ends_at.trim(),
+                status: request.status.trim(),
+                color_tag: request.color_tag.as_deref(),
+                notes: request.notes.as_deref(),
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn move_appointment(
+    state: State<'_, AppState>,
+    request: MoveAppointmentRequest,
+) -> Result<Appointment, String> {
+    state
+        .database()?
+        .move_appointment(
+            request.actor_user_id,
+            request.appointment_id,
+            request.starts_at.trim(),
+            request.ends_at.trim(),
+            request.chair_number,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn update_appointment_status(
+    state: State<'_, AppState>,
+    request: UpdateAppointmentStatusRequest,
+) -> Result<Appointment, String> {
+    state
+        .database()?
+        .update_appointment_status(
+            request.actor_user_id,
+            request.appointment_id,
+            request.status.trim(),
+        )
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -532,4 +723,85 @@ pub fn mark_clinical_record_ready_for_quote(
             request.ready_for_quote,
         )
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn process_google_calendar_sync(
+    state: State<'_, AppState>,
+    request: ProcessGoogleCalendarSyncRequest,
+) -> Result<GoogleCalendarSyncRunResult, String> {
+    let token_json = {
+        let database = state.database()?;
+        database
+            .google_calendar_token_json(request.actor_user_id)
+            .map_err(|error| error.to_string())?
+    };
+    let token = serde_json::from_str::<google::GoogleCalendarToken>(&token_json)
+        .map_err(|_| "stored google calendar token is not readable".to_owned())?;
+    if token.access_token.trim().is_empty() {
+        return Err("stored google calendar token is empty".to_owned());
+    }
+
+    let jobs = {
+        let database = state.database()?;
+        database
+            .pending_google_calendar_sync_jobs(request.actor_user_id, request.limit.unwrap_or(10))
+            .map_err(|error| error.to_string())?
+    };
+
+    let mut processed = 0;
+    let mut failed = 0;
+    for job in jobs {
+        let payload = google_payload_for_appointment(&job.appointment);
+        let result = google::upsert_calendar_event(
+            &token.access_token,
+            "primary",
+            job.appointment.google_calendar_event_id.as_deref(),
+            &payload,
+        )
+        .await;
+
+        let database = state.database()?;
+        match result {
+            Ok(event_id) => {
+                database
+                    .complete_google_calendar_sync_job(
+                        job.job_id,
+                        job.appointment.id,
+                        event_id.trim(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                processed += 1;
+            }
+            Err(error) => {
+                database
+                    .fail_google_calendar_sync_job(job.job_id, &error.to_string())
+                    .map_err(|db_error| db_error.to_string())?;
+                failed += 1;
+            }
+        }
+    }
+
+    Ok(GoogleCalendarSyncRunResult { processed, failed })
+}
+
+fn google_payload_for_appointment(appointment: &Appointment) -> google::GoogleCalendarEventPayload {
+    let summary = appointment
+        .patient_name
+        .as_ref()
+        .map(|patient_name| format!("{patient_name} - {} (VeloDent)", appointment.title))
+        .unwrap_or_else(|| format!("{} (VeloDent)", appointment.title));
+
+    google::GoogleCalendarEventPayload {
+        summary,
+        description: "VeloDent agenda sync".to_owned(),
+        start: google::GoogleCalendarEventDateTime {
+            date_time: appointment.starts_at.clone(),
+            time_zone: "Europe/Rome".to_owned(),
+        },
+        end: google::GoogleCalendarEventDateTime {
+            date_time: appointment.ends_at.clone(),
+            time_zone: "Europe/Rome".to_owned(),
+        },
+    }
 }

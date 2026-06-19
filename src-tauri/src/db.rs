@@ -1,4 +1,7 @@
-use crate::auth::{self, Role};
+use crate::{
+    auth::{self, Role},
+    integrations::google,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::{
@@ -6,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const CURRENT_SCHEMA_VERSION: i64 = 4;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -21,6 +24,10 @@ pub enum DbError {
     InvalidToothNumber,
     InvalidClinicalStatus(String),
     InvalidToothState(String),
+    InvalidAppointmentStatus(String),
+    InvalidAppointmentTimeRange,
+    AppointmentConflict,
+    GoogleCalendarNotConnected,
     InvalidCredentials,
     BootstrapAlreadyCompleted,
     NotFound,
@@ -42,6 +49,12 @@ impl std::fmt::Display for DbError {
             Self::InvalidToothNumber => write!(f, "invalid ISO/FDI tooth number"),
             Self::InvalidClinicalStatus(status) => write!(f, "invalid clinical status: {status}"),
             Self::InvalidToothState(state) => write!(f, "invalid tooth state: {state}"),
+            Self::InvalidAppointmentStatus(status) => {
+                write!(f, "invalid appointment status: {status}")
+            }
+            Self::InvalidAppointmentTimeRange => write!(f, "invalid appointment time range"),
+            Self::AppointmentConflict => write!(f, "appointment conflicts on the same chair"),
+            Self::GoogleCalendarNotConnected => write!(f, "google calendar is not connected"),
             Self::InvalidCredentials => write!(f, "invalid credentials"),
             Self::BootstrapAlreadyCompleted => write!(f, "first admin already exists"),
             Self::NotFound => write!(f, "record not found"),
@@ -245,6 +258,55 @@ pub struct StudioSettingsUpdate<'a> {
     pub chair_count: i64,
     pub data_directory: Option<&'a str>,
     pub holiday_periods_json: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChairConfig {
+    pub chair_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Appointment {
+    pub id: i64,
+    pub patient_id: Option<i64>,
+    pub patient_name: Option<String>,
+    pub chair_number: i64,
+    pub title: String,
+    pub starts_at: String,
+    pub ends_at: String,
+    pub status: String,
+    pub color_tag: Option<String>,
+    pub google_calendar_event_id: Option<String>,
+    pub last_google_sync_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppointmentInput<'a> {
+    pub patient_id: Option<i64>,
+    pub chair_number: i64,
+    pub title: &'a str,
+    pub starts_at: &'a str,
+    pub ends_at: &'a str,
+    pub status: &'a str,
+    pub color_tag: Option<&'a str>,
+    pub notes: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GoogleCalendarSyncStatus {
+    pub configured: bool,
+    pub connected: bool,
+    pub queued_jobs: i64,
+    pub failed_jobs: i64,
+    pub last_sync_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GoogleCalendarSyncJob {
+    pub job_id: i64,
+    pub appointment: Appointment,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1196,6 +1258,423 @@ impl Database {
             .ok_or(DbError::NotFound)
     }
 
+    pub fn chair_config(&self, actor_user_id: i64) -> DbResult<ChairConfig> {
+        self.assert_active_user(actor_user_id)?;
+        Ok(ChairConfig {
+            chair_count: self.studio_settings()?.chair_count,
+        })
+    }
+
+    pub fn list_appointments(
+        &self,
+        actor_user_id: i64,
+        starts_from: &str,
+        starts_to: &str,
+    ) -> DbResult<Vec<Appointment>> {
+        self.assert_active_user(actor_user_id)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                appointments.id,
+                appointments.patient_id,
+                CASE
+                    WHEN patients.id IS NULL THEN NULL
+                    ELSE patients.last_name || ' ' || patients.first_name
+                END AS patient_name,
+                appointments.chair_number,
+                appointments.title,
+                appointments.starts_at,
+                appointments.ends_at,
+                appointments.status,
+                appointments.color_tag,
+                appointments.google_calendar_event_id,
+                appointments.last_google_sync_at,
+                appointments.created_at,
+                appointments.updated_at
+            FROM appointments
+            LEFT JOIN patients ON patients.id = appointments.patient_id
+            WHERE appointments.starts_at >= ?1 AND appointments.starts_at < ?2
+            ORDER BY appointments.starts_at ASC, appointments.chair_number ASC
+            "#,
+        )?;
+
+        let appointments = statement
+            .query_map(
+                params![starts_from.trim(), starts_to.trim()],
+                appointment_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(appointments)
+    }
+
+    pub fn create_appointment(
+        &self,
+        actor_user_id: i64,
+        input: &AppointmentInput<'_>,
+    ) -> DbResult<Appointment> {
+        self.assert_active_user(actor_user_id)?;
+        self.validate_appointment_input(input, None)?;
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            let status = normalize_appointment_status(input.status)?;
+            let color_tag = normalize_optional(input.color_tag);
+            let notes = normalize_optional(input.notes);
+            let title = input.title.trim();
+            self.assert_no_appointment_conflict(
+                input.chair_number,
+                input.starts_at,
+                input.ends_at,
+                None,
+            )?;
+
+            self.conn.execute(
+                r#"
+                INSERT INTO appointments (
+                    patient_id,
+                    chair_number,
+                    title,
+                    starts_at,
+                    ends_at,
+                    status,
+                    color_tag,
+                    notes
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "#,
+                params![
+                    input.patient_id,
+                    input.chair_number,
+                    title,
+                    input.starts_at.trim(),
+                    input.ends_at.trim(),
+                    status,
+                    color_tag.as_deref(),
+                    notes.as_deref()
+                ],
+            )?;
+
+            let appointment_id = self.conn.last_insert_rowid();
+            self.enqueue_google_calendar_sync_without_tx(appointment_id)?;
+            self.insert_appointment_audit(
+                actor_user_id,
+                input.patient_id,
+                appointment_id,
+                "agenda.appointment_created",
+                &format!(
+                    r#"{{"appointment_id":{appointment_id},"chair_number":{},"status":"{}"}}"#,
+                    input.chair_number, status
+                ),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(appointment_id)
+        })();
+
+        match result {
+            Ok(appointment_id) => self
+                .get_appointment(appointment_id)?
+                .ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn move_appointment(
+        &self,
+        actor_user_id: i64,
+        appointment_id: i64,
+        starts_at: &str,
+        ends_at: &str,
+        chair_number: i64,
+    ) -> DbResult<Appointment> {
+        self.assert_active_user(actor_user_id)?;
+        if starts_at.trim() >= ends_at.trim() {
+            return Err(DbError::InvalidAppointmentTimeRange);
+        }
+        self.validate_chair_number(chair_number)?;
+        self.assert_no_appointment_conflict(
+            chair_number,
+            starts_at,
+            ends_at,
+            Some(appointment_id),
+        )?;
+        let existing = self
+            .get_appointment(appointment_id)?
+            .ok_or(DbError::NotFound)?;
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.assert_no_appointment_conflict(
+                chair_number,
+                starts_at,
+                ends_at,
+                Some(appointment_id),
+            )?;
+            let affected = self.conn.execute(
+                r#"
+                UPDATE appointments
+                SET
+                    chair_number = ?1,
+                    starts_at = ?2,
+                    ends_at = ?3,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?4
+                "#,
+                params![
+                    chair_number,
+                    starts_at.trim(),
+                    ends_at.trim(),
+                    appointment_id
+                ],
+            )?;
+            if affected == 0 {
+                return Err(DbError::NotFound);
+            }
+            self.enqueue_google_calendar_sync_without_tx(appointment_id)?;
+            self.insert_appointment_audit(
+                actor_user_id,
+                existing.patient_id,
+                appointment_id,
+                "agenda.appointment_moved",
+                &format!(
+                    r#"{{"appointment_id":{appointment_id},"chair_number":{chair_number},"starts_at":"{}","ends_at":"{}"}}"#,
+                    starts_at.trim(),
+                    ends_at.trim()
+                ),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => self
+                .get_appointment(appointment_id)?
+                .ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn update_appointment_status(
+        &self,
+        actor_user_id: i64,
+        appointment_id: i64,
+        status: &str,
+    ) -> DbResult<Appointment> {
+        self.assert_active_user(actor_user_id)?;
+        let status = normalize_appointment_status(status)?;
+        let existing = self
+            .get_appointment(appointment_id)?
+            .ok_or(DbError::NotFound)?;
+        self.conn.execute(
+            r#"
+            UPDATE appointments
+            SET status = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2
+            "#,
+            params![status, appointment_id],
+        )?;
+        self.enqueue_google_calendar_sync_without_tx(appointment_id)?;
+        self.insert_appointment_audit(
+            actor_user_id,
+            existing.patient_id,
+            appointment_id,
+            "agenda.appointment_status_updated",
+            &format!(r#"{{"appointment_id":{appointment_id},"status":"{status}"}}"#),
+        )?;
+
+        self.get_appointment(appointment_id)?
+            .ok_or(DbError::NotFound)
+    }
+
+    pub fn google_calendar_sync_status(
+        &self,
+        actor_user_id: i64,
+    ) -> DbResult<GoogleCalendarSyncStatus> {
+        self.assert_admin(actor_user_id)?;
+        let connected: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM integration_accounts
+            WHERE integration_type = 'google_calendar' AND label = 'primary' AND active = 1
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        let queued_jobs: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sync_jobs WHERE integration_type = 'google_calendar' AND status = 'queued'",
+            [],
+            |row| row.get(0),
+        )?;
+        let failed_jobs: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sync_jobs WHERE integration_type = 'google_calendar' AND status = 'failed'",
+            [],
+            |row| row.get(0),
+        )?;
+        let last_sync_at: Option<String> = self.conn.query_row(
+            "SELECT MAX(last_google_sync_at) FROM appointments",
+            [],
+            |row| row.get(0),
+        )?;
+
+        Ok(GoogleCalendarSyncStatus {
+            configured: google::oauth_status().configured,
+            connected: connected > 0,
+            queued_jobs,
+            failed_jobs,
+            last_sync_at,
+        })
+    }
+
+    pub fn store_google_calendar_token(
+        &self,
+        actor_user_id: i64,
+        token_json: &str,
+    ) -> DbResult<()> {
+        self.assert_admin(actor_user_id)?;
+        self.conn.execute(
+            r#"
+            INSERT INTO integration_accounts (integration_type, label, config_json, active)
+            VALUES ('google_calendar', 'primary', ?1, 1)
+            ON CONFLICT(integration_type, label) DO UPDATE SET
+                config_json = excluded.config_json,
+                active = 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            [token_json],
+        )?;
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.google_calendar_connected",
+            Some("integration_accounts"),
+            None,
+            "{}",
+        )
+    }
+
+    pub fn google_calendar_token_json(&self, actor_user_id: i64) -> DbResult<String> {
+        self.assert_admin(actor_user_id)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT config_json
+                FROM integration_accounts
+                WHERE integration_type = 'google_calendar' AND label = 'primary' AND active = 1
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(DbError::GoogleCalendarNotConnected)
+    }
+
+    pub fn pending_google_calendar_sync_jobs(
+        &self,
+        actor_user_id: i64,
+        limit: i64,
+    ) -> DbResult<Vec<GoogleCalendarSyncJob>> {
+        self.assert_admin(actor_user_id)?;
+        let normalized_limit = limit.clamp(1, 25);
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                sync_jobs.id,
+                appointments.id,
+                appointments.patient_id,
+                CASE
+                    WHEN patients.id IS NULL THEN NULL
+                    ELSE patients.last_name || ' ' || patients.first_name
+                END AS patient_name,
+                appointments.chair_number,
+                appointments.title,
+                appointments.starts_at,
+                appointments.ends_at,
+                appointments.status,
+                appointments.color_tag,
+                appointments.google_calendar_event_id,
+                appointments.last_google_sync_at,
+                appointments.created_at,
+                appointments.updated_at
+            FROM sync_jobs
+            INNER JOIN appointments ON appointments.id = sync_jobs.entity_id
+            LEFT JOIN patients ON patients.id = appointments.patient_id
+            WHERE
+                sync_jobs.integration_type = 'google_calendar'
+                AND sync_jobs.entity_type = 'appointment'
+                AND sync_jobs.status = 'queued'
+                AND (sync_jobs.run_after IS NULL OR sync_jobs.run_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ORDER BY sync_jobs.created_at ASC
+            LIMIT ?1
+            "#,
+        )?;
+
+        let jobs = statement
+            .query_map([normalized_limit], |row| {
+                Ok(GoogleCalendarSyncJob {
+                    job_id: row.get(0)?,
+                    appointment: appointment_from_offset_row(row, 1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(jobs)
+    }
+
+    pub fn complete_google_calendar_sync_job(
+        &self,
+        job_id: i64,
+        appointment_id: i64,
+        google_event_id: &str,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            UPDATE appointments
+            SET
+                google_calendar_event_id = ?1,
+                last_google_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2
+            "#,
+            params![google_event_id, appointment_id],
+        )?;
+        self.conn.execute(
+            r#"
+            UPDATE sync_jobs
+            SET
+                status = 'completed',
+                attempts = attempts + 1,
+                last_error = NULL,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?1
+            "#,
+            [job_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn fail_google_calendar_sync_job(&self, job_id: i64, error_message: &str) -> DbResult<()> {
+        let sanitized = sanitize_sync_error(error_message);
+        self.conn.execute(
+            r#"
+            UPDATE sync_jobs
+            SET
+                status = 'failed',
+                attempts = attempts + 1,
+                last_error = ?1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2
+            "#,
+            params![sanitized, job_id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_patient(&self, id: i64) -> DbResult<Option<Patient>> {
         self.conn
             .query_row(
@@ -1485,6 +1964,139 @@ impl Database {
             .map_err(DbError::from)
     }
 
+    fn get_appointment(&self, id: i64) -> DbResult<Option<Appointment>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                    appointments.id,
+                    appointments.patient_id,
+                    CASE
+                        WHEN patients.id IS NULL THEN NULL
+                        ELSE patients.last_name || ' ' || patients.first_name
+                    END AS patient_name,
+                    appointments.chair_number,
+                    appointments.title,
+                    appointments.starts_at,
+                    appointments.ends_at,
+                    appointments.status,
+                    appointments.color_tag,
+                    appointments.google_calendar_event_id,
+                    appointments.last_google_sync_at,
+                    appointments.created_at,
+                    appointments.updated_at
+                FROM appointments
+                LEFT JOIN patients ON patients.id = appointments.patient_id
+                WHERE appointments.id = ?1
+                "#,
+                [id],
+                appointment_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn validate_appointment_input(
+        &self,
+        input: &AppointmentInput<'_>,
+        excluded_appointment_id: Option<i64>,
+    ) -> DbResult<()> {
+        if input.title.trim().is_empty() || input.starts_at.trim() >= input.ends_at.trim() {
+            return Err(DbError::InvalidAppointmentTimeRange);
+        }
+        normalize_appointment_status(input.status)?;
+        self.validate_chair_number(input.chair_number)?;
+        if let Some(patient_id) = input.patient_id {
+            self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        }
+        self.assert_no_appointment_conflict(
+            input.chair_number,
+            input.starts_at,
+            input.ends_at,
+            excluded_appointment_id,
+        )
+    }
+
+    fn validate_chair_number(&self, chair_number: i64) -> DbResult<()> {
+        let chair_count = self.studio_settings()?.chair_count;
+        if chair_number >= 1 && chair_number <= chair_count {
+            Ok(())
+        } else {
+            Err(DbError::InvalidAppointmentTimeRange)
+        }
+    }
+
+    fn assert_no_appointment_conflict(
+        &self,
+        chair_number: i64,
+        starts_at: &str,
+        ends_at: &str,
+        excluded_appointment_id: Option<i64>,
+    ) -> DbResult<()> {
+        let conflict_count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM appointments
+            WHERE
+                chair_number = ?1
+                AND status != 'cancelled'
+                AND starts_at < ?3
+                AND ends_at > ?2
+                AND (?4 IS NULL OR id != ?4)
+            "#,
+            params![
+                chair_number,
+                starts_at.trim(),
+                ends_at.trim(),
+                excluded_appointment_id
+            ],
+            |row| row.get(0),
+        )?;
+
+        if conflict_count == 0 {
+            Ok(())
+        } else {
+            Err(DbError::AppointmentConflict)
+        }
+    }
+
+    fn enqueue_google_calendar_sync_without_tx(&self, appointment_id: i64) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO sync_jobs (integration_type, entity_type, entity_id, status)
+            VALUES ('google_calendar', 'appointment', ?1, 'queued')
+            "#,
+            [appointment_id],
+        )?;
+        Ok(())
+    }
+
+    fn insert_appointment_audit(
+        &self,
+        user_id: i64,
+        patient_id: Option<i64>,
+        appointment_id: i64,
+        action: &str,
+        metadata_json: &str,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO audit_log (
+                user_id,
+                patient_id,
+                action,
+                entity_type,
+                entity_id,
+                metadata_json
+            )
+            VALUES (?1, ?2, ?3, 'appointments', ?4, ?5)
+            "#,
+            params![user_id, patient_id, action, appointment_id, metadata_json],
+        )?;
+
+        Ok(())
+    }
+
     fn insert_audit(
         &self,
         user_id: Option<i64>,
@@ -1670,6 +2282,27 @@ fn normalize_clinical_status(status: &str) -> DbResult<&'static str> {
     }
 }
 
+fn normalize_appointment_status(status: &str) -> DbResult<&'static str> {
+    match status.trim() {
+        "booked" => Ok("booked"),
+        "arrived" => Ok("arrived"),
+        "waiting" => Ok("waiting"),
+        "in_chair" => Ok("in_chair"),
+        "completed" => Ok("completed"),
+        "cancelled" => Ok("cancelled"),
+        "missed" => Ok("missed"),
+        value => Err(DbError::InvalidAppointmentStatus(value.to_owned())),
+    }
+}
+
+fn sanitize_sync_error(error_message: &str) -> String {
+    error_message
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(240)
+        .collect()
+}
+
 fn tooth_state_for_clinical_status(status: &str) -> &'static str {
     match status {
         "performed" => "performed",
@@ -1738,10 +2371,7 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![
-            CURRENT_SCHEMA_VERSION,
-            "clinical_odontogram_diary_and_catalog"
-        ],
+        params![CURRENT_SCHEMA_VERSION, "agenda_chairs_google_calendar_sync"],
     )?;
     Ok(())
 }
@@ -1829,6 +2459,31 @@ fn clinical_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Clinica
         operator_username: row.get(12)?,
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
+    })
+}
+
+fn appointment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Appointment> {
+    appointment_from_offset_row(row, 0)
+}
+
+fn appointment_from_offset_row(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<Appointment> {
+    Ok(Appointment {
+        id: row.get(offset)?,
+        patient_id: row.get(offset + 1)?,
+        patient_name: row.get(offset + 2)?,
+        chair_number: row.get(offset + 3)?,
+        title: row.get(offset + 4)?,
+        starts_at: row.get(offset + 5)?,
+        ends_at: row.get(offset + 6)?,
+        status: row.get(offset + 7)?,
+        color_tag: row.get(offset + 8)?,
+        google_calendar_event_id: row.get(offset + 9)?,
+        last_google_sync_at: row.get(offset + 10)?,
+        created_at: row.get(offset + 11)?,
+        updated_at: row.get(offset + 12)?,
     })
 }
 
@@ -2215,6 +2870,7 @@ CREATE INDEX IF NOT EXISTS idx_patients_last_first ON patients(last_name, first_
 CREATE INDEX IF NOT EXISTS idx_patients_tax_code ON patients(tax_code);
 CREATE INDEX IF NOT EXISTS idx_appointments_starts_at ON appointments(starts_at);
 CREATE INDEX IF NOT EXISTS idx_appointments_patient ON appointments(patient_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_chair_time ON appointments(chair_number, starts_at, ends_at);
 CREATE INDEX IF NOT EXISTS idx_clinical_records_patient ON clinical_records(patient_id);
 CREATE INDEX IF NOT EXISTS idx_clinical_records_patient_created ON clinical_records(patient_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_clinical_records_tooth ON clinical_records(patient_id, tooth_number);
@@ -2516,6 +3172,133 @@ mod tests {
             )
             .expect("clinical view audit count");
         assert_eq!(audit_count, 1);
+    }
+
+    #[test]
+    fn appointments_block_same_chair_overlap_and_enqueue_google_sync() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        db.update_studio_settings(
+            admin.id,
+            &StudioSettingsUpdate {
+                clinic_name: Some("Studio VeloDent"),
+                logo_relative_path: None,
+                chair_count: 2,
+                data_directory: None,
+                holiday_periods_json: "[]",
+            },
+        )
+        .expect("set chairs");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Luca",
+                    last_name: "Verdi",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+
+        let first = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Pulizia",
+                    starts_at: "2026-06-20T09:00:00+02:00",
+                    ends_at: "2026-06-20T10:00:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: Some("Nota interna non sincronizzata"),
+                },
+            )
+            .expect("create first appointment");
+        assert_eq!(first.chair_number, 1);
+
+        assert!(matches!(
+            db.create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Otturazione",
+                    starts_at: "2026-06-20T09:30:00+02:00",
+                    ends_at: "2026-06-20T10:30:00+02:00",
+                    status: "booked",
+                    color_tag: None,
+                    notes: None,
+                },
+            ),
+            Err(DbError::AppointmentConflict)
+        ));
+
+        let second_chair = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 2,
+                    title: "Controllo",
+                    starts_at: "2026-06-20T09:30:00+02:00",
+                    ends_at: "2026-06-20T10:30:00+02:00",
+                    status: "arrived",
+                    color_tag: Some("glaucous"),
+                    notes: None,
+                },
+            )
+            .expect("same time on chair two");
+        assert_eq!(second_chair.chair_number, 2);
+
+        assert!(matches!(
+            db.move_appointment(
+                admin.id,
+                second_chair.id,
+                "2026-06-20T09:15:00+02:00",
+                "2026-06-20T09:45:00+02:00",
+                1,
+            ),
+            Err(DbError::AppointmentConflict)
+        ));
+
+        let moved = db
+            .move_appointment(
+                admin.id,
+                second_chair.id,
+                "2026-06-20T10:00:00+02:00",
+                "2026-06-20T10:30:00+02:00",
+                1,
+            )
+            .expect("move after first appointment");
+        assert_eq!(moved.chair_number, 1);
+
+        let queued_jobs: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_jobs WHERE integration_type = 'google_calendar' AND entity_type = 'appointment' AND status = 'queued'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("sync jobs count");
+        assert_eq!(queued_jobs, 3);
+
+        let audit_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE patient_id = ?1 AND entity_type = 'appointments'",
+                [patient.id],
+                |row| row.get(0),
+            )
+            .expect("appointment audit count");
+        assert_eq!(audit_count, 3);
     }
 
     fn test_database_path() -> PathBuf {
