@@ -1,6 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type ToothState = "healthy" | "pathology" | "in_progress" | "performed" | "missing";
+export type ToothState =
+  | "healthy"
+  | "pathology"
+  | "in_progress"
+  | "performed"
+  | "caries"
+  | "endodontics_needed"
+  | "crown_needed"
+  | "extraction_needed"
+  | "filling_done"
+  | "root_canal_done"
+  | "crown_done"
+  | "implant_done"
+  | "missing";
 export type ClinicalRecordStatus = "diagnosed" | "in_quote" | "performed";
 
 export interface ClinicalService {
@@ -49,35 +62,35 @@ export interface ClinicalRecordInput {
   notes?: string;
 }
 
-export async function listClinicalServices(actor_user_id: number) {
-  return invoke<ClinicalService[]>("list_clinical_services", { request: { actor_user_id } });
+export async function listClinicalServices(session_token: string) {
+  return invoke<ClinicalService[]>("list_clinical_services", { request: { session_token } });
 }
 
-export async function openClinicalView(actor_user_id: number, patient_id: number) {
-  return invoke("open_clinical_view", { request: { actor_user_id, patient_id } });
+export async function openClinicalView(session_token: string, patient_id: number) {
+  return invoke("open_clinical_view", { request: { session_token, patient_id } });
 }
 
-export async function getToothStatuses(actor_user_id: number, patient_id: number) {
-  return invoke<ToothStatus[]>("get_tooth_statuses", { request: { actor_user_id, patient_id } });
+export async function getToothStatuses(session_token: string, patient_id: number) {
+  return invoke<ToothStatus[]>("get_tooth_statuses", { request: { session_token, patient_id } });
 }
 
 export async function setToothStatus(
-  actor_user_id: number,
+  session_token: string,
   patient_id: number,
   tooth_number: number,
   state: ToothState
 ) {
   return invoke<ToothStatus>("set_tooth_status", {
-    request: { actor_user_id, patient_id, tooth_number, state }
+    request: { session_token, patient_id, tooth_number, state }
   });
 }
 
-export async function createClinicalRecord(actor_user_id: number, input: ClinicalRecordInput) {
-  return invoke<ClinicalRecord>("create_clinical_record", { request: { actor_user_id, ...input } });
+export async function createClinicalRecord(session_token: string, input: ClinicalRecordInput) {
+  return invoke<ClinicalRecord>("create_clinical_record", { request: { session_token, ...input } });
 }
 
 export async function listClinicalRecords(
-  actor_user_id: number,
+  session_token: string,
   patient_id: number,
   filters: {
     date_from?: string;
@@ -87,16 +100,16 @@ export async function listClinicalRecords(
   }
 ) {
   return invoke<ClinicalRecord[]>("list_clinical_records", {
-    request: { actor_user_id, patient_id, ...filters }
+    request: { session_token, patient_id, ...filters }
   });
 }
 
 export async function markClinicalRecordReadyForQuote(
-  actor_user_id: number,
+  session_token: string,
   record_id: number,
   ready_for_quote: boolean
 ) {
   return invoke<ClinicalRecord>("mark_clinical_record_ready_for_quote", {
-    request: { actor_user_id, record_id, ready_for_quote }
+    request: { session_token, record_id, ready_for_quote }
   });
 }

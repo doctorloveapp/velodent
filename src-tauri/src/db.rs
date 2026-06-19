@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -196,6 +196,12 @@ pub struct User {
     pub active: bool,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthSession {
+    pub user: User,
+    pub session_token: String,
 }
 
 #[derive(Debug, Clone)]
@@ -467,6 +473,20 @@ impl Database {
             "{}",
         )?;
 
+        if let Some(email) = normalize_optional(google_email) {
+            self.conn.execute(
+                r#"
+                INSERT INTO authorized_google_accounts (email, role, created_by_user_id)
+                VALUES (?1, 'admin', ?2)
+                ON CONFLICT(email) DO UPDATE SET
+                    role = 'admin',
+                    active = 1,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                "#,
+                params![email, user_id],
+            )?;
+        }
+
         self.get_user(user_id)?
             .ok_or_else(|| DbError::Sql("created admin was not found".to_owned()))
     }
@@ -547,6 +567,71 @@ impl Database {
             created_at,
             updated_at,
         })
+    }
+
+    pub fn create_session(&self, user_id: i64) -> DbResult<AuthSession> {
+        let user = self.get_user(user_id)?.ok_or(DbError::Forbidden)?;
+        if !user.active {
+            return Err(DbError::Forbidden);
+        }
+
+        let generated = auth::generate_device_token();
+        self.conn.execute(
+            r#"
+            INSERT INTO user_sessions (user_id, session_token_hash, expires_at)
+            VALUES (?1, ?2, datetime('now', '+12 hours'))
+            "#,
+            params![user_id, generated.hash],
+        )?;
+
+        self.insert_audit(
+            Some(user_id),
+            None,
+            "auth.session_created",
+            Some("user_sessions"),
+            Some(self.conn.last_insert_rowid()),
+            "{}",
+        )?;
+
+        Ok(AuthSession {
+            user,
+            session_token: generated.plaintext,
+        })
+    }
+
+    pub fn user_for_session(&self, session_token: &str) -> DbResult<User> {
+        if session_token.trim().is_empty() {
+            return Err(DbError::Forbidden);
+        }
+
+        let token_hash = auth::hash_device_token(session_token.trim());
+        let user = self
+            .conn
+            .query_row(
+                r#"
+                SELECT
+                    u.id,
+                    u.username,
+                    u.google_email,
+                    u.role,
+                    u.active,
+                    u.created_at,
+                    u.updated_at
+                FROM user_sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE
+                    s.session_token_hash = ?1
+                    AND s.revoked_at IS NULL
+                    AND datetime(s.expires_at) > datetime('now')
+                    AND u.active = 1
+                "#,
+                [token_hash],
+                user_from_row,
+            )
+            .optional()?
+            .ok_or(DbError::Forbidden)?;
+
+        Ok(user)
     }
 
     pub fn create_user(&self, actor_user_id: i64, input: &CreateUserInput<'_>) -> DbResult<User> {
@@ -2266,9 +2351,9 @@ fn validate_tooth_number(tooth_number: i64) -> DbResult<()> {
 
 fn normalize_tooth_state(state: &str) -> DbResult<String> {
     match state.trim() {
-        "healthy" | "pathology" | "in_progress" | "performed" | "missing" => {
-            Ok(state.trim().to_owned())
-        }
+        "healthy" | "pathology" | "in_progress" | "performed" | "caries" | "endodontics_needed"
+        | "crown_needed" | "extraction_needed" | "filling_done" | "root_canal_done"
+        | "crown_done" | "implant_done" | "missing" => Ok(state.trim().to_owned()),
         value => Err(DbError::InvalidToothState(value.to_owned())),
     }
 }
@@ -2366,13 +2451,82 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         "ready_for_quote",
         "INTEGER NOT NULL DEFAULT 0 CHECK(ready_for_quote IN (0, 1))",
     )?;
+    migrate_tooth_status_constraint(conn)?;
     conn.execute(
         r#"
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "agenda_chairs_google_calendar_sync"],
+        params![CURRENT_SCHEMA_VERSION, "sessions_and_granular_tooth_states"],
     )?;
+    Ok(())
+}
+
+fn migrate_tooth_status_constraint(conn: &Connection) -> DbResult<()> {
+    let table_sql = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'clinical_tooth_statuses'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+
+    if table_sql.contains("caries") {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = OFF;
+        ALTER TABLE clinical_tooth_statuses RENAME TO clinical_tooth_statuses_legacy;
+        CREATE TABLE clinical_tooth_statuses (
+            patient_id INTEGER NOT NULL,
+            tooth_number INTEGER NOT NULL CHECK(tooth_number BETWEEN 11 AND 48),
+            state TEXT NOT NULL CHECK(state IN (
+                'healthy',
+                'pathology',
+                'in_progress',
+                'performed',
+                'caries',
+                'endodontics_needed',
+                'crown_needed',
+                'extraction_needed',
+                'filling_done',
+                'root_canal_done',
+                'crown_done',
+                'implant_done',
+                'missing'
+            )),
+            updated_by_user_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            PRIMARY KEY (patient_id, tooth_number),
+            FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+            FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT INTO clinical_tooth_statuses (
+            patient_id,
+            tooth_number,
+            state,
+            updated_by_user_id,
+            created_at,
+            updated_at
+        )
+        SELECT
+            patient_id,
+            tooth_number,
+            state,
+            updated_by_user_id,
+            created_at,
+            updated_at
+        FROM clinical_tooth_statuses_legacy;
+        DROP TABLE clinical_tooth_statuses_legacy;
+        CREATE INDEX IF NOT EXISTS idx_clinical_tooth_statuses_patient ON clinical_tooth_statuses(patient_id);
+        PRAGMA foreign_keys = ON;
+        "#,
+    )?;
+
     Ok(())
 }
 
@@ -2607,6 +2761,17 @@ CREATE TABLE IF NOT EXISTS authorized_devices (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    session_token_hash TEXT NOT NULL UNIQUE,
+    revoked_at TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS studio_settings (
     id INTEGER PRIMARY KEY CHECK(id = 1),
     clinic_name TEXT,
@@ -2692,7 +2857,21 @@ CREATE TABLE IF NOT EXISTS clinical_records (
 CREATE TABLE IF NOT EXISTS clinical_tooth_statuses (
     patient_id INTEGER NOT NULL,
     tooth_number INTEGER NOT NULL CHECK(tooth_number BETWEEN 11 AND 48),
-    state TEXT NOT NULL CHECK(state IN ('healthy', 'pathology', 'in_progress', 'performed', 'missing')),
+    state TEXT NOT NULL CHECK(state IN (
+        'healthy',
+        'pathology',
+        'in_progress',
+        'performed',
+        'caries',
+        'endodontics_needed',
+        'crown_needed',
+        'extraction_needed',
+        'filling_done',
+        'root_canal_done',
+        'crown_done',
+        'implant_done',
+        'missing'
+    )),
     updated_by_user_id INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -2884,6 +3063,8 @@ CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_audit_patient_created ON audit_log(patient_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_action_created ON audit_log(action, created_at);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_status_run_after ON sync_jobs(status, run_after);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token_hash);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
 "#;
 
 #[cfg(test)]
@@ -2959,6 +3140,17 @@ mod tests {
 
         let logged_in = db.login("admin", "change-me-now").expect("login admin");
         assert_eq!(logged_in.id, admin.id);
+        let session = db.create_session(logged_in.id).expect("create session");
+        assert_eq!(
+            db.user_for_session(&session.session_token)
+                .expect("session user")
+                .id,
+            admin.id
+        );
+        assert!(matches!(
+            db.user_for_session("not-a-real-session"),
+            Err(DbError::Forbidden)
+        ));
         assert!(matches!(
             db.login("admin", "wrong-password"),
             Err(DbError::InvalidCredentials)
@@ -3117,6 +3309,10 @@ mod tests {
             .set_tooth_status(admin.id, patient.id, 16, "pathology")
             .expect("set tooth status");
         assert_eq!(tooth.state, "pathology");
+        let granular_tooth = db
+            .set_tooth_status(admin.id, patient.id, 11, "caries")
+            .expect("set granular tooth status");
+        assert_eq!(granular_tooth.state, "caries");
         assert!(matches!(
             db.set_tooth_status(admin.id, patient.id, 19, "pathology"),
             Err(DbError::InvalidToothNumber)

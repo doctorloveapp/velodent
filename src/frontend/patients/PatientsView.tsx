@@ -64,7 +64,11 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
       return;
     }
 
-    const results = await searchPatients(nextQuery, 25);
+    if (!currentUser?.session_token) {
+      return;
+    }
+
+    const results = await searchPatients(currentUser.session_token, nextQuery, 25);
     setPatients(results);
   }
 
@@ -74,13 +78,18 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
       return;
     }
 
-    const opened = await openPatientRecord(currentUser.id, patient.id);
+    if (!currentUser.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+
+    const opened = await openPatientRecord(currentUser.session_token, patient.id);
     onPatientSelected(opened);
     setLastOpenedPatientId(opened.id);
     setForm(patientToForm(opened));
     setEditing(true);
     setActiveTab("summary");
-    setTimeline(await patientTimeline(currentUser.id, opened.id));
+    setTimeline(await patientTimeline(currentUser.session_token, opened.id));
     setStatusMessage(t("patientsRecordOpened"));
   }
 
@@ -144,14 +153,19 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
       return;
     }
 
+    if (!currentUser.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+
     const saved = editing && selectedPatient
-      ? await updatePatient(currentUser.id, selectedPatient.id, patientInput())
-      : await createPatient(currentUser.id, patientInput());
+      ? await updatePatient(currentUser.session_token, selectedPatient.id, patientInput())
+      : await createPatient(currentUser.session_token, patientInput());
 
     onPatientSelected(saved);
     setForm(patientToForm(saved));
     setEditing(true);
-    setTimeline(await patientTimeline(currentUser.id, saved.id));
+    setTimeline(await patientTimeline(currentUser.session_token, saved.id));
     setStatusMessage(editing ? t("patientsUpdated") : t("patientsCreated"));
     await refreshPatients();
   }
@@ -162,7 +176,12 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
       return;
     }
 
-    await deletePatient(currentUser.id, selectedPatient.id);
+    if (!currentUser.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+
+    await deletePatient(currentUser.session_token, selectedPatient.id);
     onPatientSelected(null);
     setForm(emptyPatientForm);
     setEditing(false);

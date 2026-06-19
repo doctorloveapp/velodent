@@ -1,11 +1,11 @@
 use crate::{
     auth::Role,
     db::{
-        Appointment, AppointmentInput, AuthorizedDevice, AuthorizedGoogleAccount, BootstrapStatus,
-        ChairConfig, ClinicalRecord, ClinicalRecordFilters, ClinicalService, CreateUserInput,
-        DatabaseStatus, DeviceAuthorization, GoogleCalendarSyncStatus, NewClinicalRecord,
-        NewPatient, Patient, PatientTimelineEvent, StudioSettings, StudioSettingsUpdate,
-        ToothStatus, User,
+        Appointment, AppointmentInput, AuthSession, AuthorizedDevice, AuthorizedGoogleAccount,
+        BootstrapStatus, ChairConfig, ClinicalRecord, ClinicalRecordFilters, ClinicalService,
+        CreateUserInput, DatabaseStatus, DeviceAuthorization, GoogleCalendarSyncStatus,
+        NewClinicalRecord, NewPatient, Patient, PatientTimelineEvent, StudioSettings,
+        StudioSettingsUpdate, ToothStatus, User,
     },
     integrations::google::{self, GoogleAuthorizationUrl, GoogleOAuthStatus},
     state::AppState,
@@ -22,7 +22,11 @@ pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, Str
 }
 
 #[tauri::command]
-pub fn upsert_test_patient(state: State<'_, AppState>) -> Result<Patient, String> {
+pub fn upsert_test_patient(
+    state: State<'_, AppState>,
+    request: ActorRequest,
+) -> Result<Patient, String> {
+    require_admin_session(&state, &request.session_token)?;
     state
         .database()?
         .upsert_test_patient()
@@ -32,21 +36,32 @@ pub fn upsert_test_patient(state: State<'_, AppState>) -> Result<Patient, String
 #[tauri::command]
 pub fn search_patients(
     state: State<'_, AppState>,
-    query: String,
-    limit: Option<i64>,
+    request: SearchPatientsRequest,
 ) -> Result<Vec<Patient>, String> {
+    require_session(&state, &request.session_token)?;
     state
         .database()?
-        .search_patients(&query, limit.unwrap_or(10))
+        .search_patients(&request.query, request.limit.unwrap_or(10))
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn ensure_development_patient(state: State<'_, AppState>) -> Result<Patient, String> {
+pub fn ensure_development_patient(
+    state: State<'_, AppState>,
+    request: ActorRequest,
+) -> Result<Patient, String> {
+    require_admin_session(&state, &request.session_token)?;
     state
         .database()?
         .ensure_development_patient()
         .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchPatientsRequest {
+    session_token: String,
+    query: String,
+    limit: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,7 +79,7 @@ pub struct LoginRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
-    actor_user_id: i64,
+    session_token: String,
     username: String,
     password: Option<String>,
     google_email: Option<String>,
@@ -73,14 +88,14 @@ pub struct CreateUserRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct AddGoogleAccountRequest {
-    actor_user_id: i64,
+    session_token: String,
     email: String,
     role: Role,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AuthorizeDeviceRequest {
-    actor_user_id: i64,
+    session_token: String,
     user_id: Option<i64>,
     label: String,
     allowed_lan_cidr: Option<String>,
@@ -89,13 +104,13 @@ pub struct AuthorizeDeviceRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct RevokeDeviceRequest {
-    actor_user_id: i64,
+    session_token: String,
     device_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateStudioSettingsRequest {
-    actor_user_id: i64,
+    session_token: String,
     clinic_name: Option<String>,
     logo_relative_path: Option<String>,
     chair_count: i64,
@@ -105,7 +120,7 @@ pub struct UpdateStudioSettingsRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct PatientRequest {
-    actor_user_id: i64,
+    session_token: String,
     first_name: String,
     last_name: String,
     tax_code: String,
@@ -117,7 +132,7 @@ pub struct PatientRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdatePatientRequest {
-    actor_user_id: i64,
+    session_token: String,
     patient_id: i64,
     first_name: String,
     last_name: String,
@@ -130,7 +145,7 @@ pub struct UpdatePatientRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct PatientIdRequest {
-    actor_user_id: i64,
+    session_token: String,
     patient_id: i64,
 }
 
@@ -141,23 +156,23 @@ pub struct ValidateTaxCodeRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct GoogleOAuthStatusRequest {
-    actor_user_id: i64,
+    session_token: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ActorRequest {
-    actor_user_id: i64,
+    session_token: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ClinicalViewRequest {
-    actor_user_id: i64,
+    session_token: String,
     patient_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SetToothStatusRequest {
-    actor_user_id: i64,
+    session_token: String,
     patient_id: i64,
     tooth_number: i64,
     state: String,
@@ -165,7 +180,7 @@ pub struct SetToothStatusRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateClinicalRecordRequest {
-    actor_user_id: i64,
+    session_token: String,
     patient_id: i64,
     service_id: Option<i64>,
     tooth_number: Option<i64>,
@@ -178,7 +193,7 @@ pub struct CreateClinicalRecordRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct ListClinicalRecordsRequest {
-    actor_user_id: i64,
+    session_token: String,
     patient_id: i64,
     date_from: Option<String>,
     date_to: Option<String>,
@@ -188,21 +203,21 @@ pub struct ListClinicalRecordsRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct MarkClinicalRecordQuoteRequest {
-    actor_user_id: i64,
+    session_token: String,
     record_id: i64,
     ready_for_quote: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ListAppointmentsRequest {
-    actor_user_id: i64,
+    session_token: String,
     starts_from: String,
     starts_to: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateAppointmentRequest {
-    actor_user_id: i64,
+    session_token: String,
     patient_id: Option<i64>,
     chair_number: i64,
     title: String,
@@ -215,7 +230,7 @@ pub struct CreateAppointmentRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct MoveAppointmentRequest {
-    actor_user_id: i64,
+    session_token: String,
     appointment_id: i64,
     chair_number: i64,
     starts_at: String,
@@ -224,26 +239,26 @@ pub struct MoveAppointmentRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateAppointmentStatusRequest {
-    actor_user_id: i64,
+    session_token: String,
     appointment_id: i64,
     status: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GoogleAuthorizationUrlRequest {
-    actor_user_id: i64,
+    session_token: String,
     state: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ExchangeGoogleOAuthCodeRequest {
-    actor_user_id: i64,
+    session_token: String,
     code: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ProcessGoogleCalendarSyncRequest {
-    actor_user_id: i64,
+    session_token: String,
     limit: Option<i64>,
 }
 
@@ -251,6 +266,22 @@ pub struct ProcessGoogleCalendarSyncRequest {
 pub struct GoogleCalendarSyncRunResult {
     processed: i64,
     failed: i64,
+}
+
+fn require_session(state: &State<'_, AppState>, session_token: &str) -> Result<User, String> {
+    state
+        .database()?
+        .user_for_session(session_token)
+        .map_err(|error| error.to_string())
+}
+
+fn require_admin_session(state: &State<'_, AppState>, session_token: &str) -> Result<User, String> {
+    let user = require_session(state, session_token)?;
+    if user.role.is_admin() {
+        Ok(user)
+    } else {
+        Err("operation requires admin privileges".to_owned())
+    }
 }
 
 #[tauri::command]
@@ -265,31 +296,38 @@ pub fn bootstrap_status(state: State<'_, AppState>) -> Result<BootstrapStatus, S
 pub fn create_first_admin(
     state: State<'_, AppState>,
     request: CreateFirstAdminRequest,
-) -> Result<User, String> {
-    state
-        .database()?
+) -> Result<AuthSession, String> {
+    let database = state.database()?;
+    let user = database
         .create_first_admin(
             request.username.trim(),
             &request.password,
             request.google_email.as_deref(),
         )
+        .map_err(|error| error.to_string())?;
+    database
+        .create_session(user.id)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<User, String> {
-    state
-        .database()?
+pub fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<AuthSession, String> {
+    let database = state.database()?;
+    let user = database
         .login(request.username.trim(), &request.password)
+        .map_err(|error| error.to_string())?;
+    database
+        .create_session(user.id)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub fn create_user(state: State<'_, AppState>, request: CreateUserRequest) -> Result<User, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
     state
         .database()?
         .create_user(
-            request.actor_user_id,
+            actor.id,
             &CreateUserInput {
                 username: request.username.trim(),
                 password: request.password.as_deref(),
@@ -301,7 +339,11 @@ pub fn create_user(state: State<'_, AppState>, request: CreateUserRequest) -> Re
 }
 
 #[tauri::command]
-pub fn list_users(state: State<'_, AppState>) -> Result<Vec<User>, String> {
+pub fn list_users(
+    state: State<'_, AppState>,
+    request: GoogleOAuthStatusRequest,
+) -> Result<Vec<User>, String> {
+    require_admin_session(&state, &request.session_token)?;
     state
         .database()?
         .list_users()
@@ -313,16 +355,19 @@ pub fn add_authorized_google_account(
     state: State<'_, AppState>,
     request: AddGoogleAccountRequest,
 ) -> Result<AuthorizedGoogleAccount, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
     state
         .database()?
-        .add_authorized_google_account(request.actor_user_id, request.email.trim(), request.role)
+        .add_authorized_google_account(actor.id, request.email.trim(), request.role)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub fn list_authorized_google_accounts(
     state: State<'_, AppState>,
+    request: GoogleOAuthStatusRequest,
 ) -> Result<Vec<AuthorizedGoogleAccount>, String> {
+    require_admin_session(&state, &request.session_token)?;
     state
         .database()?
         .list_authorized_google_accounts()
@@ -334,10 +379,11 @@ pub fn authorize_device(
     state: State<'_, AppState>,
     request: AuthorizeDeviceRequest,
 ) -> Result<DeviceAuthorization, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
     state
         .database()?
         .authorize_device(
-            request.actor_user_id,
+            actor.id,
             request.user_id,
             request.label.trim(),
             request.allowed_lan_cidr.as_deref(),
@@ -351,14 +397,19 @@ pub fn revoke_device(
     state: State<'_, AppState>,
     request: RevokeDeviceRequest,
 ) -> Result<AuthorizedDevice, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
     state
         .database()?
-        .revoke_device(request.actor_user_id, request.device_id)
+        .revoke_device(actor.id, request.device_id)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn list_devices(state: State<'_, AppState>) -> Result<Vec<AuthorizedDevice>, String> {
+pub fn list_devices(
+    state: State<'_, AppState>,
+    request: GoogleOAuthStatusRequest,
+) -> Result<Vec<AuthorizedDevice>, String> {
+    require_admin_session(&state, &request.session_token)?;
     state
         .database()?
         .list_devices()
@@ -366,7 +417,11 @@ pub fn list_devices(state: State<'_, AppState>) -> Result<Vec<AuthorizedDevice>,
 }
 
 #[tauri::command]
-pub fn get_studio_settings(state: State<'_, AppState>) -> Result<StudioSettings, String> {
+pub fn get_studio_settings(
+    state: State<'_, AppState>,
+    request: GoogleOAuthStatusRequest,
+) -> Result<StudioSettings, String> {
+    require_admin_session(&state, &request.session_token)?;
     state
         .database()?
         .studio_settings()
@@ -378,10 +433,11 @@ pub fn update_studio_settings(
     state: State<'_, AppState>,
     request: UpdateStudioSettingsRequest,
 ) -> Result<StudioSettings, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
     state
         .database()?
         .update_studio_settings(
-            request.actor_user_id,
+            actor.id,
             &StudioSettingsUpdate {
                 clinic_name: request.clinic_name.as_deref(),
                 logo_relative_path: request.logo_relative_path.as_deref(),
@@ -398,10 +454,7 @@ pub fn google_oauth_status(
     state: State<'_, AppState>,
     request: GoogleOAuthStatusRequest,
 ) -> Result<GoogleOAuthStatus, String> {
-    state
-        .database()?
-        .assert_admin(request.actor_user_id)
-        .map_err(|error| error.to_string())?;
+    require_admin_session(&state, &request.session_token)?;
     Ok(google::oauth_status())
 }
 
@@ -410,9 +463,10 @@ pub fn google_calendar_sync_status(
     state: State<'_, AppState>,
     request: GoogleOAuthStatusRequest,
 ) -> Result<GoogleCalendarSyncStatus, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
     state
         .database()?
-        .google_calendar_sync_status(request.actor_user_id)
+        .google_calendar_sync_status(actor.id)
         .map_err(|error| error.to_string())
 }
 
@@ -421,10 +475,7 @@ pub fn google_calendar_authorization_url(
     state: State<'_, AppState>,
     request: GoogleAuthorizationUrlRequest,
 ) -> Result<GoogleAuthorizationUrl, String> {
-    state
-        .database()?
-        .assert_admin(request.actor_user_id)
-        .map_err(|error| error.to_string())?;
+    require_admin_session(&state, &request.session_token)?;
     google::authorization_url(request.state.as_deref().unwrap_or("velodent-local"))
         .map_err(|error| error.to_string())
 }
@@ -434,12 +485,7 @@ pub async fn exchange_google_oauth_code(
     state: State<'_, AppState>,
     request: ExchangeGoogleOAuthCodeRequest,
 ) -> Result<GoogleCalendarSyncStatus, String> {
-    {
-        state
-            .database()?
-            .assert_admin(request.actor_user_id)
-            .map_err(|error| error.to_string())?;
-    }
+    let actor = require_admin_session(&state, &request.session_token)?;
 
     let token = google::exchange_authorization_code(request.code.trim())
         .await
@@ -447,10 +493,10 @@ pub async fn exchange_google_oauth_code(
     let token_json = serde_json::to_string(&token).map_err(|error| error.to_string())?;
     let database = state.database()?;
     database
-        .store_google_calendar_token(request.actor_user_id, &token_json)
+        .store_google_calendar_token(actor.id, &token_json)
         .map_err(|error| error.to_string())?;
     database
-        .google_calendar_sync_status(request.actor_user_id)
+        .google_calendar_sync_status(actor.id)
         .map_err(|error| error.to_string())
 }
 
@@ -464,9 +510,10 @@ pub fn get_chair_config(
     state: State<'_, AppState>,
     request: ActorRequest,
 ) -> Result<ChairConfig, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .chair_config(request.actor_user_id)
+        .chair_config(actor.id)
         .map_err(|error| error.to_string())
 }
 
@@ -475,10 +522,11 @@ pub fn list_appointments(
     state: State<'_, AppState>,
     request: ListAppointmentsRequest,
 ) -> Result<Vec<Appointment>, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
         .list_appointments(
-            request.actor_user_id,
+            actor.id,
             request.starts_from.trim(),
             request.starts_to.trim(),
         )
@@ -490,10 +538,11 @@ pub fn create_appointment(
     state: State<'_, AppState>,
     request: CreateAppointmentRequest,
 ) -> Result<Appointment, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
         .create_appointment(
-            request.actor_user_id,
+            actor.id,
             &AppointmentInput {
                 patient_id: request.patient_id,
                 chair_number: request.chair_number,
@@ -513,10 +562,11 @@ pub fn move_appointment(
     state: State<'_, AppState>,
     request: MoveAppointmentRequest,
 ) -> Result<Appointment, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
         .move_appointment(
-            request.actor_user_id,
+            actor.id,
             request.appointment_id,
             request.starts_at.trim(),
             request.ends_at.trim(),
@@ -530,13 +580,10 @@ pub fn update_appointment_status(
     state: State<'_, AppState>,
     request: UpdateAppointmentStatusRequest,
 ) -> Result<Appointment, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .update_appointment_status(
-            request.actor_user_id,
-            request.appointment_id,
-            request.status.trim(),
-        )
+        .update_appointment_status(actor.id, request.appointment_id, request.status.trim())
         .map_err(|error| error.to_string())
 }
 
@@ -545,10 +592,11 @@ pub fn create_patient(
     state: State<'_, AppState>,
     request: PatientRequest,
 ) -> Result<Patient, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
         .create_patient(
-            request.actor_user_id,
+            actor.id,
             &NewPatient {
                 first_name: request.first_name.trim(),
                 last_name: request.last_name.trim(),
@@ -567,10 +615,11 @@ pub fn update_patient(
     state: State<'_, AppState>,
     request: UpdatePatientRequest,
 ) -> Result<Patient, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
         .update_patient(
-            request.actor_user_id,
+            actor.id,
             request.patient_id,
             &NewPatient {
                 first_name: request.first_name.trim(),
@@ -590,9 +639,10 @@ pub fn delete_patient(
     state: State<'_, AppState>,
     request: PatientIdRequest,
 ) -> Result<Patient, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .delete_patient(request.actor_user_id, request.patient_id)
+        .delete_patient(actor.id, request.patient_id)
         .map_err(|error| error.to_string())
 }
 
@@ -601,9 +651,10 @@ pub fn open_patient_record(
     state: State<'_, AppState>,
     request: PatientIdRequest,
 ) -> Result<Patient, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .open_patient_record(request.actor_user_id, request.patient_id)
+        .open_patient_record(actor.id, request.patient_id)
         .map_err(|error| error.to_string())
 }
 
@@ -612,9 +663,10 @@ pub fn patient_timeline(
     state: State<'_, AppState>,
     request: PatientIdRequest,
 ) -> Result<Vec<PatientTimelineEvent>, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .patient_timeline(request.actor_user_id, request.patient_id)
+        .patient_timeline(actor.id, request.patient_id)
         .map_err(|error| error.to_string())
 }
 
@@ -623,9 +675,10 @@ pub fn list_clinical_services(
     state: State<'_, AppState>,
     request: ActorRequest,
 ) -> Result<Vec<ClinicalService>, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .list_clinical_services(request.actor_user_id)
+        .list_clinical_services(actor.id)
         .map_err(|error| error.to_string())
 }
 
@@ -634,9 +687,10 @@ pub fn open_clinical_view(
     state: State<'_, AppState>,
     request: ClinicalViewRequest,
 ) -> Result<(), String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .open_clinical_view(request.actor_user_id, request.patient_id)
+        .open_clinical_view(actor.id, request.patient_id)
         .map_err(|error| error.to_string())
 }
 
@@ -645,9 +699,10 @@ pub fn get_tooth_statuses(
     state: State<'_, AppState>,
     request: ClinicalViewRequest,
 ) -> Result<Vec<ToothStatus>, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .get_tooth_statuses(request.actor_user_id, request.patient_id)
+        .get_tooth_statuses(actor.id, request.patient_id)
         .map_err(|error| error.to_string())
 }
 
@@ -656,10 +711,11 @@ pub fn set_tooth_status(
     state: State<'_, AppState>,
     request: SetToothStatusRequest,
 ) -> Result<ToothStatus, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
         .set_tooth_status(
-            request.actor_user_id,
+            actor.id,
             request.patient_id,
             request.tooth_number,
             request.state.trim(),
@@ -672,10 +728,11 @@ pub fn create_clinical_record(
     state: State<'_, AppState>,
     request: CreateClinicalRecordRequest,
 ) -> Result<ClinicalRecord, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
         .create_clinical_record(
-            request.actor_user_id,
+            actor.id,
             &NewClinicalRecord {
                 patient_id: request.patient_id,
                 service_id: request.service_id,
@@ -695,10 +752,11 @@ pub fn list_clinical_records(
     state: State<'_, AppState>,
     request: ListClinicalRecordsRequest,
 ) -> Result<Vec<ClinicalRecord>, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
         .list_clinical_records(
-            request.actor_user_id,
+            actor.id,
             request.patient_id,
             &ClinicalRecordFilters {
                 date_from: request.date_from.as_deref(),
@@ -715,13 +773,10 @@ pub fn mark_clinical_record_ready_for_quote(
     state: State<'_, AppState>,
     request: MarkClinicalRecordQuoteRequest,
 ) -> Result<ClinicalRecord, String> {
+    let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .mark_clinical_record_ready_for_quote(
-            request.actor_user_id,
-            request.record_id,
-            request.ready_for_quote,
-        )
+        .mark_clinical_record_ready_for_quote(actor.id, request.record_id, request.ready_for_quote)
         .map_err(|error| error.to_string())
 }
 
@@ -730,10 +785,11 @@ pub async fn process_google_calendar_sync(
     state: State<'_, AppState>,
     request: ProcessGoogleCalendarSyncRequest,
 ) -> Result<GoogleCalendarSyncRunResult, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
     let token_json = {
         let database = state.database()?;
         database
-            .google_calendar_token_json(request.actor_user_id)
+            .google_calendar_token_json(actor.id)
             .map_err(|error| error.to_string())?
     };
     let token = serde_json::from_str::<google::GoogleCalendarToken>(&token_json)
@@ -745,7 +801,7 @@ pub async fn process_google_calendar_sync(
     let jobs = {
         let database = state.database()?;
         database
-            .pending_google_calendar_sync_jobs(request.actor_user_id, request.limit.unwrap_or(10))
+            .pending_google_calendar_sync_jobs(actor.id, request.limit.unwrap_or(10))
             .map_err(|error| error.to_string())?
     };
 

@@ -24,14 +24,17 @@ const navItems = [
 
 const LAST_SECTION_STORAGE_KEY = "velodent:last-section";
 
-export function AppShell() {
+interface AppShellProps {
+  currentUser: User;
+}
+
+export function AppShell({ currentUser }: AppShellProps) {
   const { t } = useL10n();
   const [activeKey, setActiveKey] = useState<(typeof navItems)[number]["key"]>(() => {
     const stored = window.localStorage.getItem(LAST_SECTION_STORAGE_KEY);
     return navItems.some((item) => item.key === stored) ? (stored as (typeof navItems)[number]["key"]) : "agenda";
   });
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [health, setHealth] = useState<HealthStatus>({
     status: "checking",
@@ -150,9 +153,9 @@ export function AppShell() {
             {health.message}
           </Badge>
 
-          <Badge variant={currentUser ? "success" : "warning"}>
+          <Badge variant="success">
             <UserRound aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
-            {currentUser ? currentUser.username : t("topBarNoUser")}
+            {currentUser.username}
           </Badge>
         </header>
 
@@ -168,7 +171,7 @@ export function AppShell() {
               {activeKey === "agenda" ? (
                 <AgendaView currentUser={currentUser} />
               ) : activeKey === "settings" ? (
-                <SettingsPanel currentUser={currentUser} onCurrentUserChange={setCurrentUser} />
+                <SettingsPanel currentUser={currentUser} />
               ) : activeKey === "patients" ? (
                 <PatientsView
                   currentUser={currentUser}
@@ -184,6 +187,7 @@ export function AppShell() {
       </div>
       <CommandPalette
         open={commandPaletteOpen}
+        sessionToken={currentUser.session_token ?? ""}
         onClose={() => setCommandPaletteOpen(false)}
         onPatientSelected={(patient) => {
           setSelectedPatient(patient);

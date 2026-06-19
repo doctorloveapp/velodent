@@ -1,11 +1,147 @@
 import { AppShell } from "@/frontend/app-shell/AppShell";
 import { L10nProvider } from "@/frontend/shared/i18n/L10nProvider";
+import { useEffect, useState, type ReactNode } from "react";
+import { Activity, KeyRound, ShieldCheck } from "lucide-react";
+import { DEFAULT_FIRST_ADMIN_GOOGLE_EMAIL } from "@/frontend/settings/authConfig";
+import { bootstrapStatus, createFirstAdmin, isTauriRuntime, login, type User } from "@/frontend/settings/settingsApi";
+import { Button } from "@/frontend/shared/ui/button";
+import { Input } from "@/frontend/shared/ui/input";
+import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 
 export default function App() {
   return (
     <L10nProvider locale="it">
-      <AppShell />
+      <AuthGate />
     </L10nProvider>
   );
 }
 
+function AuthGate() {
+  const { t } = useL10n();
+  const [backendAvailable] = useState(isTauriRuntime());
+  const [checking, setChecking] = useState(true);
+  const [needsFirstAdmin, setNeedsFirstAdmin] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [adminForm, setAdminForm] = useState({
+    username: "admin",
+    password: "",
+    googleEmail: DEFAULT_FIRST_ADMIN_GOOGLE_EMAIL
+  });
+  const [loginForm, setLoginForm] = useState({ username: "admin", password: "" });
+
+  useEffect(() => {
+    if (!backendAvailable) {
+      setChecking(false);
+      return;
+    }
+
+    void bootstrapStatus()
+      .then((status) => {
+        setNeedsFirstAdmin(status.needs_first_admin);
+      })
+      .catch((error: unknown) => {
+        setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError"));
+      })
+      .finally(() => setChecking(false));
+  }, [backendAvailable, t]);
+
+  async function handleCreateFirstAdmin() {
+    const user = await createFirstAdmin({
+      username: adminForm.username,
+      password: adminForm.password,
+      google_email: adminForm.googleEmail || undefined
+    });
+    setCurrentUser(user);
+    setNeedsFirstAdmin(false);
+  }
+
+  async function handleLogin() {
+    setCurrentUser(await login(loginForm));
+  }
+
+  if (currentUser?.session_token) {
+    return <AppShell currentUser={currentUser} />;
+  }
+
+  if (!backendAvailable) {
+    return (
+      <AuthSurface
+        icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+        title={t("authGateBackendUnavailableTitle")}
+        eyebrow={t("settingsSecurityEyebrow")}
+      >
+        <p className="text-sm leading-6 text-alabaster-grey-500">{t("authGateBackendUnavailableBody")}</p>
+      </AuthSurface>
+    );
+  }
+
+  if (checking) {
+    return (
+      <AuthSurface
+        icon={<Activity aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+        title={t("authGateCheckingTitle")}
+        eyebrow={t("settingsSecurityEyebrow")}
+      >
+        <p className="text-sm text-alabaster-grey-500">{t("healthChecking")}</p>
+      </AuthSurface>
+    );
+  }
+
+  return needsFirstAdmin ? (
+    <AuthSurface
+      icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+      title={t("settingsFirstAdminTitle")}
+      eyebrow={t("settingsSecurityEyebrow")}
+    >
+      <div className="grid gap-3">
+        <Input placeholder={t("settingsUsername")} value={adminForm.username} onChange={(event) => setAdminForm({ ...adminForm, username: event.target.value })} />
+        <Input placeholder={t("settingsPassword")} type="password" value={adminForm.password} onChange={(event) => setAdminForm({ ...adminForm, password: event.target.value })} />
+        <Input placeholder={t("settingsGoogleEmail")} value={adminForm.googleEmail} onChange={(event) => setAdminForm({ ...adminForm, googleEmail: event.target.value })} />
+        <Button type="button" onClick={() => void handleCreateFirstAdmin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}>
+          {t("settingsCreateFirstAdmin")}
+        </Button>
+        {statusMessage ? <p className="text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
+      </div>
+    </AuthSurface>
+  ) : (
+    <AuthSurface
+      icon={<KeyRound aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+      title={t("settingsLoginTitle")}
+      eyebrow={t("settingsSecurityEyebrow")}
+    >
+      <div className="grid gap-3">
+        <Input placeholder={t("settingsUsername")} value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} />
+        <Input placeholder={t("settingsPassword")} type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} />
+        <Button type="button" onClick={() => void handleLogin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}>
+          {t("settingsLoginAction")}
+        </Button>
+        {statusMessage ? <p className="text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
+      </div>
+    </AuthSurface>
+  );
+}
+
+function AuthSurface({ children, eyebrow, icon, title }: { children: ReactNode; eyebrow: string; icon: ReactNode; title: string }) {
+  const { t } = useL10n();
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-ink-black-950 p-6 text-ink-black-50">
+      <section className="w-full max-w-[440px] rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.42)]">
+        <div className="mb-5 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-md border border-powder-blue-500/30 bg-powder-blue-950 text-powder-blue-500">
+            {icon}
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{eyebrow}</p>
+            <h1 className="text-lg font-semibold text-white">{title}</h1>
+          </div>
+        </div>
+        {children}
+        <p className="mt-5 border-t border-alabaster-grey-500/15 pt-4 text-[11px] leading-5 text-alabaster-grey-500">
+          {t("authGateSecurityNote")}
+        </p>
+      </section>
+    </main>
+  );
+}

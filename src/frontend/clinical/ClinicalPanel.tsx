@@ -1,5 +1,5 @@
 import { FilePlus2, ListFilter, Stethoscope } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
@@ -30,7 +30,9 @@ const upperRight = [18, 17, 16, 15, 14, 13, 12, 11];
 const upperLeft = [21, 22, 23, 24, 25, 26, 27, 28];
 const lowerRight = [48, 47, 46, 45, 44, 43, 42, 41];
 const lowerLeft = [31, 32, 33, 34, 35, 36, 37, 38];
-const toothStates: ToothState[] = ["healthy", "pathology", "in_progress", "performed", "missing"];
+const diagnosisStates: ToothState[] = ["caries", "endodontics_needed", "crown_needed", "extraction_needed"];
+const performedStates: ToothState[] = ["filling_done", "root_canal_done", "crown_done", "implant_done"];
+const toothStates: ToothState[] = [...diagnosisStates, ...performedStates, "missing"];
 const recordStatuses: ClinicalRecordStatus[] = ["diagnosed", "in_quote", "performed"];
 
 const emptyRecordForm = {
@@ -56,7 +58,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   const [auditedPatientId, setAuditedPatientId] = useState<number | null>(null);
 
   const statusByTooth = useMemo(() => {
-    return new Map(toothStatuses.map((entry) => [entry.tooth_number, entry.state]));
+    return new Map<number, ToothState>(toothStatuses.map((entry) => [entry.tooth_number, entry.state]));
   }, [toothStatuses]);
 
   async function refreshClinicalData() {
@@ -64,10 +66,14 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
       return;
     }
 
+    if (!currentUser.session_token) {
+      return;
+    }
+
     const [nextServices, nextToothStatuses, nextRecords] = await Promise.all([
-      listClinicalServices(currentUser.id),
-      getToothStatuses(currentUser.id, patient.id),
-      listClinicalRecords(currentUser.id, patient.id, {
+      listClinicalServices(currentUser.session_token),
+      getToothStatuses(currentUser.session_token, patient.id),
+      listClinicalRecords(currentUser.session_token, patient.id, {
         date_from: filters.dateFrom || undefined,
         date_to: filters.dateTo || undefined,
         tooth_number: filters.toothNumber ? Number(filters.toothNumber) : undefined,
@@ -88,7 +94,10 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
 
     async function openAndRefresh() {
       if (auditedPatientId !== patient.id) {
-        await openClinicalView(user.id, patient.id);
+        if (!user.session_token) {
+          return;
+        }
+        await openClinicalView(user.session_token, patient.id);
         setAuditedPatientId(patient.id);
       }
       await refreshClinicalData();
@@ -108,7 +117,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
     const state = statusByTooth.get(toothNumber) ?? "healthy";
     setSelectedTooth(toothNumber);
     setSelectedToothState(state);
-    setForm((current) => ({ ...current, toothNumber: String(toothNumber) }));
+    setForm((current) => ({ ...current, toothNumber: String(toothNumber), readyForQuote: isDiagnosticState(state) }));
   }
 
   async function handleSetToothState(state: ToothState) {
@@ -117,16 +126,42 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
       return;
     }
 
-    const saved = await setToothStatus(activeUser.id, patient.id, selectedTooth, state);
+    if (!activeUser.session_token) {
+      setStatusMessage(t("clinicalLoginRequired"));
+      return;
+    }
+
+    const saved = await setToothStatus(activeUser.session_token, patient.id, selectedTooth, state);
     setSelectedToothState(saved.state);
+    setForm((current) => ({
+      ...current,
+      pathologyDescription: isDiagnosticState(state) ? t(toothStateKey(state)) : current.pathologyDescription,
+      readyForQuote: isDiagnosticState(state),
+      status: isPerformedState(state) ? "performed" : "diagnosed"
+    }));
+    if (isDiagnosticState(state) || isPerformedState(state)) {
+      await createClinicalRecord(activeUser.session_token, {
+        patient_id: patient.id,
+        tooth_number: selectedTooth,
+        pathology_description: t(toothStateKey(state)),
+        status: isPerformedState(state) ? "performed" : "diagnosed",
+        ready_for_quote: isDiagnosticState(state),
+        notes: undefined
+      });
+    }
     setStatusMessage(t("clinicalToothStateSaved"));
     await refreshClinicalData();
   }
 
   async function handleCreateRecord() {
+    if (!activeUser.session_token) {
+      setStatusMessage(t("clinicalLoginRequired"));
+      return;
+    }
+
     const toothNumber = form.toothNumber ? Number(form.toothNumber) : undefined;
     const serviceId = form.serviceId ? Number(form.serviceId) : undefined;
-    await createClinicalRecord(activeUser.id, {
+    await createClinicalRecord(activeUser.session_token, {
       patient_id: patient.id,
       service_id: serviceId,
       tooth_number: toothNumber,
@@ -147,7 +182,12 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   }
 
   async function handleToggleQuote(record: ClinicalRecord) {
-    const updated = await markClinicalRecordReadyForQuote(activeUser.id, record.id, !record.ready_for_quote);
+    if (!activeUser.session_token) {
+      setStatusMessage(t("clinicalLoginRequired"));
+      return;
+    }
+
+    const updated = await markClinicalRecordReadyForQuote(activeUser.session_token, record.id, !record.ready_for_quote);
     setRecords((current) => current.map((item) => (item.id === updated.id ? updated : item)));
     setStatusMessage(t("clinicalQuoteFlagUpdated"));
   }
@@ -185,18 +225,45 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           <p className="mt-2 font-mono text-xs text-alabaster-grey-500">
             {selectedTooth ? `${t("clinicalSelectedTooth")}: ${String(selectedTooth)}` : t("clinicalSelectTooth")}
           </p>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            {toothStates.map((state) => (
+          <div className="mt-3 grid gap-3">
+            <ClinicalMenuGroup title={t("clinicalDiagnosisGroup")}>
+              {diagnosisStates.map((state) => (
+                <Button
+                  key={state}
+                  type="button"
+                  variant={selectedToothState === state ? "navActive" : "secondary"}
+                  size="sm"
+                  onClick={() => void handleSetToothState(state)}
+                >
+                  {t(toothStateKey(state))}
+                </Button>
+              ))}
+            </ClinicalMenuGroup>
+            <ClinicalMenuGroup title={t("clinicalPerformedGroup")}>
+              {performedStates.map((state) => (
+                <Button
+                  key={state}
+                  type="button"
+                  variant={selectedToothState === state ? "navActive" : "secondary"}
+                  size="sm"
+                  onClick={() => void handleSetToothState(state)}
+                >
+                  {t(toothStateKey(state))}
+                </Button>
+              ))}
+            </ClinicalMenuGroup>
+            <div>
               <Button
-                key={state}
+                key="missing"
                 type="button"
-                variant={selectedToothState === state ? "navActive" : "secondary"}
+                variant={selectedToothState === "missing" ? "navActive" : "secondary"}
                 size="sm"
-                onClick={() => void handleSetToothState(state)}
+                className="w-full"
+                onClick={() => void handleSetToothState("missing")}
               >
-                {t(toothStateKey(state))}
+                {t("clinicalStateMissing")}
               </Button>
-            ))}
+            </div>
           </div>
           {statusMessage ? <p className="mt-3 text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
         </section>
@@ -338,7 +405,7 @@ function OdontogramRow({
             type="button"
             onClick={() => onSelect(toothNumber)}
           >
-            <ToothGlyph />
+            <ToothGlyph toothNumber={toothNumber} state={state} />
             <span className="font-mono text-[11px] font-semibold">{toothNumber}</span>
           </button>
         );
@@ -347,21 +414,56 @@ function OdontogramRow({
   );
 }
 
-function ToothGlyph() {
+function ClinicalMenuGroup({ children, title }: { children: ReactNode; title: string }) {
   return (
-    <svg aria-hidden="true" className="h-6 w-5" fill="none" viewBox="0 0 24 28">
-      <path
-        d="M6.2 2.6c1.8-.9 3.7.1 5.8.1s4-1 5.8-.1c2.5 1.3 3.2 4.7 2.2 8.4-.7 2.5-1.8 4.2-2.4 7-.6 2.5-.8 5.8-3 6.1-1.7.2-1.9-3.8-2.6-3.8s-.9 4-2.6 3.8c-2.2-.3-2.4-3.6-3-6.1-.6-2.8-1.7-4.5-2.4-7-1-3.7-.3-7.1 2.2-8.4Z"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="1.5"
-      />
+    <div>
+      <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">{title}</p>
+      <div className="grid grid-cols-2 gap-2">{children}</div>
+    </div>
+  );
+}
+
+function ToothGlyph({ state, toothNumber }: { state: ToothState; toothNumber: number }) {
+  const position = toothNumber % 10;
+  const missingClass = state === "missing" ? "opacity-10" : "";
+
+  if (position <= 2) {
+    return (
+      <svg aria-hidden="true" className={`h-7 w-5 ${missingClass}`} fill="none" viewBox="0 0 24 30">
+        <path d="M8 3.8c1.2-.8 2.6-.8 4-.2 1.4-.6 2.8-.6 4 .2 1.8 1.2 2.3 4.2 1.2 7.1-.8 2.1-1.2 4.4-1.4 7.2-.3 4.5-1.4 7.5-3.8 7.5s-3.5-3-3.8-7.5c-.2-2.8-.6-5.1-1.4-7.2-1.1-2.9-.6-5.9 1.2-7.1Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+        <path d="M9 10.2h6" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
+      </svg>
+    );
+  }
+
+  if (position === 3) {
+    return (
+      <svg aria-hidden="true" className={`h-7 w-5 ${missingClass}`} fill="none" viewBox="0 0 24 30">
+        <path d="M7.2 3.5c1.5-1 3.2-.3 4.8-.3s3.3-.7 4.8.3c2 1.4 2.2 4.8.9 7.9-.9 2.1-1.7 4.9-2.3 8.4-.6 3.8-1.5 6.1-3.4 6.1s-2.8-2.3-3.4-6.1c-.6-3.5-1.4-6.3-2.3-8.4-1.3-3.1-1.1-6.5.9-7.9Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+        <path d="M12 12.5v9" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
+      </svg>
+    );
+  }
+
+  if (position <= 5) {
+    return (
+      <svg aria-hidden="true" className={`h-7 w-6 ${missingClass}`} fill="none" viewBox="0 0 26 30">
+        <path d="M6.5 3.4c1.8-.9 3.9.1 6.5.1s4.7-1 6.5-.1c2.6 1.3 3.2 4.8 2.1 8.4-.7 2.3-1.9 4.1-2.5 7.2-.5 2.8-.9 6-3 6.4-1.7.3-2-3.8-3.1-3.8s-1.4 4.1-3.1 3.8c-2.1-.4-2.5-3.6-3-6.4-.6-3.1-1.8-4.9-2.5-7.2-1.1-3.6-.5-7.1 2.1-8.4Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+        <path d="M9.2 10.2h7.6M10 14.4h6" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" className={`h-7 w-7 ${missingClass}`} fill="none" viewBox="0 0 30 30">
+      <path d="M6.3 3.5c2.1-1 4.1.2 6.1.2 1.1 0 1.7-.5 2.6-.5s1.5.5 2.6.5c2 0 4-1.2 6.1-.2 2.9 1.4 3.6 5.1 2.3 9-.8 2.5-2.2 4.1-2.9 7.2-.6 2.8-1 5.8-3.3 6.1-1.7.2-2.1-3.8-3.2-3.8s-1.4 3.8-3.2 3.8-2.1-3.8-3.2-3.8-1.5 4-3.2 3.8c-2.3-.3-2.7-3.3-3.3-6.1-.7-3.1-2.1-4.7-2.9-7.2-1.3-3.9-.6-7.6 2.3-9Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+      <path d="M9 10.8h12M10.2 15h9.6M15 8.4v8.8" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
     </svg>
   );
 }
 
 function toothStateClass(state: ToothState) {
-  if (state === "pathology") {
+  if (isDiagnosticState(state) || state === "pathology") {
     return "border-rose-600/40 bg-rose-600/10 text-rose-300";
   }
 
@@ -369,19 +471,19 @@ function toothStateClass(state: ToothState) {
     return "border-amber-500/40 bg-amber-500/10 text-amber-300";
   }
 
-  if (state === "performed") {
+  if (isPerformedState(state) || state === "performed") {
     return "border-powder-blue-500/40 bg-powder-blue-950 text-powder-blue-500";
   }
 
   if (state === "missing") {
-    return "border-alabaster-grey-500/25 bg-black/30 text-alabaster-grey-500 opacity-70";
+    return "border-dashed border-alabaster-grey-500/25 bg-black/10 text-alabaster-grey-500 opacity-45";
   }
 
   return "border-alabaster-grey-500/20 bg-glaucous-950 text-white hover:border-powder-blue-500/50";
 }
 
 function stateBadgeVariant(state: ToothState) {
-  if (state === "pathology") {
+  if (isDiagnosticState(state) || state === "pathology") {
     return "danger" as const;
   }
 
@@ -389,7 +491,7 @@ function stateBadgeVariant(state: ToothState) {
     return "warning" as const;
   }
 
-  if (state === "performed") {
+  if (isPerformedState(state) || state === "performed") {
     return "success" as const;
   }
 
@@ -397,6 +499,38 @@ function stateBadgeVariant(state: ToothState) {
 }
 
 function toothStateKey(state: ToothState): L10nKey {
+  if (state === "caries") {
+    return "clinicalStateCaries";
+  }
+
+  if (state === "endodontics_needed") {
+    return "clinicalStateEndodonticsNeeded";
+  }
+
+  if (state === "crown_needed") {
+    return "clinicalStateCrownNeeded";
+  }
+
+  if (state === "extraction_needed") {
+    return "clinicalStateExtractionNeeded";
+  }
+
+  if (state === "filling_done") {
+    return "clinicalStateFillingDone";
+  }
+
+  if (state === "root_canal_done") {
+    return "clinicalStateRootCanalDone";
+  }
+
+  if (state === "crown_done") {
+    return "clinicalStateCrownDone";
+  }
+
+  if (state === "implant_done") {
+    return "clinicalStateImplantDone";
+  }
+
   if (state === "pathology") {
     return "clinicalStatePathology";
   }
@@ -414,6 +548,14 @@ function toothStateKey(state: ToothState): L10nKey {
   }
 
   return "clinicalStateHealthy";
+}
+
+function isDiagnosticState(state: ToothState) {
+  return diagnosisStates.includes(state);
+}
+
+function isPerformedState(state: ToothState) {
+  return performedStates.includes(state);
 }
 
 function recordStatusKey(status: ClinicalRecordStatus): L10nKey {

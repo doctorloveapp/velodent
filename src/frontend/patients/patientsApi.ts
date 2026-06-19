@@ -39,34 +39,34 @@ export function isTauriRuntime() {
   return Boolean(window.__TAURI_INTERNALS__);
 }
 
-export async function searchPatients(query: string, limit = 10) {
-  return invoke<Patient[]>("search_patients", { query, limit });
+export async function searchPatients(session_token: string, query: string, limit = 10) {
+  return invoke<Patient[]>("search_patients", { request: { session_token, query, limit } });
 }
 
-export async function ensureDevelopmentPatient() {
-  return invoke<Patient>("ensure_development_patient");
+export async function ensureDevelopmentPatient(session_token: string) {
+  return invoke<Patient>("ensure_development_patient", { request: { session_token } });
 }
 
 export async function validateTaxCode(tax_code: string) {
   return invoke<boolean>("validate_tax_code", { request: { tax_code } });
 }
 
-export async function createPatient(actor_user_id: number, patient: PatientInput) {
-  return invoke<Patient>("create_patient", { request: { actor_user_id, ...patient } });
+export async function createPatient(session_token: string, patient: PatientInput) {
+  return invoke<Patient>("create_patient", { request: { session_token, ...patient } });
 }
 
-export async function updatePatient(actor_user_id: number, patient_id: number, patient: PatientInput) {
-  return invoke<Patient>("update_patient", { request: { actor_user_id, patient_id, ...patient } });
+export async function updatePatient(session_token: string, patient_id: number, patient: PatientInput) {
+  return invoke<Patient>("update_patient", { request: { session_token, patient_id, ...patient } });
 }
 
-export async function deletePatient(actor_user_id: number, patient_id: number) {
-  return invoke<Patient>("delete_patient", { request: { actor_user_id, patient_id } });
+export async function deletePatient(session_token: string, patient_id: number) {
+  return invoke<Patient>("delete_patient", { request: { session_token, patient_id } });
 }
 
-export async function openPatientRecord(actor_user_id: number, patient_id: number) {
-  return invoke<Patient>("open_patient_record", { request: { actor_user_id, patient_id } });
+export async function openPatientRecord(session_token: string, patient_id: number) {
+  return invoke<Patient>("open_patient_record", { request: { session_token, patient_id } });
 }
 
-export async function patientTimeline(actor_user_id: number, patient_id: number) {
-  return invoke<PatientTimelineEvent[]>("patient_timeline", { request: { actor_user_id, patient_id } });
+export async function patientTimeline(session_token: string, patient_id: number) {
+  return invoke<PatientTimelineEvent[]>("patient_timeline", { request: { session_token, patient_id } });
 }

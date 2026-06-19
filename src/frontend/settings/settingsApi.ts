@@ -8,6 +8,20 @@ export interface User {
   google_email: string | null;
   role: Role;
   active: boolean;
+  session_token?: string;
+}
+
+interface BackendUser {
+  id: number;
+  username: string;
+  google_email: string | null;
+  role: Role;
+  active: boolean;
+}
+
+interface AuthSession {
+  user: BackendUser;
+  session_token: string;
 }
 
 export interface BootstrapStatus {
@@ -62,45 +76,45 @@ export async function createFirstAdmin(request: {
   password: string;
   google_email?: string;
 }) {
-  return invoke<User>("create_first_admin", { request });
+  return toSessionUser(await invoke<AuthSession>("create_first_admin", { request }));
 }
 
 export async function login(request: { username: string; password: string }) {
-  return invoke<User>("login", { request });
+  return toSessionUser(await invoke<AuthSession>("login", { request }));
 }
 
-export async function listUsers() {
-  return invoke<User[]>("list_users");
+export async function listUsers(session_token: string) {
+  return invoke<BackendUser[]>("list_users", { request: { session_token } });
 }
 
 export async function createUser(request: {
-  actor_user_id: number;
+  session_token: string;
   username: string;
   password?: string;
   google_email?: string;
   role: Role;
 }) {
-  return invoke<User>("create_user", { request });
+  return invoke<BackendUser>("create_user", { request });
 }
 
-export async function listAuthorizedGoogleAccounts() {
-  return invoke<AuthorizedGoogleAccount[]>("list_authorized_google_accounts");
+export async function listAuthorizedGoogleAccounts(session_token: string) {
+  return invoke<AuthorizedGoogleAccount[]>("list_authorized_google_accounts", { request: { session_token } });
 }
 
 export async function addAuthorizedGoogleAccount(request: {
-  actor_user_id: number;
+  session_token: string;
   email: string;
   role: Role;
 }) {
   return invoke<AuthorizedGoogleAccount>("add_authorized_google_account", { request });
 }
 
-export async function listDevices() {
-  return invoke<AuthorizedDevice[]>("list_devices");
+export async function listDevices(session_token: string) {
+  return invoke<AuthorizedDevice[]>("list_devices", { request: { session_token } });
 }
 
 export async function authorizeDevice(request: {
-  actor_user_id: number;
+  session_token: string;
   user_id?: number;
   label: string;
   allowed_lan_cidr?: string;
@@ -109,16 +123,16 @@ export async function authorizeDevice(request: {
   return invoke<DeviceAuthorization>("authorize_device", { request });
 }
 
-export async function revokeDevice(request: { actor_user_id: number; device_id: number }) {
+export async function revokeDevice(request: { session_token: string; device_id: number }) {
   return invoke<AuthorizedDevice>("revoke_device", { request });
 }
 
-export async function getStudioSettings() {
-  return invoke<StudioSettings>("get_studio_settings");
+export async function getStudioSettings(session_token: string) {
+  return invoke<StudioSettings>("get_studio_settings", { request: { session_token } });
 }
 
 export async function updateStudioSettings(request: {
-  actor_user_id: number;
+  session_token: string;
   clinic_name?: string;
   logo_relative_path?: string;
   chair_count: number;
@@ -128,3 +142,9 @@ export async function updateStudioSettings(request: {
   return invoke<StudioSettings>("update_studio_settings", { request });
 }
 
+function toSessionUser(session: AuthSession): User {
+  return {
+    ...session.user,
+    session_token: session.session_token
+  };
+}

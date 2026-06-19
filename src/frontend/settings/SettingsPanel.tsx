@@ -1,4 +1,4 @@
-import { KeyRound, Laptop, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound } from "lucide-react";
+import { Laptop, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Badge } from "@/frontend/shared/ui/badge";
@@ -7,15 +7,12 @@ import { Input } from "@/frontend/shared/ui/input";
 import {
   addAuthorizedGoogleAccount,
   authorizeDevice,
-  bootstrapStatus,
-  createFirstAdmin,
   createUser,
   getStudioSettings,
   isTauriRuntime,
   listAuthorizedGoogleAccounts,
   listDevices,
   listUsers,
-  login,
   revokeDevice,
   updateStudioSettings,
   type AuthorizedDevice,
@@ -29,13 +26,11 @@ const roleOptions: Role[] = ["admin", "odontoiatra", "aso"];
 
 interface SettingsPanelProps {
   currentUser: User | null;
-  onCurrentUserChange: (user: User) => void;
 }
 
-export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPanelProps) {
+export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const { t } = useL10n();
   const [backendAvailable] = useState(isTauriRuntime());
-  const [needsFirstAdmin, setNeedsFirstAdmin] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [googleAccounts, setGoogleAccounts] = useState<AuthorizedGoogleAccount[]>([]);
   const [devices, setDevices] = useState<AuthorizedDevice[]>([]);
@@ -43,8 +38,6 @@ export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPane
   const [statusMessage, setStatusMessage] = useState("");
   const [oneTimeToken, setOneTimeToken] = useState("");
 
-  const [adminForm, setAdminForm] = useState({ username: "", password: "", googleEmail: "" });
-  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [studioForm, setStudioForm] = useState({
     clinicName: "",
     logoRelativePath: "",
@@ -65,16 +58,18 @@ export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPane
     if (!backendAvailable) {
       return;
     }
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
 
-    const [bootstrap, nextUsers, nextGoogleAccounts, nextDevices, nextSettings] = await Promise.all([
-      bootstrapStatus(),
-      listUsers(),
-      listAuthorizedGoogleAccounts(),
-      listDevices(),
-      getStudioSettings()
+    const [nextUsers, nextGoogleAccounts, nextDevices, nextSettings] = await Promise.all([
+      listUsers(currentUser.session_token),
+      listAuthorizedGoogleAccounts(currentUser.session_token),
+      listDevices(currentUser.session_token),
+      getStudioSettings(currentUser.session_token)
     ]);
 
-    setNeedsFirstAdmin(bootstrap.needs_first_admin);
     setUsers(nextUsers);
     setGoogleAccounts(nextGoogleAccounts);
     setDevices(nextDevices);
@@ -92,7 +87,7 @@ export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPane
     void refresh().catch((error: unknown) => {
       setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError"));
     });
-  }, []);
+  }, [currentUser?.session_token]);
 
   if (!backendAvailable) {
     return (
@@ -106,32 +101,14 @@ export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPane
     );
   }
 
-  async function handleCreateFirstAdmin() {
-    const user = await createFirstAdmin({
-      username: adminForm.username,
-      password: adminForm.password,
-      google_email: adminForm.googleEmail || undefined
-    });
-    onCurrentUserChange(user);
-    setStatusMessage(t("settingsFirstAdminCreated"));
-    await refresh();
-  }
-
-  async function handleLogin() {
-    const user = await login(loginForm);
-    onCurrentUserChange(user);
-    setStatusMessage(t("settingsLoginSuccess"));
-    await refresh();
-  }
-
   async function handleUpdateStudio() {
-    if (!currentUser) {
+    if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
       return;
     }
 
     const updated = await updateStudioSettings({
-      actor_user_id: currentUser.id,
+      session_token: currentUser.session_token,
       clinic_name: studioForm.clinicName || undefined,
       logo_relative_path: studioForm.logoRelativePath || undefined,
       chair_count: Number(studioForm.chairCount),
@@ -144,13 +121,13 @@ export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPane
   }
 
   async function handleCreateUser() {
-    if (!currentUser) {
+    if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
       return;
     }
 
     await createUser({
-      actor_user_id: currentUser.id,
+      session_token: currentUser.session_token,
       username: userForm.username,
       password: userForm.password || undefined,
       google_email: userForm.googleEmail || undefined,
@@ -162,13 +139,13 @@ export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPane
   }
 
   async function handleAddGoogle() {
-    if (!currentUser) {
+    if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
       return;
     }
 
     await addAuthorizedGoogleAccount({
-      actor_user_id: currentUser.id,
+      session_token: currentUser.session_token,
       email: googleForm.email,
       role: googleForm.role
     });
@@ -178,13 +155,13 @@ export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPane
   }
 
   async function handleAuthorizeDevice() {
-    if (!currentUser) {
+    if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
       return;
     }
 
     const authorization = await authorizeDevice({
-      actor_user_id: currentUser.id,
+      session_token: currentUser.session_token,
       user_id: deviceForm.userId ? Number(deviceForm.userId) : undefined,
       label: deviceForm.label,
       allowed_lan_cidr: deviceForm.allowedLanCidr || undefined
@@ -196,12 +173,12 @@ export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPane
   }
 
   async function handleRevokeDevice(deviceId: number) {
-    if (!currentUser) {
+    if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
       return;
     }
 
-    await revokeDevice({ actor_user_id: currentUser.id, device_id: deviceId });
+    await revokeDevice({ session_token: currentUser.session_token, device_id: deviceId });
     setStatusMessage(t("settingsDeviceRevoked"));
     await refresh();
   }
@@ -220,33 +197,6 @@ export function SettingsPanel({ currentUser, onCurrentUserChange }: SettingsPane
           {statusMessage ? <span className="text-sm text-alabaster-grey-500">{statusMessage}</span> : null}
         </div>
       </SettingsSurface>
-
-      {needsFirstAdmin ? (
-        <SettingsSurface
-          icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
-          title={t("settingsFirstAdminTitle")}
-          eyebrow={t("settingsSecurityEyebrow")}
-        >
-          <DenseForm>
-            <Input placeholder={t("settingsUsername")} value={adminForm.username} onChange={(event) => setAdminForm({ ...adminForm, username: event.target.value })} />
-            <Input placeholder={t("settingsPassword")} type="password" value={adminForm.password} onChange={(event) => setAdminForm({ ...adminForm, password: event.target.value })} />
-            <Input placeholder={t("settingsGoogleEmail")} value={adminForm.googleEmail} onChange={(event) => setAdminForm({ ...adminForm, googleEmail: event.target.value })} />
-            <Button type="button" onClick={() => void handleCreateFirstAdmin()}>{t("settingsCreateFirstAdmin")}</Button>
-          </DenseForm>
-        </SettingsSurface>
-      ) : (
-        <SettingsSurface
-          icon={<KeyRound aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
-          title={t("settingsLoginTitle")}
-          eyebrow={t("settingsSecurityEyebrow")}
-        >
-          <DenseForm>
-            <Input placeholder={t("settingsUsername")} value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} />
-            <Input placeholder={t("settingsPassword")} type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} />
-            <Button type="button" onClick={() => void handleLogin()}>{t("settingsLoginAction")}</Button>
-          </DenseForm>
-        </SettingsSurface>
-      )}
 
       <SettingsSurface
         icon={<SlidersHorizontal aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}

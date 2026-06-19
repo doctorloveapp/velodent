@@ -1,17 +1,18 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Search, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
-import { ensureDevelopmentPatient, isTauriRuntime, searchPatients, type Patient } from "@/frontend/patients/patientsApi";
+import { isTauriRuntime, searchPatients, type Patient } from "@/frontend/patients/patientsApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Input } from "@/frontend/shared/ui/input";
 
 interface CommandPaletteProps {
   open: boolean;
+  sessionToken: string;
   onClose: () => void;
   onPatientSelected: (patient: Patient) => void;
 }
 
-export function CommandPalette({ onClose, onPatientSelected, open }: CommandPaletteProps) {
+export function CommandPalette({ onClose, onPatientSelected, open, sessionToken }: CommandPaletteProps) {
   const { t } = useL10n();
   const [query, setQuery] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -25,27 +26,26 @@ export function CommandPalette({ onClose, onPatientSelected, open }: CommandPale
     setQuery("");
     setMessage("");
 
-    if (!isTauriRuntime()) {
+    if (!isTauriRuntime() || !sessionToken) {
       setPatients([]);
       setMessage(t("commandPaletteTauriUnavailable"));
       return;
     }
 
-    void ensureDevelopmentPatient()
-      .then(() => searchPatients("", 8))
+    void searchPatients(sessionToken, "", 8)
       .then(setPatients)
       .catch((error: unknown) => {
         setMessage(error instanceof Error ? error.message : t("commandPaletteSearchError"));
       });
-  }, [open, t]);
+  }, [open, sessionToken, t]);
 
   useEffect(() => {
-    if (!open || !isTauriRuntime()) {
+    if (!open || !isTauriRuntime() || !sessionToken) {
       return;
     }
 
     const timeout = window.setTimeout(() => {
-      void searchPatients(query, 8)
+      void searchPatients(sessionToken, query, 8)
         .then(setPatients)
         .catch((error: unknown) => {
           setMessage(error instanceof Error ? error.message : t("commandPaletteSearchError"));
@@ -53,7 +53,7 @@ export function CommandPalette({ onClose, onPatientSelected, open }: CommandPale
     }, 120);
 
     return () => window.clearTimeout(timeout);
-  }, [open, query, t]);
+  }, [open, query, sessionToken, t]);
 
   useEffect(() => {
     if (!open) {
@@ -137,4 +137,3 @@ export function CommandPalette({ onClose, onPatientSelected, open }: CommandPale
     </AnimatePresence>
   );
 }
-

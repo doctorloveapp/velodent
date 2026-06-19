@@ -52,15 +52,15 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   const chairNumbers = useMemo(() => Array.from({ length: chairCount }, (_, index) => index + 1), [chairCount]);
 
   async function refreshAgenda() {
-    if (!currentUser) {
+    if (!currentUser?.session_token) {
       return;
     }
 
     const [chairs, rows, sync, patientRows] = await Promise.all([
-      getChairConfig(currentUser.id),
-      listAppointments(currentUser.id, range.startsFrom, range.startsTo),
-      currentUser.role === "admin" ? googleCalendarSyncStatus(currentUser.id) : Promise.resolve(null),
-      searchPatients("", 25)
+      getChairConfig(currentUser.session_token),
+      listAppointments(currentUser.session_token, range.startsFrom, range.startsTo),
+      currentUser.role === "admin" ? googleCalendarSyncStatus(currentUser.session_token) : Promise.resolve(null),
+      searchPatients(currentUser.session_token, "", 25)
     ]);
 
     setChairCount(chairs.chair_count);
@@ -70,7 +70,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   }
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser?.session_token) {
       return;
     }
 
@@ -98,13 +98,13 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   }
 
   async function handleCreateAppointment() {
-    if (!currentUser) {
+    if (!currentUser?.session_token) {
       return;
     }
 
     const startsAt = localDateTimeWithOffset(form.date, form.time);
     const endsAt = addMinutesLocalDateTime(form.date, form.time, Number(form.duration) || DEFAULT_DURATION_MINUTES);
-    await createAppointment(currentUser.id, {
+    await createAppointment(currentUser.session_token, {
       patient_id: form.patientId ? Number(form.patientId) : undefined,
       chair_number: Number(form.chairNumber) || 1,
       title: form.title.trim(),
@@ -119,7 +119,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   }
 
   async function handleDrop(targetDate: string, chairNumber: number, hour: number, data: string) {
-    if (!currentUser || !data) {
+    if (!currentUser?.session_token || !data) {
       return;
     }
 
@@ -130,34 +130,34 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
 
     const startsAt = localDateTimeWithOffset(targetDate, `${String(hour).padStart(2, "0")}:00`);
     const endsAt = addMinutesLocalDateTime(targetDate, `${String(hour).padStart(2, "0")}:00`, duration);
-    await moveAppointment(currentUser.id, appointmentId, chairNumber, startsAt, endsAt);
+    await moveAppointment(currentUser.session_token, appointmentId, chairNumber, startsAt, endsAt);
     setStatusMessage(t("agendaAppointmentMoved"));
     await refreshAgenda();
   }
 
   async function handleStatusChange(appointment: Appointment, status: AppointmentStatus) {
-    if (!currentUser) {
+    if (!currentUser?.session_token) {
       return;
     }
-    await updateAppointmentStatus(currentUser.id, appointment.id, status);
+    await updateAppointmentStatus(currentUser.session_token, appointment.id, status);
     setStatusMessage(t("agendaStatusUpdated"));
     await refreshAgenda();
   }
 
   async function handleGoogleAuthorize() {
-    if (currentUser?.role !== "admin") {
+    if (currentUser?.role !== "admin" || !currentUser.session_token) {
       return;
     }
-    const authorization = await googleCalendarAuthorizationUrl(currentUser.id);
+    const authorization = await googleCalendarAuthorizationUrl(currentUser.session_token);
     window.open(authorization.authorization_url, "_blank", "noopener,noreferrer");
     setStatusMessage(t("agendaGoogleAuthOpened"));
   }
 
   async function handleProcessSync() {
-    if (currentUser?.role !== "admin") {
+    if (currentUser?.role !== "admin" || !currentUser.session_token) {
       return;
     }
-    const result = await processGoogleCalendarSync(currentUser.id, 10);
+    const result = await processGoogleCalendarSync(currentUser.session_token, 10);
     setStatusMessage(`${t("agendaSyncProcessed")}: ${String(result.processed)} / ${String(result.failed)}`);
     await refreshAgenda();
   }

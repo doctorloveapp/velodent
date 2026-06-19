@@ -47,42 +47,42 @@ export interface GoogleAuthorizationUrl {
   scopes: string[];
 }
 
-export async function getChairConfig(actor_user_id: number) {
-  return invoke<ChairConfig>("get_chair_config", { request: { actor_user_id } });
+export async function getChairConfig(session_token: string) {
+  return invoke<ChairConfig>("get_chair_config", { request: { session_token } });
 }
 
-export async function listAppointments(actor_user_id: number, starts_from: string, starts_to: string) {
-  return invoke<Appointment[]>("list_appointments", { request: { actor_user_id, starts_from, starts_to } });
+export async function listAppointments(session_token: string, starts_from: string, starts_to: string) {
+  return invoke<Appointment[]>("list_appointments", { request: { session_token, starts_from, starts_to } });
 }
 
-export async function createAppointment(actor_user_id: number, input: AppointmentInput) {
-  return invoke<Appointment>("create_appointment", { request: { actor_user_id, ...input } });
+export async function createAppointment(session_token: string, input: AppointmentInput) {
+  return invoke<Appointment>("create_appointment", { request: { session_token, ...input } });
 }
 
 export async function moveAppointment(
-  actor_user_id: number,
+  session_token: string,
   appointment_id: number,
   chair_number: number,
   starts_at: string,
   ends_at: string
 ) {
   return invoke<Appointment>("move_appointment", {
-    request: { actor_user_id, appointment_id, chair_number, starts_at, ends_at }
+    request: { session_token, appointment_id, chair_number, starts_at, ends_at }
   });
 }
 
-export async function updateAppointmentStatus(actor_user_id: number, appointment_id: number, status: AppointmentStatus) {
-  return invoke<Appointment>("update_appointment_status", { request: { actor_user_id, appointment_id, status } });
+export async function updateAppointmentStatus(session_token: string, appointment_id: number, status: AppointmentStatus) {
+  return invoke<Appointment>("update_appointment_status", { request: { session_token, appointment_id, status } });
 }
 
-export async function googleCalendarSyncStatus(actor_user_id: number) {
-  return invoke<GoogleCalendarSyncStatus>("google_calendar_sync_status", { request: { actor_user_id } });
+export async function googleCalendarSyncStatus(session_token: string) {
+  return invoke<GoogleCalendarSyncStatus>("google_calendar_sync_status", { request: { session_token } });
 }
 
-export async function googleCalendarAuthorizationUrl(actor_user_id: number, state = "velodent-local") {
-  return invoke<GoogleAuthorizationUrl>("google_calendar_authorization_url", { request: { actor_user_id, state } });
+export async function googleCalendarAuthorizationUrl(session_token: string, state = "velodent-local") {
+  return invoke<GoogleAuthorizationUrl>("google_calendar_authorization_url", { request: { session_token, state } });
 }
 
-export async function processGoogleCalendarSync(actor_user_id: number, limit = 10) {
-  return invoke<{ processed: number; failed: number }>("process_google_calendar_sync", { request: { actor_user_id, limit } });
+export async function processGoogleCalendarSync(session_token: string, limit = 10) {
+  return invoke<{ processed: number; failed: number }>("process_google_calendar_sync", { request: { session_token, limit } });
 }
