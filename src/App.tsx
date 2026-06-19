@@ -5,11 +5,14 @@ import { Activity, KeyRound, ShieldCheck } from "lucide-react";
 import { DEFAULT_FIRST_ADMIN_GOOGLE_EMAIL } from "@/frontend/settings/authConfig";
 import {
   bootstrapStatus,
+  activateLicense,
   createFirstAdmin,
   exchangeGoogleLoginCode,
   googleLoginAuthorizationUrl,
   isTauriRuntime,
+  licenseStatus,
   login,
+  type LicenseStatus,
   type User
 } from "@/frontend/settings/settingsApi";
 import { Button } from "@/frontend/shared/ui/button";
@@ -28,6 +31,9 @@ function AuthGate() {
   const { t } = useL10n();
   const [backendAvailable] = useState(isTauriRuntime());
   const [checking, setChecking] = useState(true);
+  const [licenseChecking, setLicenseChecking] = useState(true);
+  const [license, setLicense] = useState<LicenseStatus | null>(null);
+  const [activationKey, setActivationKey] = useState("");
   const [needsFirstAdmin, setNeedsFirstAdmin] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
@@ -42,10 +48,28 @@ function AuthGate() {
 
   useEffect(() => {
     if (!backendAvailable) {
+      setLicenseChecking(false);
       setChecking(false);
       return;
     }
 
+    void licenseStatus()
+      .then((status) => {
+        setLicense(status);
+      })
+      .catch((error: unknown) => {
+        setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError"));
+      })
+      .finally(() => setLicenseChecking(false));
+  }, [backendAvailable, t]);
+
+  useEffect(() => {
+    if (!backendAvailable || licenseChecking || !license?.activated) {
+      setChecking(false);
+      return;
+    }
+
+    setChecking(true);
     void bootstrapStatus()
       .then((status) => {
         setNeedsFirstAdmin(status.needs_first_admin);
@@ -54,7 +78,13 @@ function AuthGate() {
         setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError"));
       })
       .finally(() => setChecking(false));
-  }, [backendAvailable, t]);
+  }, [backendAvailable, license?.activated, licenseChecking, t]);
+
+  async function handleActivateLicense() {
+    const nextLicense = await activateLicense(activationKey);
+    setLicense(nextLicense);
+    setStatusMessage(t("licenseActivationSuccess"));
+  }
 
   async function handleCreateFirstAdmin() {
     const user = await createFirstAdmin({
@@ -102,7 +132,7 @@ function AuthGate() {
     );
   }
 
-  if (checking) {
+  if (licenseChecking || checking) {
     return (
       <AuthSurface
         icon={<Activity aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
@@ -110,6 +140,33 @@ function AuthGate() {
         eyebrow={t("settingsSecurityEyebrow")}
       >
         <p className="text-sm text-alabaster-grey-500">{t("healthChecking")}</p>
+      </AuthSurface>
+    );
+  }
+
+  if (!license?.activated) {
+    return (
+      <AuthSurface
+        icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+        title={t("licenseLockedTitle")}
+        eyebrow={t("licenseLockedEyebrow")}
+      >
+        <div className="grid gap-3">
+          <p className="text-sm leading-6 text-alabaster-grey-500">{t("licenseLockedBody")}</p>
+          <div className="rounded-md border border-powder-blue-500/25 bg-ink-black-950 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">{t("licenseHardwareId")}</p>
+            <p className="mt-2 font-mono text-lg font-semibold text-white">{license?.hardware_id ?? "VD-0000-0000-0000"}</p>
+          </div>
+          <Input
+            placeholder={t("licenseActivationKey")}
+            value={activationKey}
+            onChange={(event) => setActivationKey(event.target.value)}
+          />
+          <Button type="button" onClick={() => void handleActivateLicense().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("licenseActivationError")))}>
+            {t("licenseActivate")}
+          </Button>
+          {statusMessage ? <p className="text-xs leading-5 text-alabaster-grey-500">{statusMessage}</p> : null}
+        </div>
       </AuthSurface>
     );
   }

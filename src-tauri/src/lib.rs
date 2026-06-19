@@ -8,6 +8,7 @@ mod db;
 mod files;
 mod health;
 mod integrations;
+mod license;
 mod patients;
 mod server;
 mod state;
@@ -23,6 +24,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             health::health_check,
+            commands::license_status,
+            commands::activate_license,
             commands::database_status,
             commands::upsert_test_patient,
             commands::search_patients,

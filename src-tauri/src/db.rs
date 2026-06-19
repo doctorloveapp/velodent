@@ -1,6 +1,7 @@
 use crate::{
     auth::{self, Role},
     integrations::google,
+    license,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -9,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 5;
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -373,6 +374,14 @@ pub struct ClinicalRecord {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct LicenseStatus {
+    pub hardware_id: String,
+    pub activated: bool,
+    pub email: Option<String>,
+    pub activated_at: Option<String>,
+}
+
 impl Database {
     pub fn open_default() -> DbResult<Self> {
         let path = default_database_path();
@@ -428,6 +437,70 @@ impl Database {
             key_source: self.key_source,
             uses_development_key: self.uses_development_key,
         })
+    }
+
+    pub fn license_status(&self) -> DbResult<LicenseStatus> {
+        let hardware_id = license::hardware_id();
+        let row = self
+            .conn
+            .query_row(
+                r#"
+                SELECT activation_key, email, activated_at
+                FROM enterprise_licenses
+                WHERE id = 1
+                "#,
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((activation_key, email, activated_at)) = row else {
+            return Ok(LicenseStatus {
+                hardware_id,
+                activated: false,
+                email: None,
+                activated_at: None,
+            });
+        };
+
+        let activated = license::verify_activation_key(&activation_key, &hardware_id).is_ok();
+        Ok(LicenseStatus {
+            hardware_id,
+            activated,
+            email: activated.then_some(email),
+            activated_at: activated.then_some(activated_at),
+        })
+    }
+
+    pub fn activate_license(&self, activation_key: &str) -> DbResult<LicenseStatus> {
+        let hardware_id = license::hardware_id();
+        let payload = license::verify_activation_key(activation_key, &hardware_id)
+            .map_err(|error| DbError::Sql(error.to_string()))?;
+        self.conn.execute(
+            r#"
+            INSERT INTO enterprise_licenses (id, hardware_id, email, activation_key)
+            VALUES (1, ?1, ?2, ?3)
+            ON CONFLICT(id) DO UPDATE SET
+                hardware_id = excluded.hardware_id,
+                email = excluded.email,
+                activation_key = excluded.activation_key,
+                activated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            params![hardware_id, payload.email, activation_key.trim()],
+        )?;
+
+        self.license_status()
+    }
+
+    pub fn has_valid_license(&self) -> DbResult<bool> {
+        Ok(self.license_status()?.activated)
     }
 
     pub fn bootstrap_status(&self) -> DbResult<BootstrapStatus> {
@@ -2610,7 +2683,7 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "sessions_and_granular_tooth_states"],
+        params![CURRENT_SCHEMA_VERSION, "enterprise_license_gate"],
     )?;
     Ok(())
 }
@@ -2937,6 +3010,16 @@ CREATE TABLE IF NOT EXISTS studio_settings (
 );
 
 INSERT OR IGNORE INTO studio_settings (id, chair_count) VALUES (1, 1);
+
+CREATE TABLE IF NOT EXISTS enterprise_licenses (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    hardware_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    activation_key TEXT NOT NULL,
+    activated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
 
 CREATE TABLE IF NOT EXISTS patients (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

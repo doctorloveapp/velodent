@@ -63,6 +63,13 @@ export interface GoogleAuthorizationUrl {
   scopes: string[];
 }
 
+export interface LicenseStatus {
+  hardware_id: string;
+  activated: boolean;
+  email: string | null;
+  activated_at: string | null;
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -75,6 +82,14 @@ export function isTauriRuntime() {
 
 export async function bootstrapStatus() {
   return invoke<BootstrapStatus>("bootstrap_status");
+}
+
+export async function licenseStatus() {
+  return invoke<LicenseStatus>("license_status");
+}
+
+export async function activateLicense(activation_key: string) {
+  return invoke<LicenseStatus>("activate_license", { request: { activation_key } });
 }
 
 export async function createFirstAdmin(request: {

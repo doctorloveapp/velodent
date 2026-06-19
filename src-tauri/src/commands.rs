@@ -4,8 +4,8 @@ use crate::{
         Appointment, AppointmentInput, AuthSession, AuthorizedDevice, AuthorizedGoogleAccount,
         BootstrapStatus, ChairConfig, ClinicalRecord, ClinicalRecordFilters, ClinicalService,
         CreateUserInput, DatabaseStatus, DeviceAuthorization, GoogleCalendarSyncStatus,
-        NewClinicalRecord, NewPatient, Patient, PatientTimelineEvent, StudioSettings,
-        StudioSettingsUpdate, ToothStatus, User,
+        LicenseStatus, NewClinicalRecord, NewPatient, Patient, PatientTimelineEvent,
+        StudioSettings, StudioSettingsUpdate, ToothStatus, User,
     },
     integrations::google::{self, GoogleAuthorizationUrl, GoogleOAuthStatus},
     state::AppState,
@@ -15,6 +15,7 @@ use tauri::State;
 
 #[tauri::command]
 pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, String> {
+    require_license(&state)?;
     state
         .database()?
         .status()
@@ -62,6 +63,11 @@ pub struct SearchPatientsRequest {
     session_token: String,
     query: String,
     limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActivateLicenseRequest {
+    activation_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -279,6 +285,7 @@ pub struct GoogleCalendarSyncRunResult {
 }
 
 fn require_session(state: &State<'_, AppState>, session_token: &str) -> Result<User, String> {
+    require_license(state)?;
     state
         .database()?
         .user_for_session(session_token)
@@ -294,8 +301,40 @@ fn require_admin_session(state: &State<'_, AppState>, session_token: &str) -> Re
     }
 }
 
+fn require_license(state: &State<'_, AppState>) -> Result<(), String> {
+    let licensed = state
+        .database()?
+        .has_valid_license()
+        .map_err(|error| error.to_string())?;
+    if licensed {
+        Ok(())
+    } else {
+        Err("software is not activated".to_owned())
+    }
+}
+
+#[tauri::command]
+pub fn license_status(state: State<'_, AppState>) -> Result<LicenseStatus, String> {
+    state
+        .database()?
+        .license_status()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn activate_license(
+    state: State<'_, AppState>,
+    request: ActivateLicenseRequest,
+) -> Result<LicenseStatus, String> {
+    state
+        .database()?
+        .activate_license(request.activation_key.trim())
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub fn bootstrap_status(state: State<'_, AppState>) -> Result<BootstrapStatus, String> {
+    require_license(&state)?;
     state
         .database()?
         .bootstrap_status()
@@ -307,6 +346,7 @@ pub fn create_first_admin(
     state: State<'_, AppState>,
     request: CreateFirstAdminRequest,
 ) -> Result<AuthSession, String> {
+    require_license(&state)?;
     let database = state.database()?;
     let user = database
         .create_first_admin(
@@ -322,6 +362,7 @@ pub fn create_first_admin(
 
 #[tauri::command]
 pub fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<AuthSession, String> {
+    require_license(&state)?;
     let database = state.database()?;
     let user = database
         .login(request.username.trim(), &request.password)
@@ -344,6 +385,7 @@ pub async fn exchange_google_login_code(
     state: State<'_, AppState>,
     request: ExchangeGoogleLoginCodeRequest,
 ) -> Result<AuthSession, String> {
+    require_license(&state)?;
     let token = google::exchange_authorization_code(request.code.trim())
         .await
         .map_err(|error| error.to_string())?;

@@ -5,6 +5,7 @@ dist-ssr/
 target/
 src-tauri/target/
 src-tauri/data/
+licensing-tools/
 *.log
 .env
 .env.local
