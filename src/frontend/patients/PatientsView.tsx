@@ -32,6 +32,7 @@ import {
   listRxAssets,
   openPatientRecord,
   patientTimeline,
+  readTsCns,
   rxAssetDataUrl,
   searchPatients,
   updatePatient,
@@ -213,6 +214,22 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
     await refreshPatients();
   }
 
+  async function handleReadTsCns() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+    const scanned = await readTsCns(currentUser.session_token);
+    setForm((current) => ({
+      ...current,
+      first_name: scanned.first_name,
+      last_name: scanned.last_name,
+      date_of_birth: scanned.date_of_birth,
+      tax_code: scanned.tax_code
+    }));
+    setStatusMessage(t("patientsTsScanned"));
+  }
+
   function handleNewPatient() {
     onPatientSelected(null);
     setForm(emptyPatientForm);
@@ -303,6 +320,14 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
                 {taxCodeValid ? t("patientsTaxCodeValid") : t("patientsTaxCodeInvalid")}
               </Badge>
               <div className="flex gap-2">
+                <Button
+                  disabled={!canUseClinicalData}
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void handleReadTsCns().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsTsScanError")))}
+                >
+                  {t("patientsScanTs")}
+                </Button>
                 {editing && selectedPatient ? (
                   <Button type="button" variant="secondary" onClick={() => void handleDelete()}>
                     <Trash2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />

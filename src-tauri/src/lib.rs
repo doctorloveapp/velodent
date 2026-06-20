@@ -14,6 +14,7 @@ mod patients;
 mod rx_acquisition;
 mod server;
 mod state;
+mod ts_cns;
 
 use tauri::Manager;
 
@@ -61,6 +62,7 @@ pub fn run() {
             commands::move_appointment,
             commands::update_appointment_status,
             commands::validate_tax_code,
+            commands::read_ts_cns,
             commands::create_patient,
             commands::update_patient,
             commands::delete_patient,

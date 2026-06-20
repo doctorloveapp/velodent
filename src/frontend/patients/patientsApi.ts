@@ -24,6 +24,13 @@ export interface PatientInput {
   address?: string;
 }
 
+export interface TsCnsPatientData {
+  last_name: string;
+  first_name: string;
+  date_of_birth: string;
+  tax_code: string;
+}
+
 export interface PatientTimelineEvent {
   action: string;
   created_at: string;
@@ -70,6 +77,10 @@ export async function ensureDevelopmentPatient(session_token: string) {
 
 export async function validateTaxCode(tax_code: string) {
   return invoke<boolean>("validate_tax_code", { request: { tax_code } });
+}
+
+export async function readTsCns(session_token: string) {
+  return invoke<TsCnsPatientData>("read_ts_cns", { request: { session_token } });
 }
 
 export async function createPatient(session_token: string, patient: PatientInput) {

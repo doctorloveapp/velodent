@@ -16,6 +16,7 @@ use crate::{
     },
     rx_acquisition::{MockRxAdapter, RxAcquisitionAdapter},
     state::AppState,
+    ts_cns::{self, TsCnsPatientData},
 };
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
@@ -776,6 +777,15 @@ pub async fn exchange_google_oauth_code(
 #[tauri::command]
 pub fn validate_tax_code(request: ValidateTaxCodeRequest) -> bool {
     crate::db::validate_tax_code(&request.tax_code)
+}
+
+#[tauri::command]
+pub fn read_ts_cns(
+    state: State<'_, AppState>,
+    request: ActorRequest,
+) -> Result<TsCnsPatientData, String> {
+    require_session(&state, &request.session_token)?;
+    ts_cns::read_ts_cns_from_mobile_nfc()
 }
 
 #[tauri::command]
