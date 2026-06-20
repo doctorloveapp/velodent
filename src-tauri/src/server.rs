@@ -19,6 +19,11 @@ pub mod lan {
         label: Option<String>,
     }
 
+    #[derive(Debug, Deserialize)]
+    struct PatientOpenRequest {
+        patient_id: i64,
+    }
+
     #[derive(Debug, Serialize)]
     struct ApiError {
         error: String,
@@ -113,12 +118,28 @@ pub mod lan {
             }
             ("GET", "/api/patients/search") => {
                 with_device_user(&headers, remote_ip, app, |state, _user| {
-                    let query = query.get("q").cloned().unwrap_or_default();
+                    let search_query = query.get("q").cloned().unwrap_or_default();
+                    let limit = query
+                        .get("limit")
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .unwrap_or(10)
+                        .clamp(1, 50);
                     let patients = state
                         .database()?
-                        .search_patients(&query, 10)
+                        .search_patients(&search_query, limit)
                         .map_err(|error| error.to_string())?;
                     Ok(json!(patients))
+                })
+            }
+            ("POST", "/api/patients/open") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = serde_json::from_str::<PatientOpenRequest>(body.trim())
+                        .map_err(|_| "invalid patient open body".to_owned())?;
+                    let patient = state
+                        .database()?
+                        .open_patient_record(user.id, request.patient_id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(patient))
                 })
             }
             ("GET", "/api/agenda/appointments") => {
@@ -265,25 +286,26 @@ pub mod lan {
     }
 
     fn percent_decode(value: &str) -> String {
-        let mut output = String::new();
+        let mut output = Vec::with_capacity(value.len());
         let bytes = value.as_bytes();
         let mut index = 0;
         while index < bytes.len() {
             if bytes[index] == b'%' && index + 2 < bytes.len() {
                 if let Ok(hex) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
-                    output.push(hex as char);
+                    output.push(hex);
                     index += 3;
                     continue;
                 }
             }
-            output.push(if bytes[index] == b'+' {
-                ' '
+            let byte = if bytes[index] == b'+' {
+                b' '
             } else {
-                bytes[index] as char
-            });
+                bytes[index]
+            };
+            output.push(byte);
             index += 1;
         }
-        output
+        String::from_utf8_lossy(&output).into_owned()
     }
 
     fn is_lan_ip(ip: IpAddr) -> bool {

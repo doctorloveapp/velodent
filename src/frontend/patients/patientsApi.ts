@@ -69,6 +69,13 @@ export function isTauriRuntime() {
 }
 
 export async function searchPatients(session_token: string, query: string, limit = 10) {
+  if (isLanSessionToken(session_token)) {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit)
+    });
+    return lanFetch<Patient[]>(`/api/patients/search?${params.toString()}`, fromLanSessionToken(session_token));
+  }
   return invoke<Patient[]>("search_patients", { request: { session_token, query, limit } });
 }
 
@@ -102,6 +109,13 @@ export async function deletePatient(session_token: string, patient_id: number) {
 }
 
 export async function openPatientRecord(session_token: string, patient_id: number) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<Patient>("/api/patients/open", fromLanSessionToken(session_token), {
+      body: JSON.stringify({ patient_id }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+  }
   return invoke<Patient>("open_patient_record", { request: { session_token, patient_id } });
 }
 

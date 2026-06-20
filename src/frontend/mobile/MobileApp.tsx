@@ -1,13 +1,15 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
 import { Button } from "@/frontend/shared/ui/button";
+import type { Patient } from "@/frontend/patients/patientsApi";
 import { MobileShell, type MobileRouteKey } from "./MobileShell";
 import { MobileClinical } from "./MobileClinical";
 import { MobileDashboard } from "./MobileDashboard";
 import { MobilePatientRegistration } from "./MobilePatientRegistration";
+import { MobilePatientSearch } from "./MobilePatientSearch";
 
 const LAST_MOBILE_ROUTE_STORAGE_KEY = "velodent:mobile-route";
 
@@ -55,12 +57,15 @@ const routeContent: Record<MobileRouteKey, RouteContent> = {
 export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
   const { t } = useL10n();
   const [clinicalMode, setClinicalMode] = useState<"clinical" | "orthodontics">("clinical");
+  const [activePatient, setActivePatient] = useState<Patient | null>(null);
   const [activeRoute, setActiveRoute] = useState<MobileRouteKey>(() => {
     const stored = window.localStorage.getItem(LAST_MOBILE_ROUTE_STORAGE_KEY);
     return isMobileRoute(stored) ? stored : "dashboard";
   });
   const activeContent = routeContent[activeRoute];
   const title = t(activeContent.titleKey);
+  const activePatientName = activePatient ? `${activePatient.first_name} ${activePatient.last_name}` : undefined;
+  const handleMissingPatient = useCallback(() => setActiveRoute("searchPatient"), []);
 
   useEffect(() => {
     window.localStorage.setItem(LAST_MOBILE_ROUTE_STORAGE_KEY, activeRoute);
@@ -87,6 +92,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
           </div>
         ) : undefined
       }
+      patientName={activeRoute === "clinical" ? activePatientName : undefined}
       title={title}
       onLogout={onLogout}
       onRouteChange={setActiveRoute}
@@ -103,9 +109,19 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
             <MobileDashboard onRouteChange={setActiveRoute} />
           ) : activeRoute === "newPatient" ? (
             <MobilePatientRegistration sessionToken={currentUser.session_token ?? ""} />
+          ) : activeRoute === "searchPatient" ? (
+            <MobilePatientSearch
+              sessionToken={currentUser.session_token ?? ""}
+              onPatientSelect={(patient) => {
+                setActivePatient(patient);
+                setActiveRoute("clinical");
+              }}
+            />
           ) : activeRoute === "clinical" ? (
             <MobileClinical
+              activePatientId={activePatient?.id ?? null}
               mode={clinicalMode}
+              onMissingPatient={handleMissingPatient}
               sessionToken={currentUser.session_token ?? ""}
             />
           ) : (

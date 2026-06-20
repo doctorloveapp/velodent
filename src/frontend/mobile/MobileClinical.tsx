@@ -1,6 +1,6 @@
 import { Check, Plus } from "lucide-react";
 import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listClinicalServices, type ClinicalService } from "@/frontend/clinical/clinicalApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
@@ -23,19 +23,43 @@ const quickActionCategories: Record<QuickAction, string> = {
 };
 
 interface MobileClinicalProps {
+  activePatientId: number | null;
   mode: ClinicalMobileMode;
+  onMissingPatient: () => void;
   sessionToken: string;
 }
 
-export function MobileClinical({ mode, sessionToken }: MobileClinicalProps) {
+interface BridgeArcLayout {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
+}
+
+export function MobileClinical({
+  activePatientId,
+  mode,
+  onMissingPatient,
+  sessionToken
+}: MobileClinicalProps) {
   const { t } = useL10n();
+  const archRef = useRef<HTMLDivElement | null>(null);
+  const toothRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const [services, setServices] = useState<ClinicalService[]>([]);
   const [arch, setArch] = useState<ArchMode>("upper");
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [activeAction, setActiveAction] = useState<QuickAction | null>(null);
+  const [bridgeLayout, setBridgeLayout] = useState<BridgeArcLayout | null>(null);
   const teeth = arch === "upper" ? upperTeeth : lowerTeeth;
   const bridgePreview = calculateBridgePreview(selectedTeeth);
+  const bridgeKey = bridgePreview?.includedTeeth.join("-") ?? "";
+
+  useEffect(() => {
+    if (!activePatientId) {
+      onMissingPatient();
+    }
+  }, [activePatientId, onMissingPatient]);
 
   useEffect(() => {
     if (!sessionToken) {
@@ -46,7 +70,48 @@ export function MobileClinical({ mode, sessionToken }: MobileClinicalProps) {
       .catch(() => setServices([]));
   }, [sessionToken]);
 
+  useLayoutEffect(() => {
+    const includedTeeth = bridgeKey ? bridgeKey.split("-").map(Number) : [];
+    if (includedTeeth.length < 2 || !archRef.current) {
+      setBridgeLayout(null);
+      return;
+    }
+
+    function measureBridge() {
+      if (!archRef.current) {
+        return;
+      }
+      const containerRect = archRef.current.getBoundingClientRect();
+      const rects = includedTeeth
+        .map((tooth) => toothRefs.current[tooth]?.getBoundingClientRect())
+        .filter((rect): rect is DOMRect => Boolean(rect));
+
+      if (rects.length < 2) {
+        setBridgeLayout(null);
+        return;
+      }
+
+      const left = Math.min(...rects.map((rect) => rect.left)) - containerRect.left;
+      const right = Math.max(...rects.map((rect) => rect.right)) - containerRect.left;
+      const top = Math.max(0, Math.min(...rects.map((rect) => rect.top)) - containerRect.top - 30);
+
+      setBridgeLayout({
+        height: 34,
+        left,
+        top,
+        width: Math.max(48, right - left)
+      });
+    }
+
+    measureBridge();
+    window.addEventListener("resize", measureBridge);
+    return () => window.removeEventListener("resize", measureBridge);
+  }, [arch, bridgeKey]);
+
   function handleToothPress(tooth: number) {
+    if (!activePatientId) {
+      return;
+    }
     setActiveAction(null);
     if (selectionMode) {
       setSelectedTeeth((current) => {
@@ -58,6 +123,14 @@ export function MobileClinical({ mode, sessionToken }: MobileClinicalProps) {
       return;
     }
     setSelectedTeeth([tooth]);
+  }
+
+  if (!activePatientId) {
+    return (
+      <section className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
+        <p className="text-sm leading-6 text-alabaster-grey-500">{t("mobileClinicalSelectPatientRedirect")}</p>
+      </section>
+    );
   }
 
   if (mode === "orthodontics") {
@@ -107,9 +180,9 @@ export function MobileClinical({ mode, sessionToken }: MobileClinicalProps) {
             <span className="text-xs font-medium text-powder-blue-500">{t("mobileSelectionMode")}</span>
           ) : null}
         </div>
-        <div className="relative grid grid-cols-8 gap-2 pt-6">
-          {bridgePreview ? (
-            <BridgeArc teeth={teeth} includedTeeth={bridgePreview.includedTeeth} />
+        <div ref={archRef} className="relative grid grid-cols-8 gap-2 overflow-visible pt-8">
+          {bridgePreview && bridgeLayout ? (
+            <BridgeArc layout={bridgeLayout} />
           ) : null}
           {teeth.map((tooth) => {
             const selected = selectedTeeth.includes(tooth);
@@ -117,8 +190,11 @@ export function MobileClinical({ mode, sessionToken }: MobileClinicalProps) {
             return (
               <motion.button
                 key={tooth}
+                ref={(element) => {
+                  toothRefs.current[tooth] = element;
+                }}
                 className={[
-                  "relative flex h-14 flex-col items-center justify-center gap-0.5 rounded-md border text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-powder-blue-500/70",
+                  "relative z-20 flex h-14 flex-col items-center justify-center gap-0.5 rounded-md border text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-powder-blue-500/70",
                   selected
                     ? "border-powder-blue-500 bg-powder-blue-950 text-white"
                     : included
@@ -145,11 +221,17 @@ export function MobileClinical({ mode, sessionToken }: MobileClinicalProps) {
             {t("mobileBridgePreview")}: {bridgePreview.unitCount}
           </p>
         ) : null}
+        {selectedTeeth.length === 0 ? (
+          <p className="mt-3 text-sm leading-6 text-alabaster-grey-500">
+            {t("mobileClinicalNoDataInstruction")}
+          </p>
+        ) : null}
       </div>
 
       {selectedTeeth.length > 0 && !selectionMode ? (
         <QuickActions
           activeAction={activeAction}
+          activePatientId={activePatientId}
           services={services}
           useBridge={selectedTeeth.length >= 2}
           onAction={setActiveAction}
@@ -173,12 +255,14 @@ export function MobileClinical({ mode, sessionToken }: MobileClinicalProps) {
 
 function QuickActions({
   activeAction,
+  activePatientId,
   services,
   useBridge,
   onAction,
   onSelectionMode
 }: {
   activeAction: QuickAction | null;
+  activePatientId: number;
   services: ClinicalService[];
   useBridge: boolean;
   onAction: (action: QuickAction) => void;
@@ -206,7 +290,12 @@ function QuickActions({
             type="button"
             variant={activeAction === action.key ? "navActive" : "secondary"}
             className="h-14 justify-center text-sm"
-            onClick={() => onAction(action.key)}
+            onClick={() => {
+              if (!activePatientId) {
+                return;
+              }
+              onAction(action.key);
+            }}
           >
             {action.label}
           </Button>
@@ -280,27 +369,22 @@ function MobileToothGlyph({ toothNumber }: { toothNumber: number }) {
   );
 }
 
-function BridgeArc({ includedTeeth, teeth }: { includedTeeth: number[]; teeth: number[] }) {
-  const includedIndexes = includedTeeth
-    .map((tooth) => teeth.indexOf(tooth))
-    .filter((index) => index >= 0);
-  if (includedIndexes.length < 2) {
-    return null;
-  }
-  const min = Math.min(...includedIndexes);
-  const max = Math.max(...includedIndexes);
-  const left = `${String((min / 8) * 100)}%`;
-  const width = `${String(((max - min + 1) / 8) * 100)}%`;
+function BridgeArc({ layout }: { layout: BridgeArcLayout }) {
   return (
     <svg
       aria-hidden="true"
-      className="pointer-events-none absolute top-0 z-10 h-8 text-powder-blue-500"
-      style={{ left, width }}
-      viewBox="0 0 100 32"
+      className="pointer-events-none absolute z-10 text-powder-blue-500"
+      style={{
+        height: layout.height,
+        left: layout.left,
+        top: layout.top,
+        width: layout.width
+      }}
+      viewBox="0 0 100 34"
       preserveAspectRatio="none"
     >
       <path
-        d="M4 28 C 24 2, 76 2, 96 28"
+        d="M4 30 C 24 2, 76 2, 96 30"
         fill="none"
         stroke="currentColor"
         strokeLinecap="round"
