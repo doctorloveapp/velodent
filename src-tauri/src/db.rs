@@ -30,6 +30,7 @@ pub enum DbError {
     InvalidAppointmentTimeRange,
     AppointmentConflict,
     AgendaBlocked,
+    InvalidFinancialState(String),
     GoogleCalendarNotConnected,
     InvalidCredentials,
     BootstrapAlreadyCompleted,
@@ -59,6 +60,7 @@ impl std::fmt::Display for DbError {
             Self::InvalidAppointmentTimeRange => write!(f, "invalid appointment time range"),
             Self::AppointmentConflict => write!(f, "appointment conflicts on the same chair"),
             Self::AgendaBlocked => write!(f, "appointment overlaps a closed agenda block"),
+            Self::InvalidFinancialState(message) => write!(f, "invalid financial state: {message}"),
             Self::GoogleCalendarNotConnected => write!(f, "google calendar is not connected"),
             Self::InvalidCredentials => write!(f, "invalid credentials"),
             Self::BootstrapAlreadyCompleted => write!(f, "first admin already exists"),
@@ -434,6 +436,88 @@ pub struct RxAsset {
     pub dicom_metadata_json: String,
     pub acquired_at: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QuoteLine {
+    pub id: i64,
+    pub quote_id: i64,
+    pub clinical_record_id: Option<i64>,
+    pub service_id: Option<i64>,
+    pub description: String,
+    pub quantity: i64,
+    pub unit_price_cents: i64,
+    pub total_cents: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Quote {
+    pub id: i64,
+    pub patient_id: i64,
+    pub title: String,
+    pub status: String,
+    pub gross_total_cents: i64,
+    pub discount_cents: i64,
+    pub net_total_cents: i64,
+    pub accepted_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub lines: Vec<QuoteLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InvoiceLine {
+    pub id: i64,
+    pub invoice_id: i64,
+    pub quote_line_id: Option<i64>,
+    pub description: String,
+    pub quantity: i64,
+    pub unit_price_cents: i64,
+    pub total_cents: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Invoice {
+    pub id: i64,
+    pub patient_id: i64,
+    pub quote_id: Option<i64>,
+    pub invoice_number: i64,
+    pub invoice_year: i64,
+    pub issued_at: String,
+    pub total_cents: i64,
+    pub paid_cents: i64,
+    pub payment_status: String,
+    pub stamp_duty_paid: bool,
+    pub health_system_status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub lines: Vec<InvoiceLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Payment {
+    pub id: i64,
+    pub invoice_id: i64,
+    pub method: String,
+    pub amount_cents: i64,
+    pub sumup_transaction_id: Option<String>,
+    pub status: String,
+    pub paid_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GeneratedDocument {
+    pub file_asset_id: i64,
+    pub relative_path: String,
+    pub mime_type: String,
+    pub sha256_hex: String,
+    pub size_bytes: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1327,6 +1411,581 @@ impl Database {
         )?;
         self.get_clinical_service(service_id)?
             .ok_or(DbError::NotFound)
+    }
+
+    pub fn list_quotes(&self, actor_user_id: i64, patient_id: i64) -> DbResult<Vec<Quote>> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id
+            FROM quotes
+            WHERE patient_id = ?1
+            ORDER BY created_at DESC, id DESC
+            "#,
+        )?;
+        let ids = statement
+            .query_map([patient_id], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| self.get_quote(id)?.ok_or(DbError::NotFound))
+            .collect()
+    }
+
+    pub fn get_quote_for_document(&self, actor_user_id: i64, quote_id: i64) -> DbResult<Quote> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_quote(quote_id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn create_quote_from_ready_records(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+        title: &str,
+    ) -> DbResult<Quote> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        let title = if title.trim().is_empty() {
+            "Preventivo odontoiatrico"
+        } else {
+            title.trim()
+        };
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            let mut records = self.conn.prepare(
+                r#"
+                SELECT
+                    cr.id,
+                    cr.service_id,
+                    COALESCE(sc.name, cr.pathology_description, 'Prestazione clinica'),
+                    COALESCE(sc.base_price_cents, 0)
+                FROM clinical_records cr
+                LEFT JOIN clinical_services_catalog sc ON sc.id = cr.service_id
+                WHERE cr.patient_id = ?1
+                  AND cr.status = 'diagnosed'
+                  AND cr.ready_for_quote = 1
+                ORDER BY cr.created_at ASC, cr.id ASC
+                "#,
+            )?;
+            let rows = records
+                .query_map([patient_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(records);
+
+            if rows.is_empty() {
+                return Err(DbError::InvalidFinancialState(
+                    "no diagnosed ready-for-quote records found".to_owned(),
+                ));
+            }
+
+            let gross_total_cents = rows.iter().try_fold(0_i64, |acc, (_, _, _, price)| {
+                checked_add_cents(acc, *price)
+            })?;
+            self.conn.execute(
+                r#"
+                INSERT INTO quotes (
+                    patient_id,
+                    title,
+                    status,
+                    gross_total_cents,
+                    discount_cents
+                )
+                VALUES (?1, ?2, 'draft', ?3, 0)
+                "#,
+                params![patient_id, title, gross_total_cents],
+            )?;
+            let quote_id = self.conn.last_insert_rowid();
+
+            for (record_id, service_id, description, unit_price_cents) in rows {
+                self.conn.execute(
+                    r#"
+                    INSERT INTO quote_lines (
+                        quote_id,
+                        clinical_record_id,
+                        service_id,
+                        description,
+                        quantity,
+                        unit_price_cents,
+                        total_cents
+                    )
+                    VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)
+                    "#,
+                    params![
+                        quote_id,
+                        record_id,
+                        service_id,
+                        description,
+                        unit_price_cents
+                    ],
+                )?;
+                self.conn.execute(
+                    r#"
+                    UPDATE clinical_records
+                    SET
+                        status = 'in_quote',
+                        ready_for_quote = 0,
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id = ?1
+                    "#,
+                    [record_id],
+                )?;
+            }
+
+            self.insert_patient_audit(
+                actor_user_id,
+                patient_id,
+                "FINANCIAL_TRANSACTION",
+                &serde_json::json!({
+                    "operation": "quote_created_from_diagnosis",
+                    "quote_id": quote_id,
+                    "gross_total_cents": gross_total_cents,
+                })
+                .to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(quote_id)
+        })();
+
+        match result {
+            Ok(quote_id) => self.get_quote(quote_id)?.ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn add_quote_line(
+        &self,
+        actor_user_id: i64,
+        quote_id: i64,
+        service_id: i64,
+        quantity: i64,
+    ) -> DbResult<Quote> {
+        self.assert_active_user(actor_user_id)?;
+        if quantity <= 0 {
+            return Err(DbError::InvalidFinancialState(
+                "quote line quantity must be positive".to_owned(),
+            ));
+        }
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        self.assert_quote_editable(&quote)?;
+        let service = self
+            .get_clinical_service(service_id)?
+            .ok_or(DbError::NotFound)?;
+        let total_cents = checked_mul_cents(service.base_price_cents, quantity)?;
+
+        self.conn.execute(
+            r#"
+            INSERT INTO quote_lines (
+                quote_id,
+                clinical_record_id,
+                service_id,
+                description,
+                quantity,
+                unit_price_cents,
+                total_cents
+            )
+            VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            params![
+                quote_id,
+                service_id,
+                service.name,
+                quantity,
+                service.base_price_cents,
+                total_cents
+            ],
+        )?;
+        self.recalculate_quote_totals(quote_id)?;
+        self.insert_patient_audit(
+            actor_user_id,
+            quote.patient_id,
+            "FINANCIAL_TRANSACTION",
+            &serde_json::json!({
+                "operation": "quote_line_added",
+                "quote_id": quote_id,
+                "service_id": service_id,
+                "quantity": quantity,
+                "total_cents": total_cents,
+            })
+            .to_string(),
+        )?;
+        self.get_quote(quote_id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn update_quote_discount(
+        &self,
+        actor_user_id: i64,
+        quote_id: i64,
+        discount_cents: i64,
+    ) -> DbResult<Quote> {
+        self.assert_active_user(actor_user_id)?;
+        if discount_cents < 0 {
+            return Err(DbError::InvalidFinancialState(
+                "discount cannot be negative".to_owned(),
+            ));
+        }
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        self.assert_quote_editable(&quote)?;
+        if discount_cents > quote.gross_total_cents {
+            return Err(DbError::InvalidFinancialState(
+                "discount cannot exceed gross total".to_owned(),
+            ));
+        }
+        self.conn.execute(
+            r#"
+            UPDATE quotes
+            SET
+                discount_cents = ?1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2
+            "#,
+            params![discount_cents, quote_id],
+        )?;
+        self.insert_patient_audit(
+            actor_user_id,
+            quote.patient_id,
+            "FINANCIAL_TRANSACTION",
+            &serde_json::json!({
+                "operation": "quote_discount_updated",
+                "quote_id": quote_id,
+                "discount_cents": discount_cents,
+            })
+            .to_string(),
+        )?;
+        self.get_quote(quote_id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn update_quote_status(
+        &self,
+        actor_user_id: i64,
+        quote_id: i64,
+        status: &str,
+    ) -> DbResult<Quote> {
+        self.assert_active_user(actor_user_id)?;
+        let status = normalize_quote_status(status)?;
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        if quote.status != "draft" {
+            return Err(DbError::InvalidFinancialState(
+                "quote status is already final".to_owned(),
+            ));
+        }
+        let accepted_at_expression = if status == "accepted" {
+            "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+        } else {
+            "NULL"
+        };
+        self.conn.execute(
+            &format!(
+                r#"
+                UPDATE quotes
+                SET
+                    status = ?1,
+                    accepted_at = {accepted_at_expression},
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?2
+                "#
+            ),
+            params![status, quote_id],
+        )?;
+        self.insert_patient_audit(
+            actor_user_id,
+            quote.patient_id,
+            "FINANCIAL_TRANSACTION",
+            &serde_json::json!({
+                "operation": "quote_status_updated",
+                "quote_id": quote_id,
+                "status": status,
+            })
+            .to_string(),
+        )?;
+        self.get_quote(quote_id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn list_invoices(&self, actor_user_id: i64, patient_id: i64) -> DbResult<Vec<Invoice>> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id
+            FROM invoices
+            WHERE patient_id = ?1
+            ORDER BY invoice_year DESC, invoice_number DESC
+            "#,
+        )?;
+        let ids = statement
+            .query_map([patient_id], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| self.get_invoice(id)?.ok_or(DbError::NotFound))
+            .collect()
+    }
+
+    pub fn get_invoice_for_document(
+        &self,
+        actor_user_id: i64,
+        invoice_id: i64,
+    ) -> DbResult<Invoice> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_invoice(invoice_id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn create_invoice_from_quote(
+        &self,
+        actor_user_id: i64,
+        quote_id: i64,
+    ) -> DbResult<Invoice> {
+        self.assert_active_user(actor_user_id)?;
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        if quote.status != "accepted" {
+            return Err(DbError::InvalidFinancialState(
+                "quote must be accepted before invoicing".to_owned(),
+            ));
+        }
+        if quote.lines.is_empty() {
+            return Err(DbError::InvalidFinancialState(
+                "quote has no lines".to_owned(),
+            ));
+        }
+        if self.invoice_for_quote(quote_id)?.is_some() {
+            return Err(DbError::InvalidFinancialState(
+                "quote already has an invoice".to_owned(),
+            ));
+        }
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            let invoice_year: i64 = self.conn.query_row(
+                "SELECT CAST(strftime('%Y', 'now') AS INTEGER)",
+                [],
+                |row| row.get(0),
+            )?;
+            let next_number: i64 = self.conn.query_row(
+                r#"
+                SELECT COALESCE(MAX(invoice_number), 0) + 1
+                FROM invoices
+                WHERE invoice_year = ?1
+                "#,
+                [invoice_year],
+                |row| row.get(0),
+            )?;
+            self.conn.execute(
+                r#"
+                INSERT INTO invoices (
+                    patient_id,
+                    quote_id,
+                    invoice_number,
+                    invoice_year,
+                    issued_at,
+                    total_cents
+                )
+                VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?5)
+                "#,
+                params![
+                    quote.patient_id,
+                    quote.id,
+                    next_number,
+                    invoice_year,
+                    quote.net_total_cents
+                ],
+            )?;
+            let invoice_id = self.conn.last_insert_rowid();
+            for line in &quote.lines {
+                self.conn.execute(
+                    r#"
+                    INSERT INTO invoice_lines (
+                        invoice_id,
+                        quote_line_id,
+                        description,
+                        quantity,
+                        unit_price_cents,
+                        total_cents
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    "#,
+                    params![
+                        invoice_id,
+                        line.id,
+                        line.description,
+                        line.quantity,
+                        line.unit_price_cents,
+                        line.total_cents
+                    ],
+                )?;
+            }
+            self.insert_patient_audit(
+                actor_user_id,
+                quote.patient_id,
+                "FINANCIAL_TRANSACTION",
+                &serde_json::json!({
+                    "operation": "invoice_issued",
+                    "quote_id": quote_id,
+                    "invoice_id": invoice_id,
+                    "invoice_number": next_number,
+                    "invoice_year": invoice_year,
+                    "total_cents": quote.net_total_cents,
+                })
+                .to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(invoice_id)
+        })();
+
+        match result {
+            Ok(invoice_id) => self.get_invoice(invoice_id)?.ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn register_payment(
+        &self,
+        actor_user_id: i64,
+        invoice_id: i64,
+        method: &str,
+        amount_cents: i64,
+        sumup_transaction_id: Option<&str>,
+        status: &str,
+    ) -> DbResult<Payment> {
+        self.assert_active_user(actor_user_id)?;
+        let method = normalize_payment_method(method)?;
+        let status = normalize_payment_status(status)?;
+        if amount_cents <= 0 {
+            return Err(DbError::InvalidFinancialState(
+                "payment amount must be positive".to_owned(),
+            ));
+        }
+        let invoice = self.get_invoice(invoice_id)?.ok_or(DbError::NotFound)?;
+        let balance = invoice.total_cents - invoice.paid_cents;
+        if amount_cents > balance && status == "success" {
+            return Err(DbError::InvalidFinancialState(
+                "payment exceeds invoice balance".to_owned(),
+            ));
+        }
+        self.conn.execute(
+            r#"
+            INSERT INTO payments (
+                invoice_id,
+                method,
+                amount_cents,
+                sumup_transaction_id,
+                status,
+                paid_at
+            )
+            VALUES (
+                ?1,
+                ?2,
+                ?3,
+                ?4,
+                ?5,
+                CASE WHEN ?5 = 'success' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END
+            )
+            "#,
+            params![
+                invoice_id,
+                method,
+                amount_cents,
+                sumup_transaction_id,
+                status
+            ],
+        )?;
+        let payment_id = self.conn.last_insert_rowid();
+        self.insert_patient_audit(
+            actor_user_id,
+            invoice.patient_id,
+            "FINANCIAL_TRANSACTION",
+            &serde_json::json!({
+                "operation": "payment_registered",
+                "invoice_id": invoice_id,
+                "payment_id": payment_id,
+                "method": method,
+                "amount_cents": amount_cents,
+                "status": status,
+            })
+            .to_string(),
+        )?;
+        self.get_payment(payment_id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn invoice_balance_cents(&self, actor_user_id: i64, invoice_id: i64) -> DbResult<i64> {
+        self.assert_active_user(actor_user_id)?;
+        let invoice = self.get_invoice(invoice_id)?.ok_or(DbError::NotFound)?;
+        Ok(invoice.total_cents - invoice.paid_cents)
+    }
+
+    pub fn register_generated_document(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+        file_kind: &str,
+        relative_path: &str,
+        mime_type: &str,
+        sha256_hex: &str,
+        size_bytes: i64,
+        metadata_json: &str,
+    ) -> DbResult<GeneratedDocument> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        if !matches!(file_kind, "quote" | "invoice") {
+            return Err(DbError::InvalidFinancialState(
+                "generated financial document kind is not supported".to_owned(),
+            ));
+        }
+        self.conn.execute(
+            r#"
+            INSERT INTO file_assets (
+                patient_id,
+                relative_path,
+                file_kind,
+                mime_type,
+                sha256_hex,
+                size_bytes,
+                metadata_json,
+                created_by_user_id
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+            params![
+                patient_id,
+                relative_path,
+                file_kind,
+                mime_type,
+                sha256_hex,
+                size_bytes,
+                metadata_json,
+                actor_user_id
+            ],
+        )?;
+        let file_asset_id = self.conn.last_insert_rowid();
+        self.insert_patient_audit(
+            actor_user_id,
+            patient_id,
+            "FINANCIAL_TRANSACTION",
+            &serde_json::json!({
+                "operation": "financial_pdf_generated",
+                "file_kind": file_kind,
+                "file_asset_id": file_asset_id,
+            })
+            .to_string(),
+        )?;
+        Ok(GeneratedDocument {
+            file_asset_id,
+            relative_path: relative_path.to_owned(),
+            mime_type: mime_type.to_owned(),
+            sha256_hex: sha256_hex.to_owned(),
+            size_bytes,
+        })
     }
 
     pub fn get_tooth_statuses(
@@ -2631,6 +3290,280 @@ impl Database {
             .map_err(DbError::from)
     }
 
+    fn get_quote(&self, id: i64) -> DbResult<Option<Quote>> {
+        let header = self
+            .conn
+            .query_row(
+                r#"
+                SELECT
+                    id,
+                    patient_id,
+                    title,
+                    status,
+                    gross_total_cents,
+                    discount_cents,
+                    accepted_at,
+                    created_at,
+                    updated_at
+                FROM quotes
+                WHERE id = ?1
+                "#,
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((
+            id,
+            patient_id,
+            title,
+            status,
+            gross_total_cents,
+            discount_cents,
+            accepted_at,
+            created_at,
+            updated_at,
+        )) = header
+        else {
+            return Ok(None);
+        };
+
+        let lines = self.quote_lines(id)?;
+        Ok(Some(Quote {
+            id,
+            patient_id,
+            title,
+            status,
+            gross_total_cents,
+            discount_cents,
+            net_total_cents: net_total_cents(gross_total_cents, discount_cents)?,
+            accepted_at,
+            created_at,
+            updated_at,
+            lines,
+        }))
+    }
+
+    fn quote_lines(&self, quote_id: i64) -> DbResult<Vec<QuoteLine>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                id,
+                quote_id,
+                clinical_record_id,
+                service_id,
+                description,
+                quantity,
+                unit_price_cents,
+                total_cents,
+                created_at,
+                updated_at
+            FROM quote_lines
+            WHERE quote_id = ?1
+            ORDER BY id ASC
+            "#,
+        )?;
+        let lines = statement
+            .query_map([quote_id], quote_line_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(lines)
+    }
+
+    fn recalculate_quote_totals(&self, quote_id: i64) -> DbResult<()> {
+        let gross_total_cents: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(total_cents), 0) FROM quote_lines WHERE quote_id = ?1",
+            [quote_id],
+            |row| row.get(0),
+        )?;
+        let discount_cents: i64 = self.conn.query_row(
+            "SELECT discount_cents FROM quotes WHERE id = ?1",
+            [quote_id],
+            |row| row.get(0),
+        )?;
+        if discount_cents > gross_total_cents {
+            return Err(DbError::InvalidFinancialState(
+                "discount cannot exceed gross total".to_owned(),
+            ));
+        }
+        self.conn.execute(
+            r#"
+            UPDATE quotes
+            SET
+                gross_total_cents = ?1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2
+            "#,
+            params![gross_total_cents, quote_id],
+        )?;
+        Ok(())
+    }
+
+    fn assert_quote_editable(&self, quote: &Quote) -> DbResult<()> {
+        if quote.status == "draft" {
+            Ok(())
+        } else {
+            Err(DbError::InvalidFinancialState(
+                "accepted or rejected quotes are locked".to_owned(),
+            ))
+        }
+    }
+
+    fn invoice_for_quote(&self, quote_id: i64) -> DbResult<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT id FROM invoices WHERE quote_id = ?1",
+                [quote_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn get_invoice(&self, id: i64) -> DbResult<Option<Invoice>> {
+        let header = self
+            .conn
+            .query_row(
+                r#"
+                SELECT
+                    invoices.id,
+                    invoices.patient_id,
+                    invoices.quote_id,
+                    invoices.invoice_number,
+                    invoices.invoice_year,
+                    invoices.issued_at,
+                    invoices.total_cents,
+                    COALESCE((
+                        SELECT SUM(payments.amount_cents)
+                        FROM payments
+                        WHERE payments.invoice_id = invoices.id
+                          AND payments.status = 'success'
+                    ), 0) AS paid_cents,
+                    invoices.stamp_duty_paid,
+                    invoices.health_system_status,
+                    invoices.created_at,
+                    invoices.updated_at
+                FROM invoices
+                WHERE invoices.id = ?1
+                "#,
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((
+            id,
+            patient_id,
+            quote_id,
+            invoice_number,
+            invoice_year,
+            issued_at,
+            total_cents,
+            paid_cents,
+            stamp_duty_paid,
+            health_system_status,
+            created_at,
+            updated_at,
+        )) = header
+        else {
+            return Ok(None);
+        };
+
+        let lines = self.invoice_lines(id)?;
+        Ok(Some(Invoice {
+            id,
+            patient_id,
+            quote_id,
+            invoice_number,
+            invoice_year,
+            issued_at,
+            total_cents,
+            paid_cents,
+            payment_status: invoice_payment_status(total_cents, paid_cents),
+            stamp_duty_paid: stamp_duty_paid == 1,
+            health_system_status,
+            created_at,
+            updated_at,
+            lines,
+        }))
+    }
+
+    fn invoice_lines(&self, invoice_id: i64) -> DbResult<Vec<InvoiceLine>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                id,
+                invoice_id,
+                quote_line_id,
+                description,
+                quantity,
+                unit_price_cents,
+                total_cents,
+                created_at,
+                updated_at
+            FROM invoice_lines
+            WHERE invoice_id = ?1
+            ORDER BY id ASC
+            "#,
+        )?;
+        let lines = statement
+            .query_map([invoice_id], invoice_line_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(lines)
+    }
+
+    fn get_payment(&self, id: i64) -> DbResult<Option<Payment>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                    id,
+                    invoice_id,
+                    method,
+                    amount_cents,
+                    sumup_transaction_id,
+                    status,
+                    paid_at,
+                    created_at,
+                    updated_at
+                FROM payments
+                WHERE id = ?1
+                "#,
+                [id],
+                payment_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
     fn get_tooth_status(
         &self,
         patient_id: i64,
@@ -3170,6 +4103,70 @@ fn normalize_appointment_status(status: &str) -> DbResult<&'static str> {
     }
 }
 
+fn normalize_quote_status(status: &str) -> DbResult<&'static str> {
+    match status.trim() {
+        "draft" => Ok("draft"),
+        "accepted" => Ok("accepted"),
+        "rejected" => Ok("rejected"),
+        value => Err(DbError::InvalidFinancialState(format!(
+            "invalid quote status {value}"
+        ))),
+    }
+}
+
+fn normalize_payment_method(method: &str) -> DbResult<&'static str> {
+    match method.trim() {
+        "sumup_pos" => Ok("sumup_pos"),
+        "sumup_link" => Ok("sumup_link"),
+        "cash" => Ok("cash"),
+        "bank_transfer" => Ok("bank_transfer"),
+        value => Err(DbError::InvalidFinancialState(format!(
+            "invalid payment method {value}"
+        ))),
+    }
+}
+
+fn normalize_payment_status(status: &str) -> DbResult<&'static str> {
+    match status.trim() {
+        "pending" => Ok("pending"),
+        "success" => Ok("success"),
+        "failed" => Ok("failed"),
+        value => Err(DbError::InvalidFinancialState(format!(
+            "invalid payment status {value}"
+        ))),
+    }
+}
+
+fn checked_add_cents(left: i64, right: i64) -> DbResult<i64> {
+    left.checked_add(right)
+        .ok_or_else(|| DbError::InvalidFinancialState("financial total overflow".to_owned()))
+}
+
+fn checked_mul_cents(unit_price_cents: i64, quantity: i64) -> DbResult<i64> {
+    unit_price_cents
+        .checked_mul(quantity)
+        .ok_or_else(|| DbError::InvalidFinancialState("financial total overflow".to_owned()))
+}
+
+fn net_total_cents(gross_total_cents: i64, discount_cents: i64) -> DbResult<i64> {
+    if discount_cents > gross_total_cents {
+        return Err(DbError::InvalidFinancialState(
+            "discount cannot exceed gross total".to_owned(),
+        ));
+    }
+    Ok(gross_total_cents - discount_cents)
+}
+
+fn invoice_payment_status(total_cents: i64, paid_cents: i64) -> String {
+    if paid_cents <= 0 {
+        "pending".to_owned()
+    } else if paid_cents >= total_cents {
+        "paid".to_owned()
+    } else {
+        "partial".to_owned()
+    }
+}
+
 fn sanitize_sync_error(error_message: &str) -> String {
     error_message
         .chars()
@@ -3377,6 +4374,49 @@ fn clinical_service_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Clinic
         category: row.get(3)?,
         base_price_cents: row.get(4)?,
         active: active == 1,
+    })
+}
+
+fn quote_line_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<QuoteLine> {
+    Ok(QuoteLine {
+        id: row.get(0)?,
+        quote_id: row.get(1)?,
+        clinical_record_id: row.get(2)?,
+        service_id: row.get(3)?,
+        description: row.get(4)?,
+        quantity: row.get(5)?,
+        unit_price_cents: row.get(6)?,
+        total_cents: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
+}
+
+fn invoice_line_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvoiceLine> {
+    Ok(InvoiceLine {
+        id: row.get(0)?,
+        invoice_id: row.get(1)?,
+        quote_line_id: row.get(2)?,
+        description: row.get(3)?,
+        quantity: row.get(4)?,
+        unit_price_cents: row.get(5)?,
+        total_cents: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+fn payment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Payment> {
+    Ok(Payment {
+        id: row.get(0)?,
+        invoice_id: row.get(1)?,
+        method: row.get(2)?,
+        amount_cents: row.get(3)?,
+        sumup_transaction_id: row.get(4)?,
+        status: row.get(5)?,
+        paid_at: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
@@ -4542,6 +5582,120 @@ mod tests {
             )
             .expect("agenda block sync jobs count");
         assert_eq!(block_jobs, 1);
+    }
+
+    #[test]
+    fn quote_totals_invoice_numbering_and_payments_are_backend_owned() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Marco",
+                    last_name: "Blu",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-08-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let service = db
+            .list_clinical_services(admin.id)
+            .expect("services")
+            .into_iter()
+            .find(|service| service.code == "OTT-001")
+            .expect("base service");
+
+        db.create_clinical_record(
+            admin.id,
+            &NewClinicalRecord {
+                patient_id: patient.id,
+                service_id: Some(service.id),
+                tooth_number: Some(16),
+                tooth_surface: None,
+                pathology_description: Some("Carie"),
+                status: "diagnosed",
+                ready_for_quote: true,
+                notes: None,
+            },
+        )
+        .expect("first clinical record");
+        let quote = db
+            .create_quote_from_ready_records(admin.id, patient.id, "Preventivo test")
+            .expect("quote from diagnosis");
+        assert_eq!(quote.gross_total_cents, service.base_price_cents);
+        assert_eq!(quote.net_total_cents, service.base_price_cents);
+
+        let quote = db
+            .add_quote_line(admin.id, quote.id, service.id, 2)
+            .expect("manual line");
+        assert_eq!(quote.gross_total_cents, service.base_price_cents * 3);
+        let quote = db
+            .update_quote_discount(admin.id, quote.id, 500)
+            .expect("discount");
+        assert_eq!(quote.net_total_cents, service.base_price_cents * 3 - 500);
+        let accepted = db
+            .update_quote_status(admin.id, quote.id, "accepted")
+            .expect("accept quote");
+        assert_eq!(accepted.status, "accepted");
+        assert!(matches!(
+            db.add_quote_line(admin.id, accepted.id, service.id, 1),
+            Err(DbError::InvalidFinancialState(_))
+        ));
+
+        let invoice = db
+            .create_invoice_from_quote(admin.id, accepted.id)
+            .expect("invoice");
+        assert_eq!(invoice.invoice_number, 1);
+        assert_eq!(invoice.total_cents, accepted.net_total_cents);
+
+        db.create_clinical_record(
+            admin.id,
+            &NewClinicalRecord {
+                patient_id: patient.id,
+                service_id: Some(service.id),
+                tooth_number: Some(17),
+                tooth_surface: None,
+                pathology_description: Some("Carie"),
+                status: "diagnosed",
+                ready_for_quote: true,
+                notes: None,
+            },
+        )
+        .expect("second clinical record");
+        let second_quote = db
+            .create_quote_from_ready_records(admin.id, patient.id, "Secondo preventivo")
+            .expect("second quote");
+        let second_quote = db
+            .update_quote_status(admin.id, second_quote.id, "accepted")
+            .expect("accept second quote");
+        let second_invoice = db
+            .create_invoice_from_quote(admin.id, second_quote.id)
+            .expect("second invoice");
+        assert_eq!(second_invoice.invoice_year, invoice.invoice_year);
+        assert_eq!(second_invoice.invoice_number, 2);
+
+        db.register_payment(
+            admin.id,
+            invoice.id,
+            "cash",
+            invoice.total_cents,
+            None,
+            "success",
+        )
+        .expect("payment");
+        let invoices = db.list_invoices(admin.id, patient.id).expect("invoices");
+        let paid = invoices
+            .into_iter()
+            .find(|row| row.id == invoice.id)
+            .expect("paid invoice");
+        assert_eq!(paid.payment_status, "paid");
     }
 
     fn test_database_path() -> PathBuf {

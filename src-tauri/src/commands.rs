@@ -1,15 +1,19 @@
 use crate::{
     auth::Role,
+    billing::{self, FinancialPdf, PdfLine, PdfParty},
     db::{
         AgendaBlock, Appointment, AppointmentInput, AuthSession, AuthorizedDevice,
         AuthorizedGoogleAccount, BootstrapStatus, ChairConfig, ClinicalRecord,
         ClinicalRecordFilters, ClinicalService, CreateUserInput, DatabaseStatus,
-        DeviceAuthorization, GoogleCalendarSyncStatus, LicenseStatus, NewAgendaBlock,
-        NewClinicalRecord, NewPatient, NewRxAsset, Patient, PatientTimelineEvent, RxAsset,
-        StudioSettings, StudioSettingsUpdate, ToothStatus, User,
+        DeviceAuthorization, GeneratedDocument, GoogleCalendarSyncStatus, Invoice, LicenseStatus,
+        NewAgendaBlock, NewClinicalRecord, NewPatient, NewRxAsset, Patient, PatientTimelineEvent,
+        Payment, Quote, RxAsset, StudioSettings, StudioSettingsUpdate, ToothStatus, User,
     },
     dicom_meta, files,
-    integrations::google::{self, GoogleAuthorizationUrl, GoogleOAuthStatus},
+    integrations::{
+        google::{self, GoogleAuthorizationUrl, GoogleOAuthStatus},
+        sumup::{self, SumupCheckout},
+    },
     rx_acquisition::{MockRxAdapter, RxAcquisitionAdapter},
     state::AppState,
 };
@@ -332,6 +336,69 @@ pub struct UpdateClinicalServicePriceRequest {
     session_token: String,
     service_id: i64,
     base_price_cents: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateQuoteFromDiagnosisRequest {
+    session_token: String,
+    patient_id: i64,
+    title: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddQuoteLineRequest {
+    session_token: String,
+    quote_id: i64,
+    service_id: i64,
+    quantity: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateQuoteDiscountRequest {
+    session_token: String,
+    quote_id: i64,
+    discount_cents: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateQuoteStatusRequest {
+    session_token: String,
+    quote_id: i64,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QuoteIdRequest {
+    session_token: String,
+    quote_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InvoiceIdRequest {
+    session_token: String,
+    invoice_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterPaymentRequest {
+    session_token: String,
+    invoice_id: i64,
+    method: String,
+    amount_cents: i64,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StartSumupPaymentRequest {
+    session_token: String,
+    invoice_id: i64,
+    method: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SumupPaymentStart {
+    payment: Payment,
+    checkout: SumupCheckout,
 }
 
 #[derive(Debug, Deserialize)]
@@ -949,6 +1016,247 @@ pub fn update_clinical_service_price(
 }
 
 #[tauri::command]
+pub fn list_quotes(
+    state: State<'_, AppState>,
+    request: PatientIdRequest,
+) -> Result<Vec<Quote>, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .list_quotes(actor.id, request.patient_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn create_quote_from_diagnosis(
+    state: State<'_, AppState>,
+    request: CreateQuoteFromDiagnosisRequest,
+) -> Result<Quote, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .create_quote_from_ready_records(
+            actor.id,
+            request.patient_id,
+            request
+                .title
+                .as_deref()
+                .unwrap_or("Preventivo odontoiatrico"),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn add_quote_line(
+    state: State<'_, AppState>,
+    request: AddQuoteLineRequest,
+) -> Result<Quote, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .add_quote_line(
+            actor.id,
+            request.quote_id,
+            request.service_id,
+            request.quantity,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn update_quote_discount(
+    state: State<'_, AppState>,
+    request: UpdateQuoteDiscountRequest,
+) -> Result<Quote, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .update_quote_discount(actor.id, request.quote_id, request.discount_cents)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn update_quote_status(
+    state: State<'_, AppState>,
+    request: UpdateQuoteStatusRequest,
+) -> Result<Quote, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .update_quote_status(actor.id, request.quote_id, request.status.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn create_invoice_from_quote(
+    state: State<'_, AppState>,
+    request: QuoteIdRequest,
+) -> Result<Invoice, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .create_invoice_from_quote(actor.id, request.quote_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn list_invoices(
+    state: State<'_, AppState>,
+    request: PatientIdRequest,
+) -> Result<Vec<Invoice>, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .list_invoices(actor.id, request.patient_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn register_payment(
+    state: State<'_, AppState>,
+    request: RegisterPaymentRequest,
+) -> Result<Payment, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .register_payment(
+            actor.id,
+            request.invoice_id,
+            request.method.trim(),
+            request.amount_cents,
+            None,
+            request.status.trim(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn generate_quote_pdf(
+    state: State<'_, AppState>,
+    request: QuoteIdRequest,
+) -> Result<GeneratedDocument, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let database = state.database()?;
+    let quote = database
+        .get_quote_for_document(actor.id, request.quote_id)
+        .map_err(|error| error.to_string())?;
+    let patient = database
+        .get_patient(quote.patient_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "patient not found".to_owned())?;
+    let settings = database
+        .studio_settings()
+        .map_err(|error| error.to_string())?;
+    let bytes = render_quote_pdf(&settings, &patient, &quote)?;
+    let stored = files::store_patient_document_bytes(
+        quote.patient_id,
+        "quote",
+        &format!("preventivo-{}", quote.id),
+        &bytes,
+    )?;
+    database
+        .register_generated_document(
+            actor.id,
+            quote.patient_id,
+            "quote",
+            &stored.relative_path,
+            &stored.mime_type,
+            &stored.sha256_hex,
+            stored.size_bytes,
+            &serde_json::json!({ "quote_id": quote.id }).to_string(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn generate_invoice_pdf(
+    state: State<'_, AppState>,
+    request: InvoiceIdRequest,
+) -> Result<GeneratedDocument, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let database = state.database()?;
+    let invoice = database
+        .get_invoice_for_document(actor.id, request.invoice_id)
+        .map_err(|error| error.to_string())?;
+    let patient = database
+        .get_patient(invoice.patient_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "patient not found".to_owned())?;
+    let settings = database
+        .studio_settings()
+        .map_err(|error| error.to_string())?;
+    let bytes = render_invoice_pdf(&settings, &patient, &invoice)?;
+    let stored = files::store_patient_document_bytes(
+        invoice.patient_id,
+        "invoice",
+        &format!(
+            "fattura-{}-{}",
+            invoice.invoice_number, invoice.invoice_year
+        ),
+        &bytes,
+    )?;
+    database
+        .register_generated_document(
+            actor.id,
+            invoice.patient_id,
+            "invoice",
+            &stored.relative_path,
+            &stored.mime_type,
+            &stored.sha256_hex,
+            stored.size_bytes,
+            &serde_json::json!({ "invoice_id": invoice.id }).to_string(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn start_sumup_payment(
+    state: State<'_, AppState>,
+    request: StartSumupPaymentRequest,
+) -> Result<SumupPaymentStart, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let (invoice, amount_cents) = {
+        let database = state.database()?;
+        let invoice = database
+            .get_invoice_for_document(actor.id, request.invoice_id)
+            .map_err(|error| error.to_string())?;
+        let amount_cents = database
+            .invoice_balance_cents(actor.id, request.invoice_id)
+            .map_err(|error| error.to_string())?;
+        (invoice, amount_cents)
+    };
+    if amount_cents <= 0 {
+        return Err("invoice is already paid".to_owned());
+    }
+    let method = match request.method.trim() {
+        "sumup_pos" => "sumup_pos",
+        _ => "sumup_link",
+    };
+    let checkout = sumup::create_checkout(
+        invoice.id,
+        amount_cents,
+        &format!(
+            "VeloDent fattura {}/{}",
+            invoice.invoice_number, invoice.invoice_year
+        ),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let payment = state
+        .database()?
+        .register_payment(
+            actor.id,
+            invoice.id,
+            method,
+            amount_cents,
+            Some(&checkout.checkout_id),
+            "pending",
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(SumupPaymentStart { payment, checkout })
+}
+
+#[tauri::command]
 pub fn open_clinical_view(
     state: State<'_, AppState>,
     request: ClinicalViewRequest,
@@ -1304,6 +1612,94 @@ fn google_payload_for_agenda_block(block: &AgendaBlock) -> google::GoogleCalenda
             date_time: block.ends_at.clone(),
             time_zone: "Europe/Rome".to_owned(),
         },
+    }
+}
+
+fn render_quote_pdf(
+    settings: &StudioSettings,
+    patient: &Patient,
+    quote: &Quote,
+) -> Result<Vec<u8>, String> {
+    let lines = quote
+        .lines
+        .iter()
+        .map(|line| PdfLine {
+            description: line.description.clone(),
+            quantity: line.quantity,
+            unit_price_cents: line.unit_price_cents,
+            total_cents: line.total_cents,
+        })
+        .collect();
+    billing::render_financial_pdf(&FinancialPdf {
+        document_title: "Preventivo".to_owned(),
+        document_number: format!("Preventivo #{} - {}", quote.id, quote.status),
+        studio: studio_pdf_party(settings),
+        patient: patient_pdf_party(patient),
+        lines,
+        gross_total_cents: quote.gross_total_cents,
+        discount_cents: quote.discount_cents,
+        net_total_cents: quote.net_total_cents,
+    })
+}
+
+fn render_invoice_pdf(
+    settings: &StudioSettings,
+    patient: &Patient,
+    invoice: &Invoice,
+) -> Result<Vec<u8>, String> {
+    let lines = invoice
+        .lines
+        .iter()
+        .map(|line| PdfLine {
+            description: line.description.clone(),
+            quantity: line.quantity,
+            unit_price_cents: line.unit_price_cents,
+            total_cents: line.total_cents,
+        })
+        .collect();
+    billing::render_financial_pdf(&FinancialPdf {
+        document_title: "Fattura".to_owned(),
+        document_number: format!(
+            "Fattura {}/{} - {}",
+            invoice.invoice_number, invoice.invoice_year, invoice.issued_at
+        ),
+        studio: studio_pdf_party(settings),
+        patient: patient_pdf_party(patient),
+        lines,
+        gross_total_cents: invoice.total_cents,
+        discount_cents: 0,
+        net_total_cents: invoice.total_cents,
+    })
+}
+
+fn studio_pdf_party(settings: &StudioSettings) -> PdfParty {
+    PdfParty {
+        title: settings
+            .clinic_name
+            .clone()
+            .unwrap_or_else(|| "Studio VeloDent".to_owned()),
+        lines: vec![
+            "Gestionale VeloDent Precision".to_owned(),
+            settings
+                .data_directory
+                .clone()
+                .unwrap_or_else(|| "Directory dati locale".to_owned()),
+        ],
+    }
+}
+
+fn patient_pdf_party(patient: &Patient) -> PdfParty {
+    let mut lines = vec![
+        format!("{} {}", patient.first_name, patient.last_name),
+        format!("CF {}", patient.tax_code),
+        format!("Nato/a il {}", patient.date_of_birth),
+    ];
+    if let Some(address) = &patient.address {
+        lines.push(address.clone());
+    }
+    PdfParty {
+        title: "Paziente".to_owned(),
+        lines,
     }
 }
 

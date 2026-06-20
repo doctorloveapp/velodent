@@ -74,6 +74,47 @@ pub fn store_patient_rx_file(
     })
 }
 
+pub fn store_patient_document_bytes(
+    patient_id: i64,
+    file_kind: &str,
+    filename_stem: &str,
+    bytes: &[u8],
+) -> Result<StoredClinicalFile, String> {
+    if patient_id <= 0 {
+        return Err("invalid patient id".to_owned());
+    }
+    if bytes.is_empty() {
+        return Err("generated document is empty".to_owned());
+    }
+    if !matches!(file_kind, "quote" | "invoice" | "consent" | "other") {
+        return Err("unsupported generated document kind".to_owned());
+    }
+
+    let safe_stem = sanitize_filename_component(filename_stem);
+    let unique_name = format!("{}-{}.pdf", unix_nanos()?, safe_stem);
+    let patient_segment = patient_id.to_string();
+    let relative_path = format!("patients/{patient_segment}/documents/{unique_name}");
+    let destination = patients_root()?
+        .join(&patient_segment)
+        .join("documents")
+        .join(&unique_name);
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+
+    fs::write(&destination, bytes).map_err(|error| error.to_string())?;
+    let (sha256_hex, size_bytes) = hash_and_size(&destination)?;
+
+    Ok(StoredClinicalFile {
+        relative_path,
+        mime_type: "application/pdf".to_owned(),
+        sha256_hex,
+        size_bytes,
+        original_filename: unique_name,
+    })
+}
+
 pub fn read_patient_file(relative_path: &str) -> Result<Vec<u8>, String> {
     let relative = relative_path.replace('\\', "/");
     if relative.contains("..") || relative.starts_with('/') || relative.starts_with('\\') {

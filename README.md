@@ -22,6 +22,7 @@ La priorita' architetturale e' la protezione dei dati sanitari: database cifrato
 - Frontend: React, TypeScript, Vite, Tailwind CSS, shadcn/ui-style primitives.
 - Backend: Rust con Tauri commands.
 - Database: SQLite tramite `rusqlite` con feature `bundled-sqlcipher-vendored-openssl`.
+- PDF fiscali: generazione Rust con `printpdf`.
 - Persistenza file: directory dati locale gestita dal backend.
 - Test: Vitest per frontend; test Rust per database e repository quando la toolchain Rust e' disponibile.
 
@@ -92,6 +93,19 @@ $env:VELODENT_ALLOW_INSECURE_DEV_KEY = "true"
 
 Questo fallback non deve essere usato con dati reali.
 
+### Variabili ambiente integrazioni
+
+Google Calendar e SumUp leggono credenziali da `.env` o variabili ambiente locali non versionate.
+
+```powershell
+$env:GOOGLE_CLIENT_ID = "..."
+$env:GOOGLE_CLIENT_SECRET = "..."
+$env:SUMUP_API_KEY = "..."
+$env:SUMUP_MERCHANT_CODE = "..."
+```
+
+Il frontend non riceve segreti e non invia importi a SumUp: per i pagamenti invia solo l'ID fattura, poi il backend calcola il saldo dal database cifrato.
+
 ## Struttura progetto
 
 ```text
@@ -138,6 +152,20 @@ Le tabelle iniziali coprono utenti, account Google autorizzati, dispositivi, imp
 
 Gli importi economici sono sempre `INTEGER` in centesimi. Non usare `REAL` per prezzi, totali, sconti o pagamenti.
 
+## Gestione fiscale ed economica
+
+Il workflow economico core e' backend-trusted:
+
+1. Le prestazioni cliniche `diagnosed` e `ready_for_quote` generano un preventivo tramite comando Tauri.
+2. Il preventivo puo' ricevere righe manuali dal catalogo e uno sconto globale, sempre in centesimi.
+3. Lo stato del preventivo e' `draft`, `accepted` o `rejected`; dopo accettazione/rifiuto le modifiche sono bloccate.
+4. Una fattura puo' nascere solo da preventivo accettato.
+5. La numerazione fatture e' transazionale lato SQL (`BEGIN IMMEDIATE`) e vincolata da `UNIQUE(invoice_number, invoice_year)`.
+6. PDF preventivo/fattura sono generati in Rust e salvati in `%APPDATA%/VeloDent/patients/{patient_id}/documents/`.
+7. Pagamenti contanti/bonifico e checkout SumUp passano dal backend; SumUp riceve importi calcolati leggendo la fattura.
+
+Ogni creazione/modifica economica registra `FINANCIAL_TRANSACTION` in `audit_log`.
+
 ## Comandi Tauri disponibili
 
 - `health_check`: verifica minima del runtime Tauri.
@@ -150,6 +178,10 @@ Gli importi economici sono sempre `INTEGER` in centesimi. Non usare `REAL` per p
 - `add_authorized_google_account` / `list_authorized_google_accounts`: allowlist Google.
 - `authorize_device` / `revoke_device` / `list_devices`: token dispositivo e revoca.
 - `get_studio_settings` / `update_studio_settings`: configurazione studio.
+- `create_quote_from_diagnosis` / `add_quote_line` / `update_quote_discount` / `update_quote_status`: workflow preventivi.
+- `create_invoice_from_quote` / `list_invoices`: fatturazione con numerazione atomica.
+- `generate_quote_pdf` / `generate_invoice_pdf`: produzione PDF fiscali lato Rust.
+- `register_payment` / `start_sumup_payment`: pagamenti backend-trusted.
 
 ## Standard di sicurezza adottati
 

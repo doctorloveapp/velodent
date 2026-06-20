@@ -1,11 +1,29 @@
-import { FileImage, FileText, FolderOpen, ReceiptText, Stethoscope, Trash2, UserRoundPlus, X } from "lucide-react";
+import { CircleDollarSign, FileImage, FileText, FolderOpen, ReceiptText, Stethoscope, Trash2, UserRoundPlus, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { useL10n, type L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
+import { listClinicalServices, type ClinicalService } from "@/frontend/settings/settingsApi";
 import { ClinicalPanel } from "@/frontend/clinical/ClinicalPanel";
+import {
+  addQuoteLine,
+  createInvoiceFromQuote,
+  createQuoteFromDiagnosis,
+  formatCents,
+  generateInvoicePdf,
+  generateQuotePdf,
+  listInvoices,
+  listQuotes,
+  registerPayment,
+  startSumupPayment,
+  updateQuoteDiscount,
+  updateQuoteStatus,
+  euroInputToCents,
+  type Invoice,
+  type Quote
+} from "@/frontend/billing/billingApi";
 import {
   createPatient,
   deletePatient,
@@ -377,7 +395,7 @@ function PatientTabPanel({ currentUser, patient, tab }: { currentUser: User | nu
     return <EmptyTab icon={<FileText aria-hidden="true" className="h-5 w-5" />} text={t("patientsDocumentsEmpty")} />;
   }
 
-  return <EmptyTab icon={<ReceiptText aria-hidden="true" className="h-5 w-5" />} text={t("patientsBillingEmpty")} />;
+  return <BillingPanel currentUser={currentUser} patient={patient} />;
 }
 
 function PatientData({ label, mono = false, value, wide = false }: { label: string; mono?: boolean; value: string; wide?: boolean }) {
@@ -385,6 +403,296 @@ function PatientData({ label, mono = false, value, wide = false }: { label: stri
     <div className={wide ? "md:col-span-2 xl:col-span-4" : ""}>
       <dt className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">{label}</dt>
       <dd className={`mt-1 text-sm font-medium text-white ${mono ? "font-mono" : ""}`}>{value}</dd>
+    </div>
+  );
+}
+
+function BillingPanel({ currentUser, patient }: { currentUser: User | null; patient: Patient }) {
+  const { t } = useL10n();
+  const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [services, setServices] = useState<ClinicalService[]>([]);
+  const [selectedQuoteId, setSelectedQuoteId] = useState("");
+  const [serviceId, setServiceId] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  const [discount, setDiscount] = useState("0.00");
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
+
+  async function refreshBilling() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+    const [nextQuotes, nextInvoices, nextServices] = await Promise.all([
+      listQuotes(currentUser.session_token, patient.id),
+      listInvoices(currentUser.session_token, patient.id),
+      listClinicalServices(currentUser.session_token)
+    ]);
+    setQuotes(nextQuotes);
+    setInvoices(nextInvoices);
+    setServices(nextServices);
+    if (!selectedQuoteId && nextQuotes[0]) {
+      setSelectedQuoteId(String(nextQuotes[0].id));
+      setDiscount((nextQuotes[0].discount_cents / 100).toFixed(2));
+    }
+  }
+
+  useEffect(() => {
+    void refreshBilling().catch((error: unknown) => {
+      setStatusMessage(error instanceof Error ? error.message : t("billingGenericError"));
+    });
+  }, [patient.id, currentUser?.session_token]);
+
+  const selectedQuote = quotes.find((quote) => String(quote.id) === selectedQuoteId) ?? quotes.at(0) ?? null;
+
+  async function handleCreateQuote() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+    const quote = await createQuoteFromDiagnosis(currentUser.session_token, patient.id, t("billingQuoteDefaultTitle"));
+    setSelectedQuoteId(String(quote.id));
+    setStatusMessage(t("billingQuoteCreated"));
+    await refreshBilling();
+  }
+
+  async function handleAddLine() {
+    if (!currentUser?.session_token || !selectedQuote || !serviceId) {
+      return;
+    }
+    const quote = await addQuoteLine(currentUser.session_token, selectedQuote.id, Number(serviceId), Number(quantity) || 1);
+    setSelectedQuoteId(String(quote.id));
+    setStatusMessage(t("billingQuoteLineAdded"));
+    await refreshBilling();
+  }
+
+  async function handleDiscount() {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    const quote = await updateQuoteDiscount(currentUser.session_token, selectedQuote.id, euroInputToCents(discount));
+    setSelectedQuoteId(String(quote.id));
+    setStatusMessage(t("billingDiscountSaved"));
+    await refreshBilling();
+  }
+
+  async function handleQuoteStatus(status: "accepted" | "rejected") {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    const quote = await updateQuoteStatus(currentUser.session_token, selectedQuote.id, status);
+    setSelectedQuoteId(String(quote.id));
+    setStatusMessage(status === "accepted" ? t("billingQuoteAccepted") : t("billingQuoteRejected"));
+    await refreshBilling();
+  }
+
+  async function handleInvoice() {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    await createInvoiceFromQuote(currentUser.session_token, selectedQuote.id);
+    setStatusMessage(t("billingInvoiceIssued"));
+    await refreshBilling();
+  }
+
+  async function handleQuotePdf() {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    const document = await generateQuotePdf(currentUser.session_token, selectedQuote.id);
+    setStatusMessage(`${t("billingPdfGenerated")}: ${document.relative_path}`);
+  }
+
+  async function handleInvoicePdf(invoice: Invoice) {
+    if (!currentUser?.session_token) {
+      return;
+    }
+    const document = await generateInvoicePdf(currentUser.session_token, invoice.id);
+    setStatusMessage(`${t("billingPdfGenerated")}: ${document.relative_path}`);
+  }
+
+  async function handlePayment(invoice: Invoice, method: "cash" | "bank_transfer") {
+    if (!currentUser?.session_token) {
+      return;
+    }
+    const amount = paymentAmount.trim() ? euroInputToCents(paymentAmount) : invoice.total_cents - invoice.paid_cents;
+    await registerPayment(currentUser.session_token, invoice.id, method, amount);
+    setPaymentAmount("");
+    setStatusMessage(t("billingPaymentRegistered"));
+    await refreshBilling();
+  }
+
+  async function handleSumup(invoice: Invoice) {
+    if (!currentUser?.session_token) {
+      return;
+    }
+    const result = await startSumupPayment(currentUser.session_token, invoice.id, "sumup_link");
+    setStatusMessage(result.checkout.checkout_url ?? t("billingSumupStarted"));
+    await refreshBilling();
+  }
+
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Badge variant="default">{t("billingWorkflow")}</Badge>
+        {statusMessage ? <span className="text-xs text-alabaster-grey-500">{statusMessage}</span> : null}
+        <Button type="button" size="sm" onClick={() => void handleCreateQuote().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+          <CircleDollarSign aria-hidden="true" className="h-4 w-4" />
+          {t("billingCreateQuote")}
+        </Button>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="h-10 min-w-[220px] rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
+              value={selectedQuote?.id ?? ""}
+              onChange={(event) => {
+                setSelectedQuoteId(event.target.value);
+                const quote = quotes.find((row) => String(row.id) === event.target.value);
+                setDiscount(((quote?.discount_cents ?? 0) / 100).toFixed(2));
+              }}
+            >
+              {quotes.map((quote) => (
+                <option key={quote.id} value={quote.id}>
+                  #{quote.id} {quote.title}
+                </option>
+              ))}
+            </select>
+            {selectedQuote ? <Badge variant={quoteBadgeVariant(selectedQuote.status)}>{t(quoteStatusKey(selectedQuote.status))}</Badge> : null}
+          </div>
+
+          {selectedQuote ? (
+            <>
+              <DenseBillingRows
+                rows={selectedQuote.lines.map((line) => [
+                  line.description,
+                  String(line.quantity),
+                  formatCents(line.unit_price_cents),
+                  formatCents(line.total_cents)
+                ])}
+              />
+              <div className="grid gap-2 md:grid-cols-[1fr_100px_auto]">
+                <select
+                  className="h-10 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
+                  disabled={selectedQuote.status !== "draft"}
+                  value={serviceId}
+                  onChange={(event) => setServiceId(event.target.value)}
+                >
+                  <option value="">{t("billingSelectService")}</option>
+                  {services.map((service) => (
+                    <option key={service.id} value={service.id}>
+                      {service.code} - {service.name}
+                    </option>
+                  ))}
+                </select>
+                <Input disabled={selectedQuote.status !== "draft"} min={1} type="number" value={quantity} onChange={(event) => setQuantity(event.target.value)} />
+                <Button disabled={selectedQuote.status !== "draft"} type="button" variant="secondary" onClick={() => void handleAddLine().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                  {t("billingAddLine")}
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-alabaster-grey-500/15 pt-3">
+                <div className="grid gap-1 text-sm text-alabaster-grey-500">
+                  <span>{t("billingGross")}: {formatCents(selectedQuote.gross_total_cents)}</span>
+                  <span>{t("billingDiscount")}: {formatCents(selectedQuote.discount_cents)}</span>
+                  <span className="font-semibold text-white">{t("billingNet")}: {formatCents(selectedQuote.net_total_cents)}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input className="w-28" disabled={selectedQuote.status !== "draft"} type="number" min={0} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} />
+                  <Button disabled={selectedQuote.status !== "draft"} type="button" variant="secondary" size="sm" onClick={() => void handleDiscount().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingSaveDiscount")}
+                  </Button>
+                  <Button disabled={selectedQuote.status !== "draft"} type="button" variant="secondary" size="sm" onClick={() => void handleQuoteStatus("rejected").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingRejectQuote")}
+                  </Button>
+                  <Button disabled={selectedQuote.status !== "draft"} type="button" size="sm" onClick={() => void handleQuoteStatus("accepted").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingAcceptQuote")}
+                  </Button>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => void handleQuotePdf().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingPdf")}
+                  </Button>
+                  <Button disabled={selectedQuote.status !== "accepted"} type="button" size="sm" onClick={() => void handleInvoice().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingIssueInvoice")}
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <EmptyTab icon={<ReceiptText aria-hidden="true" className="h-5 w-5" />} text={t("patientsBillingEmpty")} />
+          )}
+        </div>
+
+        <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
+          <h3 className="text-sm font-semibold text-white">{t("billingInvoicesTitle")}</h3>
+          {invoices.length === 0 ? (
+            <p className="text-sm text-alabaster-grey-500">{t("billingInvoicesEmpty")}</p>
+          ) : (
+            invoices.map((invoice) => (
+              <div key={invoice.id} className="grid gap-3 rounded-md border border-alabaster-grey-500/15 bg-glaucous-950 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-sm text-white">{invoice.invoice_number}/{invoice.invoice_year}</span>
+                  <Badge variant={invoice.payment_status === "paid" ? "success" : invoice.payment_status === "partial" ? "warning" : "default"}>
+                    {t(invoiceStatusKey(invoice.payment_status))}
+                  </Badge>
+                </div>
+                <div className="grid gap-1 text-sm text-alabaster-grey-500">
+                  <span>{t("billingIssuedAt")}: {invoice.issued_at}</span>
+                  <span>{t("billingNet")}: {formatCents(invoice.total_cents)}</span>
+                  <span>{t("billingPaid")}: {formatCents(invoice.paid_cents)}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input className="w-28" type="number" min={0} step="0.01" placeholder={t("billingPaymentAmount")} value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} />
+                  <Button type="button" variant="secondary" size="sm" onClick={() => void handlePayment(invoice, "cash").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingCash")}
+                  </Button>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => void handlePayment(invoice, "bank_transfer").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingBankTransfer")}
+                  </Button>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => void handleSumup(invoice).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingSumup")}
+                  </Button>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => void handleInvoicePdf(invoice).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingPdf")}
+                  </Button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DenseBillingRows({ rows }: { rows: string[][] }) {
+  const { t } = useL10n();
+
+  return (
+    <div className="overflow-hidden rounded-md border border-alabaster-grey-500/20">
+      <table className="w-full border-collapse text-left text-sm">
+        <thead className="bg-glaucous-950 text-[10px] uppercase tracking-widest text-alabaster-grey-500">
+          <tr>
+            {[t("billingDescription"), t("billingQuantity"), t("billingUnit"), t("billingTotal")].map((header) => (
+              <th key={header} className="border-b border-alabaster-grey-500/20 px-3 py-2 font-semibold">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex} className="border-b border-alabaster-grey-500/10 last:border-b-0">
+              {row.map((cell, cellIndex) => (
+                <td key={`${String(rowIndex)}-${String(cellIndex)}`} className="px-3 py-2 text-alabaster-grey-500">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -657,4 +965,40 @@ function rxTypeKey(rxType: string): L10nKey {
   }
 
   return "rxTypeEndoral";
+}
+
+function quoteStatusKey(status: string): L10nKey {
+  if (status === "accepted") {
+    return "billingQuoteAcceptedStatus";
+  }
+
+  if (status === "rejected") {
+    return "billingQuoteRejectedStatus";
+  }
+
+  return "billingQuoteDraftStatus";
+}
+
+function quoteBadgeVariant(status: string) {
+  if (status === "accepted") {
+    return "success" as const;
+  }
+
+  if (status === "rejected") {
+    return "danger" as const;
+  }
+
+  return "warning" as const;
+}
+
+function invoiceStatusKey(status: string): L10nKey {
+  if (status === "paid") {
+    return "billingInvoicePaid";
+  }
+
+  if (status === "partial") {
+    return "billingInvoicePartial";
+  }
+
+  return "billingInvoicePending";
 }

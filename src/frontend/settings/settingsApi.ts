@@ -67,7 +67,7 @@ export interface ClinicalService {
   id: number;
   code: string;
   name: string;
-  category: string;
+  category: string | null;
   base_price_cents: number;
   active: boolean;
 }
