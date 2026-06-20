@@ -1,4 +1,4 @@
-import { CalendarClock, ChevronLeft, ChevronRight, ExternalLink, RefreshCw } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, ExternalLink, LockKeyhole, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import type { L10nKey } from "@/frontend/shared/i18n/translations";
@@ -8,14 +8,18 @@ import { Input } from "@/frontend/shared/ui/input";
 import type { User } from "@/frontend/settings/settingsApi";
 import { isTauriRuntime, searchPatients, type Patient } from "@/frontend/patients/patientsApi";
 import {
+  createAgendaBlock,
   createAppointment,
+  deleteAgendaBlock,
   getChairConfig,
   googleCalendarAuthorizationUrl,
   googleCalendarSyncStatus,
+  listAgendaBlocks,
   listAppointments,
   moveAppointment,
   processGoogleCalendarSync,
   updateAppointmentStatus,
+  type AgendaBlock,
   type Appointment,
   type AppointmentStatus,
   type GoogleCalendarSyncStatus
@@ -35,6 +39,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   const [anchorDate, setAnchorDate] = useState(todayDateInput());
   const [chairCount, setChairCount] = useState(1);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [agendaBlocks, setAgendaBlocks] = useState<AgendaBlock[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [syncStatus, setSyncStatus] = useState<GoogleCalendarSyncStatus | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
@@ -46,6 +51,13 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     duration: String(DEFAULT_DURATION_MINUTES),
     chairNumber: "1"
   });
+  const [blockForm, setBlockForm] = useState({
+    title: "",
+    date: todayDateInput(),
+    startTime: "09:00",
+    endTime: "18:00",
+    allDay: true
+  });
 
   const range = useMemo(() => agendaRange(anchorDate, mode), [anchorDate, mode]);
   const visibleDays = useMemo(() => daysInRange(range.startDate, mode === "week" ? 7 : 1), [mode, range.startDate]);
@@ -56,15 +68,17 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
       return;
     }
 
-    const [chairs, rows, sync, patientRows] = await Promise.all([
+    const [chairs, rows, blocks, sync, patientRows] = await Promise.all([
       getChairConfig(currentUser.session_token),
       listAppointments(currentUser.session_token, range.startsFrom, range.startsTo),
+      listAgendaBlocks(currentUser.session_token, range.startsFrom, range.startsTo),
       currentUser.role === "admin" ? googleCalendarSyncStatus(currentUser.session_token) : Promise.resolve(null),
       searchPatients(currentUser.session_token, "", 25)
     ]);
 
     setChairCount(chairs.chair_count);
     setAppointments(rows);
+    setAgendaBlocks(blocks);
     setSyncStatus(sync);
     setPatients(patientRows);
   }
@@ -115,6 +129,38 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     });
     setStatusMessage(t("agendaAppointmentCreated"));
     setForm({ ...form, title: "" });
+    await refreshAgenda();
+  }
+
+  async function handleCreateBlock() {
+    if (currentUser?.role !== "admin" || !currentUser.session_token) {
+      return;
+    }
+
+    const startsAt = blockForm.allDay
+      ? localDateTimeWithOffset(blockForm.date, "00:00")
+      : localDateTimeWithOffset(blockForm.date, blockForm.startTime);
+    const endsAt = blockForm.allDay
+      ? localDateTimeWithOffset(shiftDate(blockForm.date, 1), "00:00")
+      : localDateTimeWithOffset(blockForm.date, blockForm.endTime);
+
+    await createAgendaBlock(currentUser.session_token, {
+      title: blockForm.title.trim() || t("agendaClosedBadge"),
+      starts_at: startsAt,
+      ends_at: endsAt,
+      all_day: blockForm.allDay
+    });
+    setBlockForm({ ...blockForm, title: "" });
+    setStatusMessage(t("agendaBlockCreated"));
+    await refreshAgenda();
+  }
+
+  async function handleDeleteBlock(blockId: number) {
+    if (currentUser?.role !== "admin" || !currentUser.session_token) {
+      return;
+    }
+    await deleteAgendaBlock(currentUser.session_token, blockId);
+    setStatusMessage(t("agendaBlockDeleted"));
     await refreshAgenda();
   }
 
@@ -224,6 +270,54 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
         </Button>
       </div>
 
+      {currentUser.role === "admin" ? (
+        <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-3 xl:grid-cols-[1fr_auto]">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+            <Input placeholder={t("agendaBlockTitle")} value={blockForm.title} onChange={(event) => setBlockForm({ ...blockForm, title: event.target.value })} />
+            <Input type="date" value={blockForm.date} onChange={(event) => setBlockForm({ ...blockForm, date: event.target.value })} />
+            <Input type="time" disabled={blockForm.allDay} value={blockForm.startTime} onChange={(event) => setBlockForm({ ...blockForm, startTime: event.target.value })} />
+            <Input type="time" disabled={blockForm.allDay} value={blockForm.endTime} onChange={(event) => setBlockForm({ ...blockForm, endTime: event.target.value })} />
+            <label className="flex h-10 items-center gap-2 rounded-md border border-alabaster-grey-500/20 bg-ink-black-900 px-3 text-sm text-alabaster-grey-500">
+              <input
+                checked={blockForm.allDay}
+                className="h-4 w-4 accent-powder-blue-500"
+                type="checkbox"
+                onChange={(event) => setBlockForm({ ...blockForm, allDay: event.target.checked })}
+              />
+              {t("agendaBlockAllDay")}
+            </label>
+          </div>
+          <Button type="button" variant="secondary" onClick={() => void handleCreateBlock().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}>
+            <LockKeyhole aria-hidden="true" className="h-4 w-4" />
+            {t("agendaCreateBlock")}
+          </Button>
+        </div>
+      ) : null}
+
+      {agendaBlocks.length > 0 ? (
+        <div className="grid gap-2 rounded-md border border-powder-blue-500/20 bg-ink-black-950 p-3">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-pale-sky-500">
+            <LockKeyhole aria-hidden="true" className="h-4 w-4" />
+            {t("agendaBlocksTitle")}
+          </div>
+          <div className="grid gap-2 lg:grid-cols-2">
+            {agendaBlocks.map((block) => (
+              <div key={block.id} className="flex items-center justify-between gap-3 rounded-md border border-alabaster-grey-500/15 bg-glaucous-950 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">{block.title}</p>
+                  <p className="mt-1 font-mono text-xs text-alabaster-grey-500">{formatBlockTime(block)}</p>
+                </div>
+                {currentUser.role === "admin" ? (
+                  <Button type="button" variant="secondary" size="icon" aria-label={t("agendaDeleteBlock")} onClick={() => void handleDeleteBlock(block.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}>
+                    <Trash2 aria-hidden="true" className="h-4 w-4" />
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Button type="button" variant="secondary" size="icon" aria-label={t("agendaPrevious")} onClick={() => setAnchorDate(shiftDate(anchorDate, mode === "week" ? -7 : -1))}>
@@ -269,6 +363,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
                   <AgendaHourRow
                     key={`${day}-${String(hour)}`}
                     appointments={appointmentsForSlot(appointments, day, hour)}
+                    blocks={blocksForSlot(agendaBlocks, day, hour)}
                     chairNumbers={chairNumbers}
                     day={day}
                     hour={hour}
@@ -288,6 +383,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
 
 function AgendaHourRow({
   appointments,
+  blocks,
   chairNumbers,
   day,
   hour,
@@ -296,6 +392,7 @@ function AgendaHourRow({
   t
 }: {
   appointments: Appointment[];
+  blocks: AgendaBlock[];
   chairNumbers: number[];
   day: string;
   hour: number;
@@ -319,6 +416,11 @@ function AgendaHourRow({
           }}
         >
           <div className="grid gap-1">
+            {blocks.length > 0 ? (
+              <div className="rounded-md border border-powder-blue-500/30 bg-powder-blue-950 px-2 py-1 text-[11px] font-semibold text-powder-blue-500">
+                {t("agendaClosedBadge")}
+              </div>
+            ) : null}
             {appointments
               .filter((appointment) => appointment.chair_number === chair)
               .map((appointment) => (
@@ -433,12 +535,25 @@ function appointmentsForSlot(appointments: Appointment[], day: string, hour: num
   return appointmentsForDay(appointments, day).filter((appointment) => Number(appointment.starts_at.slice(11, 13)) === hour);
 }
 
+function blocksForSlot(blocks: AgendaBlock[], day: string, hour: number) {
+  const slotStart = Date.parse(localDateTimeWithOffset(day, `${String(hour).padStart(2, "0")}:00`));
+  const slotEnd = Date.parse(addMinutesLocalDateTime(day, `${String(hour).padStart(2, "0")}:00`, 60));
+  return blocks.filter((block) => Date.parse(block.starts_at) < slotEnd && Date.parse(block.ends_at) > slotStart);
+}
+
 function appointmentDurationMinutes(appointment: Appointment) {
   return Math.max(DEFAULT_DURATION_MINUTES, Math.round((Date.parse(appointment.ends_at) - Date.parse(appointment.starts_at)) / 60000));
 }
 
 function formatAppointmentTime(appointment: Appointment) {
   return `${appointment.starts_at.slice(11, 16)}-${appointment.ends_at.slice(11, 16)}`;
+}
+
+function formatBlockTime(block: AgendaBlock) {
+  if (block.all_day) {
+    return `${block.starts_at.slice(0, 10)} ${block.ends_at.slice(0, 10)}`;
+  }
+  return `${block.starts_at.slice(0, 16).replace("T", " ")}-${block.ends_at.slice(11, 16)}`;
 }
 
 function formatDayLabel(dateInput: string) {

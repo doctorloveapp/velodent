@@ -63,6 +63,15 @@ export interface GoogleAuthorizationUrl {
   scopes: string[];
 }
 
+export interface ClinicalService {
+  id: number;
+  code: string;
+  name: string;
+  category: string;
+  base_price_cents: number;
+  active: boolean;
+}
+
 export interface LicenseStatus {
   hardware_id: string;
   activated: boolean;
@@ -173,6 +182,18 @@ export async function updateStudioSettings(request: {
   holiday_periods_json: string;
 }) {
   return invoke<StudioSettings>("update_studio_settings", { request });
+}
+
+export async function listClinicalServices(session_token: string) {
+  return invoke<ClinicalService[]>("list_clinical_services", { request: { session_token } });
+}
+
+export async function updateClinicalServicePrice(request: {
+  session_token: string;
+  service_id: number;
+  base_price_cents: number;
+}) {
+  return invoke<ClinicalService>("update_clinical_service_price", { request });
 }
 
 function toSessionUser(session: AuthSession): User {

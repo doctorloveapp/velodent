@@ -22,6 +22,19 @@ export interface Appointment {
   updated_at: string;
 }
 
+export interface AgendaBlock {
+  id: number;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  all_day: boolean;
+  google_calendar_event_id: string | null;
+  last_google_sync_at: string | null;
+  created_by_user_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface GoogleCalendarSyncStatus {
   configured: boolean;
   connected: boolean;
@@ -53,6 +66,21 @@ export async function getChairConfig(session_token: string) {
 
 export async function listAppointments(session_token: string, starts_from: string, starts_to: string) {
   return invoke<Appointment[]>("list_appointments", { request: { session_token, starts_from, starts_to } });
+}
+
+export async function listAgendaBlocks(session_token: string, starts_from: string, starts_to: string) {
+  return invoke<AgendaBlock[]>("list_agenda_blocks", { request: { session_token, starts_from, starts_to } });
+}
+
+export async function createAgendaBlock(
+  session_token: string,
+  input: { title: string; starts_at: string; ends_at: string; all_day: boolean }
+) {
+  return invoke<AgendaBlock>("create_agenda_block", { request: { session_token, ...input } });
+}
+
+export async function deleteAgendaBlock(session_token: string, block_id: number) {
+  return invoke<AgendaBlock>("delete_agenda_block", { request: { session_token, block_id } });
 }
 
 export async function createAppointment(session_token: string, input: AppointmentInput) {

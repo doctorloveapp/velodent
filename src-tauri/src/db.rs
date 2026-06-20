@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 6;
+const CURRENT_SCHEMA_VERSION: i64 = 9;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -29,6 +29,7 @@ pub enum DbError {
     InvalidAppointmentStatus(String),
     InvalidAppointmentTimeRange,
     AppointmentConflict,
+    AgendaBlocked,
     GoogleCalendarNotConnected,
     InvalidCredentials,
     BootstrapAlreadyCompleted,
@@ -57,6 +58,7 @@ impl std::fmt::Display for DbError {
             }
             Self::InvalidAppointmentTimeRange => write!(f, "invalid appointment time range"),
             Self::AppointmentConflict => write!(f, "appointment conflicts on the same chair"),
+            Self::AgendaBlocked => write!(f, "appointment overlaps a closed agenda block"),
             Self::GoogleCalendarNotConnected => write!(f, "google calendar is not connected"),
             Self::InvalidCredentials => write!(f, "invalid credentials"),
             Self::BootstrapAlreadyCompleted => write!(f, "first admin already exists"),
@@ -304,6 +306,28 @@ pub struct AppointmentInput<'a> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AgendaBlock {
+    pub id: i64,
+    pub title: String,
+    pub starts_at: String,
+    pub ends_at: String,
+    pub all_day: bool,
+    pub google_calendar_event_id: Option<String>,
+    pub last_google_sync_at: Option<String>,
+    pub created_by_user_id: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewAgendaBlock<'a> {
+    pub title: &'a str,
+    pub starts_at: &'a str,
+    pub ends_at: &'a str,
+    pub all_day: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct GoogleCalendarSyncStatus {
     pub configured: bool,
     pub connected: bool,
@@ -316,6 +340,12 @@ pub struct GoogleCalendarSyncStatus {
 pub struct GoogleCalendarSyncJob {
     pub job_id: i64,
     pub appointment: Appointment,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgendaBlockSyncJob {
+    pub job_id: i64,
+    pub block: AgendaBlock,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -386,6 +416,8 @@ pub struct NewRxAsset<'a> {
     pub original_filename: &'a str,
     pub rx_type: &'a str,
     pub tooth_number: Option<i64>,
+    pub dicom_metadata_json: &'a str,
+    pub acquired_at: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -399,6 +431,7 @@ pub struct RxAsset {
     pub size_bytes: Option<i64>,
     pub rx_type: String,
     pub tooth_number: Option<i64>,
+    pub dicom_metadata_json: String,
     pub acquired_at: String,
     pub created_at: String,
 }
@@ -1258,6 +1291,44 @@ impl Database {
         Ok(services)
     }
 
+    pub fn update_clinical_service_price(
+        &self,
+        actor_user_id: i64,
+        service_id: i64,
+        base_price_cents: i64,
+    ) -> DbResult<ClinicalService> {
+        self.assert_admin(actor_user_id)?;
+        if base_price_cents < 0 {
+            return Err(DbError::Sql("service price cannot be negative".to_owned()));
+        }
+        let affected = self.conn.execute(
+            r#"
+            UPDATE clinical_services_catalog
+            SET
+                base_price_cents = ?1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2 AND active = 1
+            "#,
+            params![base_price_cents, service_id],
+        )?;
+        if affected == 0 {
+            return Err(DbError::NotFound);
+        }
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.clinical_service_price_updated",
+            Some("clinical_services_catalog"),
+            Some(service_id),
+            &serde_json::json!({
+                "base_price_cents": base_price_cents,
+            })
+            .to_string(),
+        )?;
+        self.get_clinical_service(service_id)?
+            .ok_or(DbError::NotFound)
+    }
+
     pub fn get_tooth_statuses(
         &self,
         actor_user_id: i64,
@@ -1558,11 +1629,20 @@ impl Database {
                     patient_id,
                     file_asset_id,
                     rx_type,
-                    tooth_number
+                    tooth_number,
+                    dicom_metadata_json,
+                    acquired_at
                 )
-                VALUES (?1, ?2, ?3, ?4)
+                VALUES (?1, ?2, ?3, ?4, ?5, COALESCE(?6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
                 "#,
-                params![input.patient_id, file_asset_id, rx_type, input.tooth_number],
+                params![
+                    input.patient_id,
+                    file_asset_id,
+                    rx_type,
+                    input.tooth_number,
+                    input.dicom_metadata_json,
+                    input.acquired_at
+                ],
             )?;
             let rx_asset_id = self.conn.last_insert_rowid();
             self.insert_patient_audit(
@@ -1616,6 +1696,7 @@ impl Database {
                 file_assets.size_bytes,
                 rx_assets.rx_type,
                 rx_assets.tooth_number,
+                rx_assets.dicom_metadata_json,
                 rx_assets.acquired_at,
                 rx_assets.created_at
             FROM rx_assets
@@ -1655,6 +1736,110 @@ impl Database {
         Ok(ChairConfig {
             chair_count: self.studio_settings()?.chair_count,
         })
+    }
+
+    pub fn list_agenda_blocks(
+        &self,
+        actor_user_id: i64,
+        starts_from: &str,
+        starts_to: &str,
+    ) -> DbResult<Vec<AgendaBlock>> {
+        self.assert_active_user(actor_user_id)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                id,
+                title,
+                starts_at,
+                ends_at,
+                all_day,
+                google_calendar_event_id,
+                last_google_sync_at,
+                created_by_user_id,
+                created_at,
+                updated_at
+            FROM agenda_blocks
+            WHERE starts_at < ?2 AND ends_at > ?1
+            ORDER BY starts_at ASC
+            "#,
+        )?;
+
+        let blocks = statement
+            .query_map(
+                params![starts_from.trim(), starts_to.trim()],
+                agenda_block_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(blocks)
+    }
+
+    pub fn create_agenda_block(
+        &self,
+        actor_user_id: i64,
+        input: &NewAgendaBlock<'_>,
+    ) -> DbResult<AgendaBlock> {
+        self.assert_admin(actor_user_id)?;
+        if input.title.trim().is_empty() || input.starts_at.trim() >= input.ends_at.trim() {
+            return Err(DbError::InvalidAppointmentTimeRange);
+        }
+
+        self.conn.execute(
+            r#"
+            INSERT INTO agenda_blocks (
+                title,
+                starts_at,
+                ends_at,
+                all_day,
+                created_by_user_id
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                input.title.trim(),
+                input.starts_at.trim(),
+                input.ends_at.trim(),
+                input.all_day as i64,
+                actor_user_id
+            ],
+        )?;
+        let block_id = self.conn.last_insert_rowid();
+        self.enqueue_google_calendar_block_sync_without_tx(block_id)?;
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "agenda.block_created",
+            Some("agenda_blocks"),
+            Some(block_id),
+            &serde_json::json!({
+                "starts_at": input.starts_at.trim(),
+                "ends_at": input.ends_at.trim(),
+                "all_day": input.all_day,
+            })
+            .to_string(),
+        )?;
+
+        self.get_agenda_block(block_id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn delete_agenda_block(&self, actor_user_id: i64, block_id: i64) -> DbResult<AgendaBlock> {
+        self.assert_admin(actor_user_id)?;
+        let block = self.get_agenda_block(block_id)?.ok_or(DbError::NotFound)?;
+        let affected = self
+            .conn
+            .execute("DELETE FROM agenda_blocks WHERE id = ?1", [block_id])?;
+        if affected == 0 {
+            return Err(DbError::NotFound);
+        }
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "agenda.block_deleted",
+            Some("agenda_blocks"),
+            Some(block_id),
+            "{}",
+        )?;
+        Ok(block)
     }
 
     pub fn list_appointments(
@@ -1720,6 +1905,7 @@ impl Database {
                 input.ends_at,
                 None,
             )?;
+            self.assert_no_agenda_block(input.starts_at, input.ends_at)?;
 
             self.conn.execute(
                 r#"
@@ -1805,6 +1991,7 @@ impl Database {
                 ends_at,
                 Some(appointment_id),
             )?;
+            self.assert_no_agenda_block(starts_at, ends_at)?;
             let affected = self.conn.execute(
                 r#"
                 UPDATE appointments
@@ -2018,6 +2205,51 @@ impl Database {
         Ok(jobs)
     }
 
+    pub fn pending_google_calendar_block_sync_jobs(
+        &self,
+        actor_user_id: i64,
+        limit: i64,
+    ) -> DbResult<Vec<AgendaBlockSyncJob>> {
+        self.assert_admin(actor_user_id)?;
+        let normalized_limit = limit.clamp(1, 25);
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                sync_jobs.id,
+                agenda_blocks.id,
+                agenda_blocks.title,
+                agenda_blocks.starts_at,
+                agenda_blocks.ends_at,
+                agenda_blocks.all_day,
+                agenda_blocks.google_calendar_event_id,
+                agenda_blocks.last_google_sync_at,
+                agenda_blocks.created_by_user_id,
+                agenda_blocks.created_at,
+                agenda_blocks.updated_at
+            FROM sync_jobs
+            INNER JOIN agenda_blocks ON agenda_blocks.id = sync_jobs.entity_id
+            WHERE
+                sync_jobs.integration_type = 'google_calendar'
+                AND sync_jobs.entity_type = 'agenda_block'
+                AND sync_jobs.status = 'queued'
+                AND (sync_jobs.run_after IS NULL OR sync_jobs.run_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ORDER BY sync_jobs.created_at ASC
+            LIMIT ?1
+            "#,
+        )?;
+
+        let jobs = statement
+            .query_map([normalized_limit], |row| {
+                Ok(AgendaBlockSyncJob {
+                    job_id: row.get(0)?,
+                    block: agenda_block_from_offset_row(row, 1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(jobs)
+    }
+
     pub fn complete_google_calendar_sync_job(
         &self,
         job_id: i64,
@@ -2034,6 +2266,38 @@ impl Database {
             WHERE id = ?2
             "#,
             params![google_event_id, appointment_id],
+        )?;
+        self.conn.execute(
+            r#"
+            UPDATE sync_jobs
+            SET
+                status = 'completed',
+                attempts = attempts + 1,
+                last_error = NULL,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?1
+            "#,
+            [job_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn complete_google_calendar_block_sync_job(
+        &self,
+        job_id: i64,
+        block_id: i64,
+        google_event_id: &str,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            UPDATE agenda_blocks
+            SET
+                google_calendar_event_id = ?1,
+                last_google_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2
+            "#,
+            params![google_event_id, block_id],
         )?;
         self.conn.execute(
             r#"
@@ -2459,6 +2723,7 @@ impl Database {
                     file_assets.size_bytes,
                     rx_assets.rx_type,
                     rx_assets.tooth_number,
+                    rx_assets.dicom_metadata_json,
                     rx_assets.acquired_at,
                     rx_assets.created_at
                 FROM rx_assets
@@ -2486,6 +2751,7 @@ impl Database {
                     file_assets.size_bytes,
                     rx_assets.rx_type,
                     rx_assets.tooth_number,
+                    rx_assets.dicom_metadata_json,
                     rx_assets.acquired_at,
                     rx_assets.created_at
                 FROM rx_assets
@@ -2494,6 +2760,31 @@ impl Database {
                 "#,
                 [file_asset_id],
                 rx_asset_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn get_agenda_block(&self, id: i64) -> DbResult<Option<AgendaBlock>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                    id,
+                    title,
+                    starts_at,
+                    ends_at,
+                    all_day,
+                    google_calendar_event_id,
+                    last_google_sync_at,
+                    created_by_user_id,
+                    created_at,
+                    updated_at
+                FROM agenda_blocks
+                WHERE id = ?1
+                "#,
+                [id],
+                agenda_block_from_row,
             )
             .optional()
             .map_err(DbError::from)
@@ -2549,7 +2840,8 @@ impl Database {
             input.starts_at,
             input.ends_at,
             excluded_appointment_id,
-        )
+        )?;
+        self.assert_no_agenda_block(input.starts_at, input.ends_at)
     }
 
     fn validate_chair_number(&self, chair_number: i64) -> DbResult<()> {
@@ -2595,6 +2887,24 @@ impl Database {
         }
     }
 
+    fn assert_no_agenda_block(&self, starts_at: &str, ends_at: &str) -> DbResult<()> {
+        let block_count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM agenda_blocks
+            WHERE starts_at < ?2 AND ends_at > ?1
+            "#,
+            params![starts_at.trim(), ends_at.trim()],
+            |row| row.get(0),
+        )?;
+
+        if block_count == 0 {
+            Ok(())
+        } else {
+            Err(DbError::AgendaBlocked)
+        }
+    }
+
     fn enqueue_google_calendar_sync_without_tx(&self, appointment_id: i64) -> DbResult<()> {
         self.conn.execute(
             r#"
@@ -2602,6 +2912,17 @@ impl Database {
             VALUES ('google_calendar', 'appointment', ?1, 'queued')
             "#,
             [appointment_id],
+        )?;
+        Ok(())
+    }
+
+    fn enqueue_google_calendar_block_sync_without_tx(&self, block_id: i64) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO sync_jobs (integration_type, entity_type, entity_id, status)
+            VALUES ('google_calendar', 'agenda_block', ?1, 'queued')
+            "#,
+            [block_id],
         )?;
         Ok(())
     }
@@ -2920,13 +3241,19 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         "ready_for_quote",
         "INTEGER NOT NULL DEFAULT 0 CHECK(ready_for_quote IN (0, 1))",
     )?;
+    ensure_column(
+        conn,
+        "rx_assets",
+        "dicom_metadata_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
     migrate_tooth_status_constraint(conn)?;
     conn.execute(
         r#"
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "enterprise_license_gate"],
+        params![CURRENT_SCHEMA_VERSION, "agenda_blocks_dicom_tariffario"],
     )?;
     Ok(())
 }
@@ -3096,8 +3423,32 @@ fn rx_asset_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RxAsset> {
         size_bytes: row.get(6)?,
         rx_type: row.get(7)?,
         tooth_number: row.get(8)?,
-        acquired_at: row.get(9)?,
-        created_at: row.get(10)?,
+        dicom_metadata_json: row.get(9)?,
+        acquired_at: row.get(10)?,
+        created_at: row.get(11)?,
+    })
+}
+
+fn agenda_block_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgendaBlock> {
+    agenda_block_from_offset_row(row, 0)
+}
+
+fn agenda_block_from_offset_row(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<AgendaBlock> {
+    let all_day: i64 = row.get(offset + 4)?;
+    Ok(AgendaBlock {
+        id: row.get(offset)?,
+        title: row.get(offset + 1)?,
+        starts_at: row.get(offset + 2)?,
+        ends_at: row.get(offset + 3)?,
+        all_day: all_day == 1,
+        google_calendar_event_id: row.get(offset + 5)?,
+        last_google_sync_at: row.get(offset + 6)?,
+        created_by_user_id: row.get(offset + 7)?,
+        created_at: row.get(offset + 8)?,
+        updated_at: row.get(offset + 9)?,
     })
 }
 
@@ -3312,6 +3663,20 @@ CREATE TABLE IF NOT EXISTS appointments (
     FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS agenda_blocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    starts_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL,
+    all_day INTEGER NOT NULL DEFAULT 0 CHECK(all_day IN (0, 1)),
+    google_calendar_event_id TEXT UNIQUE,
+    last_google_sync_at TEXT,
+    created_by_user_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS clinical_services_catalog (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL UNIQUE,
@@ -3330,6 +3695,120 @@ VALUES
     ('OTT-001', 'Otturazione composito', 'conservativa', 9500),
     ('DEV-001', 'Devitalizzazione', 'endodonzia', 25000),
     ('VIS-001', 'Visita diagnostica', 'diagnosi', 5000);
+
+INSERT OR IGNORE INTO clinical_services_catalog (code, name, category, base_price_cents)
+VALUES
+    ('NOM-001', 'Visita odontoiatrica', 'diagnosi e piano di trattamento', 8400),
+    ('NOM-002', 'Modelli di studio/piano di cura', 'diagnosi e piano di trattamento', 12000),
+    ('NOM-003', 'RX endorale', 'diagnosi e piano di trattamento', 3600),
+    ('NOM-004', 'Ortopantomografia', 'diagnosi e piano di trattamento', 4800),
+    ('NOM-005', 'Teleradiografia', 'diagnosi e piano di trattamento', 4800),
+    ('NOM-006', 'Status radiografico (16Rx)', 'diagnosi e piano di trattamento', 19200),
+    ('NOM-007', 'Istruzione e motivazione igiene orale/Ablazione tartaro', 'igiene e profilassi', 14400),
+    ('NOM-008', 'Igiene parodontale/levigatura delle radici per quadrante', 'igiene e profilassi', 10800),
+    ('NOM-009', 'Applicazione topica di medicamenti', 'igiene e profilassi', 4200),
+    ('NOM-010', 'Richiami igiene-mantenimento (per seduta)', 'igiene e profilassi', 9600),
+    ('NOM-011', 'Sbiancamento ambulatoriale', 'igiene e profilassi', 24000),
+    ('NOM-012', 'Sbiancamento domiciliare', 'igiene e profilassi', 24000),
+    ('NOM-013', 'Otturazione in composito a 1 superficie', 'conservativa', 10800),
+    ('NOM-014', 'Otturazione in composito a 2 superfici', 'conservativa', 13200),
+    ('NOM-015', 'Otturazione in composito a 3 superfici', 'conservativa', 16800),
+    ('NOM-016', 'Ricostruzione in composito (build up)', 'conservativa', 18000),
+    ('NOM-017', 'Ricostruzione pre-protesica (senza perni)', 'conservativa', 13200),
+    ('NOM-018', 'Sigillatura solchi 1 dente', 'conservativa', 4200),
+    ('NOM-019', 'Pronto soccorso endodontico', 'endodonzia', 12000),
+    ('NOM-020', 'Trattamento endodontico 1 canale (comprese radiografie - esclusa ricostruzione)', 'endodonzia', 18000),
+    ('NOM-021', 'Trattamento endodontico 2 canali (comprese radiografie - esclusa ricostruzione)', 'endodonzia', 24000),
+    ('NOM-022', 'Trattamento endodontico 3 canali (comprese radiografie - esclusa ricostruzione)', 'endodonzia', 30000),
+    ('NOM-023', 'Trattamento endodontico 4 canali (comprese radiografie - esclusa ricostruzione)', 'endodonzia', 36000),
+    ('NOM-024', 'Ritrattam endodontico per canale oltre la cura endodontica (comprese radiografie)', 'endodonzia', 6000),
+    ('NOM-025', 'Apicectomia con otturazione retrogada per radice oltre la cura endodontica', 'endodonzia', 36000),
+    ('NOM-026', 'Apecificazione o apicogenesi/chiusura canale o perforazione con MTA (per seduta)', 'endodonzia', 10800),
+    ('NOM-027', 'Perno in fibra con ricostruzione', 'endodonzia', 22800),
+    ('NOM-028', 'Perni accessori in fibra (cadauno)', 'endodonzia', 3000),
+    ('NOM-029', 'Perno fuso (lega non nobile)', 'endodonzia', 24000),
+    ('NOM-030', 'Rimozione perno endodontico', 'endodonzia', 9600),
+    ('NOM-031', 'Visita pedodontica', 'pedodonzia', 6000),
+    ('NOM-032', 'Otturazione semplice deciduo (senza matrice)', 'pedodonzia', 7200),
+    ('NOM-033', 'Otturazione complessa deciduo (con matrice)', 'pedodonzia', 10800),
+    ('NOM-034', 'Trattamento endodontico poliradicolato deciduo (escl. Otturazione coronale)', 'pedodonzia', 14400),
+    ('NOM-035', 'Mantenitore di spazio', 'pedodonzia', 24000),
+    ('NOM-036', 'Intarsio inlay in ceramica/disilicato', 'intarsi', 48000),
+    ('NOM-037', 'Intarsio inlay in composito', 'intarsi', 48000),
+    ('NOM-038', 'Intarsio onlay in ceramica', 'intarsi', 54000),
+    ('NOM-039', 'Intarsio onlay in composito', 'intarsi', 48000),
+    ('NOM-040', 'Intarsio overlay composito', 'intarsi', 54000),
+    ('NOM-041', 'Intarsio overlay disilicato', 'intarsi', 66000),
+    ('NOM-042', 'Estrazione semplice di dente o radice', 'chirurgia orale', 10800),
+    ('NOM-043', 'Estrazione indaginosa o con lembo di dente o radice', 'chirurgia orale', 18000),
+    ('NOM-044', 'Estrazione di dente o radice in inclusione mucosa o ossea parziale', 'chirurgia orale', 24000),
+    ('NOM-045', 'Estrazione di dente o radice in inclusione ossea totale', 'chirurgia orale', 36000),
+    ('NOM-046', 'Germectomia', 'chirurgia orale', 30000),
+    ('NOM-047', 'Esposizione chirurgica di dente incluso a scopo ortodontico', 'chirurgia orale', 45000),
+    ('NOM-048', 'Frenulectomia', 'chirurgia orale', 24000),
+    ('NOM-049', 'Frenulotomia', 'chirurgia orale', 18000),
+    ('NOM-050', 'Split crest compreso inserimento osso autologo/eterologo', 'chirurgia orale', 120000),
+    ('NOM-051', 'Asportazione cisti/neoformazione', 'chirurgia orale', 24000),
+    ('NOM-052', 'Chirurgia mucogengivale con finalita estetica compreso prelievo connettivale', 'chirurgia parodontale', 96000),
+    ('NOM-053', 'Chirurgia mucogengivale con lembi a scorrimento', 'chirurgia parodontale', 54000),
+    ('NOM-054', 'Allungamento corona clinica', 'chirurgia parodontale', 45000),
+    ('NOM-055', 'Chirurgia ossea rigenerativa con riempitivo e membrana riassorbibile', 'chirurgia parodontale', 84000),
+    ('NOM-056', 'Chirurgia ossea rigenerativa solo con riempitivo', 'chirurgia parodontale', 60000),
+    ('NOM-057', 'Rizectomia - con lembo', 'chirurgia parodontale', 21600),
+    ('NOM-058', 'Separazione radici - con lembo', 'chirurgia parodontale', 21600),
+    ('NOM-059', 'Piccolo rialzo del seno mascellare per sito', 'implantologia', 54000),
+    ('NOM-060', 'Grande rialzo del seno mascellare', 'implantologia', 180000),
+    ('NOM-061', 'Impianto osteointegrato', 'implantologia', 108000),
+    ('NOM-062', 'Prelievo di osso autologo', 'implantologia', 54000),
+    ('NOM-063', 'Innesto di materiale biocompatibile', 'implantologia', 36000),
+    ('NOM-064', 'Membrana', 'implantologia', 48000),
+    ('NOM-065', 'Dima per impianti', 'implantologia', 36000),
+    ('NOM-066', 'Pilastro implantare - abutment', 'implantologia', 36000),
+    ('NOM-067', 'Moncone in zirconia', 'implantologia', 60000),
+    ('NOM-068', 'Attacco a bottone su impianto', 'implantologia', 36000),
+    ('NOM-069', 'Protesi ibrida con denti del commercio Toronto bridge 5 impianti 10 elementi', 'implantologia', 1140000),
+    ('NOM-070', 'Protesi ibrida con denti del commercio Toronto bridge 6 impianti 12 elementi', 'implantologia', 1200000),
+    ('NOM-071', 'Corona provvisoria prefabbricata', 'protesi fissa', 12000),
+    ('NOM-072', 'Provvisorio pre-limatura', 'protesi fissa', 12000),
+    ('NOM-073', 'Provvisorio armato ribasabile', 'protesi fissa', 30000),
+    ('NOM-074', 'Corona o elemento di protesi fissa in lega preziosa e resina', 'protesi fissa', 72000),
+    ('NOM-075', 'Corona o elemento di protesi fissa in lega non preziosa e ceramica', 'protesi fissa', 78000),
+    ('NOM-076', 'Corona o elemento di protesi fissa in lega preziosa e ceramica', 'protesi fissa', 96000),
+    ('NOM-077', 'Corona in ceramica integrale', 'protesi fissa', 108000),
+    ('NOM-078', 'Faccetta disilicato', 'protesi fissa', 96000),
+    ('NOM-079', 'Faccetta in composito', 'protesi fissa', 72000),
+    ('NOM-080', 'Rimozione protesi fissa ad elemento', 'protesi fissa', 12000),
+    ('NOM-081', 'Provvisorio rinforzato', 'protesi fissa', 24000),
+    ('NOM-082', 'Ceratura diagnostica per elemento', 'protesi fissa', 7200),
+    ('NOM-083', 'Riceramizzazione per elemento', 'protesi fissa', 30000),
+    ('NOM-084', 'Corone telescopiche auree', 'protesi fissa', 84000),
+    ('NOM-085', 'Maryland Bridge in resina', 'protesi fissa', 72000),
+    ('NOM-086', 'Maryland Bridge in ceramica', 'protesi fissa', 120000),
+    ('NOM-087', 'Mascherina di prefigurazione per prova estetica mock-up a dente', 'protesi fissa', 9600),
+    ('NOM-088', 'Protesi totale provvisoria per arcata', 'protesi mobile', 108000),
+    ('NOM-089', 'Protesi totale per arcata', 'protesi mobile', 192000),
+    ('NOM-090', 'Base in resina', 'protesi mobile', 30000),
+    ('NOM-091', 'Gancio filo cadauno', 'protesi mobile', 6000),
+    ('NOM-092', 'Dente cadauno', 'protesi mobile', 9600),
+    ('NOM-093', 'Protesi parziale scheletrata con ganci', 'protesi mobile', 168000),
+    ('NOM-094', 'Protesi parziale scheletrata con attacchi per arcata', 'protesi mobile', 240000),
+    ('NOM-095', 'Gancio a filo in acciaio', 'protesi mobile', 6000),
+    ('NOM-096', 'Gancio non metallico', 'protesi mobile', 18000),
+    ('NOM-097', 'Attacco di precisione', 'protesi mobile', 30000),
+    ('NOM-098', 'Ribasatura indiretta', 'protesi mobile', 36000),
+    ('NOM-099', 'Ribasatura diretta', 'protesi mobile', 24000),
+    ('NOM-100', 'Riparazione semplice', 'protesi mobile', 18000),
+    ('NOM-101', 'Sostituzione/aggiunta dente', 'protesi mobile', 12000),
+    ('NOM-102', 'Prima visita ortodontica', 'ortodonzia', 9000),
+    ('NOM-103', 'Studio del caso foto impronte RX', 'ortodonzia', 22000),
+    ('NOM-104', 'Trattamento con apparecchiature fisso', 'ortodonzia', 200000),
+    ('NOM-105', 'Trattamento con apparecchiature tipo allineatori', 'ortodonzia', 250000),
+    ('NOM-106', 'Trattamento per espansione palato', 'ortodonzia', 150000),
+    ('NOM-107', 'Trattamento di intercettiva', 'ortodonzia', 160000),
+    ('NOM-108', 'Apparecchio di contenzione', 'ortodonzia', 35000),
+    ('NOM-109', 'Trattamento con apparecchiature linguali', 'ortodonzia', 300000),
+    ('NOM-110', 'Utilizzo di ausiliari mini viti', 'ortodonzia', 50000),
+    ('NOM-111', 'Trattamento con apparecchiatura fissa estetica', 'ortodonzia', 230000);
 
 CREATE TABLE IF NOT EXISTS clinical_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3545,6 +4024,7 @@ CREATE INDEX IF NOT EXISTS idx_patients_tax_code ON patients(tax_code);
 CREATE INDEX IF NOT EXISTS idx_appointments_starts_at ON appointments(starts_at);
 CREATE INDEX IF NOT EXISTS idx_appointments_patient ON appointments(patient_id);
 CREATE INDEX IF NOT EXISTS idx_appointments_chair_time ON appointments(chair_number, starts_at, ends_at);
+CREATE INDEX IF NOT EXISTS idx_agenda_blocks_time ON agenda_blocks(starts_at, ends_at);
 CREATE INDEX IF NOT EXISTS idx_clinical_records_patient ON clinical_records(patient_id);
 CREATE INDEX IF NOT EXISTS idx_clinical_records_patient_created ON clinical_records(patient_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_clinical_records_tooth ON clinical_records(patient_id, tooth_number);
@@ -3999,6 +4479,69 @@ mod tests {
             )
             .expect("appointment audit count");
         assert_eq!(audit_count, 3);
+    }
+
+    #[test]
+    fn agenda_blocks_prevent_appointments_and_enqueue_google_sync() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Anna",
+                    last_name: "Neri",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+
+        let block = db
+            .create_agenda_block(
+                admin.id,
+                &NewAgendaBlock {
+                    title: "Ferie/Chiuso",
+                    starts_at: "2026-08-10T00:00:00+02:00",
+                    ends_at: "2026-08-11T00:00:00+02:00",
+                    all_day: true,
+                },
+            )
+            .expect("create agenda block");
+        assert!(block.all_day);
+
+        assert!(matches!(
+            db.create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Controllo",
+                    starts_at: "2026-08-10T09:00:00+02:00",
+                    ends_at: "2026-08-10T09:30:00+02:00",
+                    status: "booked",
+                    color_tag: None,
+                    notes: None,
+                },
+            ),
+            Err(DbError::AgendaBlocked)
+        ));
+
+        let block_jobs: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_jobs WHERE integration_type = 'google_calendar' AND entity_type = 'agenda_block' AND entity_id = ?1 AND status = 'queued'",
+                [block.id],
+                |row| row.get(0),
+            )
+            .expect("agenda block sync jobs count");
+        assert_eq!(block_jobs, 1);
     }
 
     fn test_database_path() -> PathBuf {

@@ -1,14 +1,16 @@
 use crate::{
     auth::Role,
     db::{
-        Appointment, AppointmentInput, AuthSession, AuthorizedDevice, AuthorizedGoogleAccount,
-        BootstrapStatus, ChairConfig, ClinicalRecord, ClinicalRecordFilters, ClinicalService,
-        CreateUserInput, DatabaseStatus, DeviceAuthorization, GoogleCalendarSyncStatus,
-        LicenseStatus, NewClinicalRecord, NewPatient, NewRxAsset, Patient, PatientTimelineEvent,
-        RxAsset, StudioSettings, StudioSettingsUpdate, ToothStatus, User,
+        AgendaBlock, Appointment, AppointmentInput, AuthSession, AuthorizedDevice,
+        AuthorizedGoogleAccount, BootstrapStatus, ChairConfig, ClinicalRecord,
+        ClinicalRecordFilters, ClinicalService, CreateUserInput, DatabaseStatus,
+        DeviceAuthorization, GoogleCalendarSyncStatus, LicenseStatus, NewAgendaBlock,
+        NewClinicalRecord, NewPatient, NewRxAsset, Patient, PatientTimelineEvent, RxAsset,
+        StudioSettings, StudioSettingsUpdate, ToothStatus, User,
     },
-    files,
+    dicom_meta, files,
     integrations::google::{self, GoogleAuthorizationUrl, GoogleOAuthStatus},
+    rx_acquisition::{MockRxAdapter, RxAcquisitionAdapter},
     state::AppState,
 };
 use base64::{engine::general_purpose, Engine as _};
@@ -17,6 +19,7 @@ use std::{
     collections::HashMap,
     io::{Read, Write},
     net::TcpListener,
+    path::Path,
     time::{Duration, Instant},
 };
 use tauri::State;
@@ -266,10 +269,33 @@ pub struct RxAssetDataUrl {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct MockAcquireRxRequest {
+    session_token: String,
+    patient_id: i64,
+    rx_type: Option<String>,
+    tooth_number: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ListAppointmentsRequest {
     session_token: String,
     starts_from: String,
     starts_to: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateAgendaBlockRequest {
+    session_token: String,
+    title: String,
+    starts_at: String,
+    ends_at: String,
+    all_day: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteAgendaBlockRequest {
+    session_token: String,
+    block_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -299,6 +325,13 @@ pub struct UpdateAppointmentStatusRequest {
     session_token: String,
     appointment_id: i64,
     status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateClinicalServicePriceRequest {
+    session_token: String,
+    service_id: i64,
+    base_price_cents: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -691,6 +724,54 @@ pub fn get_chair_config(
 }
 
 #[tauri::command]
+pub fn list_agenda_blocks(
+    state: State<'_, AppState>,
+    request: ListAppointmentsRequest,
+) -> Result<Vec<AgendaBlock>, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .list_agenda_blocks(
+            actor.id,
+            request.starts_from.trim(),
+            request.starts_to.trim(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn create_agenda_block(
+    state: State<'_, AppState>,
+    request: CreateAgendaBlockRequest,
+) -> Result<AgendaBlock, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .create_agenda_block(
+            actor.id,
+            &NewAgendaBlock {
+                title: request.title.trim(),
+                starts_at: request.starts_at.trim(),
+                ends_at: request.ends_at.trim(),
+                all_day: request.all_day,
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn delete_agenda_block(
+    state: State<'_, AppState>,
+    request: DeleteAgendaBlockRequest,
+) -> Result<AgendaBlock, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .delete_agenda_block(actor.id, request.block_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn list_appointments(
     state: State<'_, AppState>,
     request: ListAppointmentsRequest,
@@ -856,6 +937,18 @@ pub fn list_clinical_services(
 }
 
 #[tauri::command]
+pub fn update_clinical_service_price(
+    state: State<'_, AppState>,
+    request: UpdateClinicalServicePriceRequest,
+) -> Result<ClinicalService, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .update_clinical_service_price(actor.id, request.service_id, request.base_price_cents)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn open_clinical_view(
     state: State<'_, AppState>,
     request: ClinicalViewRequest,
@@ -970,6 +1063,11 @@ pub fn import_rx_file(
             )
             .map_err(|error| error.to_string())?;
     }
+    let dicom_metadata = if is_dicom_path(&request.source_path) {
+        dicom_meta::extract_dicom_metadata(Path::new(&request.source_path))?
+    } else {
+        dicom_meta::DicomMetadata::empty()
+    };
     let stored = files::store_patient_rx_file(request.patient_id, &request.source_path)?;
     state
         .database()?
@@ -983,7 +1081,51 @@ pub fn import_rx_file(
                 size_bytes: stored.size_bytes,
                 original_filename: &stored.original_filename,
                 rx_type: request.rx_type.as_deref().unwrap_or("endoral"),
+                tooth_number: request.tooth_number.or(dicom_metadata.tooth_number),
+                dicom_metadata_json: &dicom_metadata.metadata_json,
+                acquired_at: dicom_metadata.acquisition_datetime.as_deref(),
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn mock_acquire_rx(
+    state: State<'_, AppState>,
+    request: MockAcquireRxRequest,
+) -> Result<RxAsset, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    let adapter = MockRxAdapter;
+    let source_path = adapter.acquire(request.patient_id, request.tooth_number)?;
+    {
+        let database = state.database()?;
+        database
+            .validate_rx_import(
+                actor.id,
+                request.patient_id,
+                request.rx_type.as_deref().unwrap_or("endoral"),
+                request.tooth_number,
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    let stored =
+        files::store_patient_rx_file(request.patient_id, source_path.to_string_lossy().as_ref())?;
+    let empty_dicom_metadata = dicom_meta::DicomMetadata::empty();
+    state
+        .database()?
+        .register_rx_asset(
+            actor.id,
+            &NewRxAsset {
+                patient_id: request.patient_id,
+                relative_path: &stored.relative_path,
+                mime_type: &stored.mime_type,
+                sha256_hex: &stored.sha256_hex,
+                size_bytes: stored.size_bytes,
+                original_filename: &stored.original_filename,
+                rx_type: request.rx_type.as_deref().unwrap_or("endoral"),
                 tooth_number: request.tooth_number,
+                dicom_metadata_json: &empty_dicom_metadata.metadata_json,
+                acquired_at: None,
             },
         )
         .map_err(|error| error.to_string())
@@ -1055,6 +1197,12 @@ pub async fn process_google_calendar_sync(
             .pending_google_calendar_sync_jobs(actor.id, request.limit.unwrap_or(10))
             .map_err(|error| error.to_string())?
     };
+    let block_jobs = {
+        let database = state.database()?;
+        database
+            .pending_google_calendar_block_sync_jobs(actor.id, request.limit.unwrap_or(10))
+            .map_err(|error| error.to_string())?
+    };
 
     let mut processed = 0;
     let mut failed = 0;
@@ -1075,6 +1223,37 @@ pub async fn process_google_calendar_sync(
                     .complete_google_calendar_sync_job(
                         job.job_id,
                         job.appointment.id,
+                        event_id.trim(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                processed += 1;
+            }
+            Err(error) => {
+                database
+                    .fail_google_calendar_sync_job(job.job_id, &error.to_string())
+                    .map_err(|db_error| db_error.to_string())?;
+                failed += 1;
+            }
+        }
+    }
+
+    for job in block_jobs {
+        let payload = google_payload_for_agenda_block(&job.block);
+        let result = google::upsert_calendar_event(
+            &token.access_token,
+            "primary",
+            job.block.google_calendar_event_id.as_deref(),
+            &payload,
+        )
+        .await;
+
+        let database = state.database()?;
+        match result {
+            Ok(event_id) => {
+                database
+                    .complete_google_calendar_block_sync_job(
+                        job.job_id,
+                        job.block.id,
                         event_id.trim(),
                     )
                     .map_err(|error| error.to_string())?;
@@ -1111,6 +1290,29 @@ fn google_payload_for_appointment(appointment: &Appointment) -> google::GoogleCa
             time_zone: "Europe/Rome".to_owned(),
         },
     }
+}
+
+fn google_payload_for_agenda_block(block: &AgendaBlock) -> google::GoogleCalendarEventPayload {
+    google::GoogleCalendarEventPayload {
+        summary: format!("{} (VeloDent)", block.title),
+        description: "VeloDent busy/closed time".to_owned(),
+        start: google::GoogleCalendarEventDateTime {
+            date_time: block.starts_at.clone(),
+            time_zone: "Europe/Rome".to_owned(),
+        },
+        end: google::GoogleCalendarEventDateTime {
+            date_time: block.ends_at.clone(),
+            time_zone: "Europe/Rome".to_owned(),
+        },
+    }
+}
+
+fn is_dicom_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "dcm" | "dicom"))
+        .unwrap_or(false)
 }
 
 fn wait_for_google_oauth_code(

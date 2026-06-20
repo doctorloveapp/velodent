@@ -5,11 +5,13 @@ mod billing;
 mod clinical;
 mod commands;
 mod db;
+mod dicom_meta;
 mod files;
 mod health;
 mod integrations;
 mod license;
 mod patients;
+mod rx_acquisition;
 mod server;
 mod state;
 
@@ -51,6 +53,9 @@ pub fn run() {
             commands::exchange_google_oauth_code,
             commands::process_google_calendar_sync,
             commands::get_chair_config,
+            commands::list_agenda_blocks,
+            commands::create_agenda_block,
+            commands::delete_agenda_block,
             commands::list_appointments,
             commands::create_appointment,
             commands::move_appointment,
@@ -62,6 +67,7 @@ pub fn run() {
             commands::open_patient_record,
             commands::patient_timeline,
             commands::list_clinical_services,
+            commands::update_clinical_service_price,
             commands::open_clinical_view,
             commands::get_tooth_statuses,
             commands::set_tooth_status,
@@ -69,6 +75,7 @@ pub fn run() {
             commands::list_clinical_records,
             commands::mark_clinical_record_ready_for_quote,
             commands::import_rx_file,
+            commands::mock_acquire_rx,
             commands::list_rx_assets,
             commands::rx_asset_data_url
         ])

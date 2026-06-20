@@ -1,4 +1,4 @@
-import { Laptop, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound } from "lucide-react";
+import { ClipboardList, Laptop, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Badge } from "@/frontend/shared/ui/badge";
@@ -10,13 +10,16 @@ import {
   createUser,
   getStudioSettings,
   isTauriRuntime,
+  listClinicalServices,
   listAuthorizedGoogleAccounts,
   listDevices,
   listUsers,
   revokeDevice,
+  updateClinicalServicePrice,
   updateStudioSettings,
   type AuthorizedDevice,
   type AuthorizedGoogleAccount,
+  type ClinicalService,
   type Role,
   type StudioSettings,
   type User
@@ -34,6 +37,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [googleAccounts, setGoogleAccounts] = useState<AuthorizedGoogleAccount[]>([]);
   const [devices, setDevices] = useState<AuthorizedDevice[]>([]);
+  const [services, setServices] = useState<ClinicalService[]>([]);
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [oneTimeToken, setOneTimeToken] = useState("");
@@ -63,16 +67,18 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       return;
     }
 
-    const [nextUsers, nextGoogleAccounts, nextDevices, nextSettings] = await Promise.all([
+    const [nextUsers, nextGoogleAccounts, nextDevices, nextSettings, nextServices] = await Promise.all([
       listUsers(currentUser.session_token),
       listAuthorizedGoogleAccounts(currentUser.session_token),
       listDevices(currentUser.session_token),
-      getStudioSettings(currentUser.session_token)
+      getStudioSettings(currentUser.session_token),
+      listClinicalServices(currentUser.session_token)
     ]);
 
     setUsers(nextUsers);
     setGoogleAccounts(nextGoogleAccounts);
     setDevices(nextDevices);
+    setServices(nextServices);
     setSettings(nextSettings);
     setStudioForm({
       clinicName: nextSettings.clinic_name ?? "",
@@ -183,6 +189,21 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     await refresh();
   }
 
+  async function handleUpdateServicePrice(serviceId: number, basePriceCents: number) {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+
+    const updated = await updateClinicalServicePrice({
+      session_token: currentUser.session_token,
+      service_id: serviceId,
+      base_price_cents: basePriceCents
+    });
+    setServices((current) => current.map((service) => (service.id === updated.id ? updated : service)));
+    setStatusMessage(t("settingsServiceSaved"));
+  }
+
   return (
     <div className="grid gap-4">
       <SettingsSurface
@@ -283,6 +304,27 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       </SettingsSurface>
 
       <SettingsSurface
+        icon={<ClipboardList aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+        title={t("settingsServicesTitle")}
+        eyebrow={t("settingsServicesEyebrow")}
+      >
+        <DenseTable
+          headers={[t("settingsServiceCode"), t("settingsServiceName"), t("settingsServiceCategory"), t("settingsServicePrice"), t("settingsStatus")]}
+          rows={services.map((service) => [
+            service.code,
+            service.name,
+            service.category,
+            <ServicePriceEditor
+              key={`price-${String(service.id)}`}
+              cents={service.base_price_cents}
+              onSave={(nextCents) => void handleUpdateServicePrice(service.id, nextCents).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}
+            />,
+            service.active ? t("settingsActive") : t("settingsInactive")
+          ])}
+        />
+      </SettingsSurface>
+
+      <SettingsSurface
         icon={<SlidersHorizontal aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
         title={t("settingsFutureTitle")}
         eyebrow={t("settingsFutureEyebrow")}
@@ -338,6 +380,24 @@ function RoleSelect({ onChange, value }: { onChange: (role: Role) => void; value
   );
 }
 
+function ServicePriceEditor({ cents, onSave }: { cents: number; onSave: (cents: number) => void }) {
+  const { t } = useL10n();
+  const [value, setValue] = useState(centsToEuroInput(cents));
+
+  useEffect(() => {
+    setValue(centsToEuroInput(cents));
+  }, [cents]);
+
+  return (
+    <div className="flex min-w-[150px] items-center gap-2">
+      <Input className="h-8 w-24" min={0} step="0.01" type="number" value={value} onChange={(event) => setValue(event.target.value)} />
+      <Button type="button" variant="secondary" size="sm" onClick={() => onSave(euroInputToCents(value))}>
+        {t("settingsServiceSave")}
+      </Button>
+    </div>
+  );
+}
+
 function DenseTable({ headers, rows }: { headers: string[]; rows: React.ReactNode[][] }) {
   return (
     <div className="mt-4 overflow-hidden rounded-md border border-alabaster-grey-500/20">
@@ -365,4 +425,16 @@ function DenseTable({ headers, rows }: { headers: string[]; rows: React.ReactNod
       </table>
     </div>
   );
+}
+
+function centsToEuroInput(cents: number) {
+  return (cents / 100).toFixed(2);
+}
+
+function euroInputToCents(value: string) {
+  const parsed = Number.parseFloat(value.replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return Math.round(parsed * 100);
 }

@@ -39,6 +39,7 @@ export interface RxAsset {
   size_bytes: number | null;
   rx_type: string;
   tooth_number: number | null;
+  dicom_metadata_json: string;
   acquired_at: string;
   created_at: string;
 }

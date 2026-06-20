@@ -17,6 +17,7 @@ tauri-build = { version = "2.6.2", features = [] }
 argon2 = "0.5.3"
 base64 = "0.22.1"
 dotenvy = "0.15.7"
+dicom-object = "=0.8.2"
 ed25519-dalek = "2.2.0"
 hex = "0.4.3"
 opener = "=0.8.5"
