@@ -2,6 +2,7 @@ import { AppShell } from "@/frontend/app-shell/AppShell";
 import { L10nProvider } from "@/frontend/shared/i18n/L10nProvider";
 import { useEffect, useState, type ReactNode } from "react";
 import { Activity, KeyRound, ShieldCheck } from "lucide-react";
+import { MobileApp } from "@/frontend/mobile/MobileApp";
 import { DEFAULT_FIRST_ADMIN_GOOGLE_EMAIL } from "@/frontend/settings/authConfig";
 import {
   bootstrapStatus,
@@ -103,7 +104,11 @@ function AuthGate() {
   }
 
   if (currentUser?.session_token) {
-    return <AppShell currentUser={currentUser} />;
+    return shouldUseMobileShell() ? (
+      <MobileApp currentUser={currentUser} onLogout={() => setCurrentUser(null)} />
+    ) : (
+      <AppShell currentUser={currentUser} />
+    );
   }
 
   if (!backendAvailable) {
@@ -193,6 +198,14 @@ function AuthGate() {
       </div>
     </AuthSurface>
   );
+}
+
+function shouldUseMobileShell() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("mobile") === "1") {
+    return true;
+  }
+  return window.matchMedia("(pointer: coarse) and (max-width: 1024px)").matches;
 }
 
 function AuthSurface({ children, eyebrow, icon, title }: { children: ReactNode; eyebrow: string; icon: ReactNode; title: string }) {
