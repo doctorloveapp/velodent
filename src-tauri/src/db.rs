@@ -1308,6 +1308,23 @@ impl Database {
         Ok(patient)
     }
 
+    pub fn audit_ts_cns_scan(&self, actor_user_id: i64, success: bool) -> DbResult<()> {
+        self.assert_active_user(actor_user_id)?;
+        let metadata = if success {
+            r#"{"result":"success","source":"mobile_nfc"}"#
+        } else {
+            r#"{"result":"failure","source":"mobile_nfc"}"#
+        };
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "TS_CNS_SCAN",
+            Some("patients"),
+            None,
+            metadata,
+        )
+    }
+
     pub fn patient_timeline(
         &self,
         actor_user_id: i64,

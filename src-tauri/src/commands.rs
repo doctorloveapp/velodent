@@ -784,8 +784,16 @@ pub fn read_ts_cns(
     state: State<'_, AppState>,
     request: ActorRequest,
 ) -> Result<TsCnsPatientData, String> {
-    require_session(&state, &request.session_token)?;
-    ts_cns::read_ts_cns_from_mobile_nfc()
+    let actor = require_session(&state, &request.session_token)?;
+    let result = ts_cns::read_ts_cns_from_mobile_nfc();
+    let audit_result = state
+        .database()?
+        .audit_ts_cns_scan(actor.id, result.is_ok())
+        .map_err(|error| error.to_string());
+    if let Err(error) = audit_result {
+        return Err(error);
+    }
+    result
 }
 
 #[tauri::command]

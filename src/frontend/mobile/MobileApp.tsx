@@ -5,6 +5,8 @@ import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
 import { Button } from "@/frontend/shared/ui/button";
 import { MobileShell, type MobileRouteKey } from "./MobileShell";
+import { MobileDashboard } from "./MobileDashboard";
+import { MobilePatientRegistration } from "./MobilePatientRegistration";
 
 const LAST_MOBILE_ROUTE_STORAGE_KEY = "velodent:mobile-route";
 
@@ -78,12 +80,18 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
           initial={{ opacity: 0, y: 8 }}
           transition={{ duration: 0.22 }}
         >
-          <MobilePlaceholder
-            body={t(activeContent.bodyKey)}
-            eyebrow={t("brandName")}
-            title={title}
-            primaryLabel={t("mobilePrimaryAction")}
-          />
+          {activeRoute === "dashboard" ? (
+            <MobileDashboard onRouteChange={setActiveRoute} />
+          ) : activeRoute === "newPatient" ? (
+            <MobilePatientRegistration sessionToken={currentUser.session_token ?? ""} />
+          ) : (
+            <MobilePlaceholder
+              body={t(activeContent.bodyKey)}
+              eyebrow={t("brandName")}
+              title={title}
+              primaryLabel={t("mobilePrimaryAction")}
+            />
+          )}
         </motion.div>
       </AnimatePresence>
     </MobileShell>
