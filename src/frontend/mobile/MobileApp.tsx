@@ -5,6 +5,7 @@ import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
 import { Button } from "@/frontend/shared/ui/button";
 import { MobileShell, type MobileRouteKey } from "./MobileShell";
+import { MobileClinical } from "./MobileClinical";
 import { MobileDashboard } from "./MobileDashboard";
 import { MobilePatientRegistration } from "./MobilePatientRegistration";
 
@@ -53,6 +54,7 @@ const routeContent: Record<MobileRouteKey, RouteContent> = {
 
 export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
   const { t } = useL10n();
+  const [clinicalMode, setClinicalMode] = useState<"clinical" | "orthodontics">("clinical");
   const [activeRoute, setActiveRoute] = useState<MobileRouteKey>(() => {
     const stored = window.localStorage.getItem(LAST_MOBILE_ROUTE_STORAGE_KEY);
     return isMobileRoute(stored) ? stored : "dashboard";
@@ -68,6 +70,23 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
     <MobileShell
       activeRoute={activeRoute}
       currentUser={currentUser}
+      headerAccessory={
+        activeRoute === "clinical" ? (
+          <div className="grid grid-cols-2 gap-2 rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
+            {(["clinical", "orthodontics"] as const).map((item) => (
+              <Button
+                key={item}
+                type="button"
+                variant={clinicalMode === item ? "navActive" : "nav"}
+                className="h-11 justify-center"
+                onClick={() => setClinicalMode(item)}
+              >
+                {item === "clinical" ? t("mobileClinicalMode") : t("mobileOrthodonticsMode")}
+              </Button>
+            ))}
+          </div>
+        ) : undefined
+      }
       title={title}
       onLogout={onLogout}
       onRouteChange={setActiveRoute}
@@ -84,6 +103,11 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
             <MobileDashboard onRouteChange={setActiveRoute} />
           ) : activeRoute === "newPatient" ? (
             <MobilePatientRegistration sessionToken={currentUser.session_token ?? ""} />
+          ) : activeRoute === "clinical" ? (
+            <MobileClinical
+              mode={clinicalMode}
+              sessionToken={currentUser.session_token ?? ""}
+            />
           ) : (
             <MobilePlaceholder
               body={t(activeContent.bodyKey)}

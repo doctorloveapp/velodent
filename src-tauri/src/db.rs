@@ -899,7 +899,7 @@ impl Database {
                     AND datetime(s.expires_at) > datetime('now')
                     AND u.active = 1
                 "#,
-                [token_hash],
+                [&token_hash],
                 user_from_row,
             )
             .optional()?
@@ -1053,6 +1053,100 @@ impl Database {
             device,
             token_once: generated.plaintext,
         })
+    }
+
+    pub fn authorize_paired_device(
+        &self,
+        user_id: i64,
+        label: &str,
+        allowed_lan_cidr: Option<&str>,
+    ) -> DbResult<DeviceAuthorization> {
+        self.assert_active_user(user_id)?;
+        let generated = auth::generate_device_token();
+
+        self.conn.execute(
+            r#"
+            INSERT INTO authorized_devices (
+                user_id,
+                label,
+                device_token_hash,
+                allowed_lan_cidr,
+                expires_at
+            )
+            VALUES (?1, ?2, ?3, ?4, datetime('now', '+30 days'))
+            "#,
+            params![user_id, label.trim(), generated.hash, allowed_lan_cidr],
+        )?;
+
+        let device_id = self.conn.last_insert_rowid();
+        self.insert_audit(
+            Some(user_id),
+            Some(device_id),
+            "mobile.device_paired",
+            Some("authorized_devices"),
+            Some(device_id),
+            "{}",
+        )?;
+
+        let device = self
+            .get_device(device_id)?
+            .ok_or_else(|| DbError::Sql("paired device not found".to_owned()))?;
+
+        Ok(DeviceAuthorization {
+            device,
+            token_once: generated.plaintext,
+        })
+    }
+
+    pub fn user_for_device_token(&self, token: &str, remote_ip: &str) -> DbResult<User> {
+        if token.trim().is_empty() {
+            return Err(DbError::Forbidden);
+        }
+        let token_hash = auth::hash_device_token(token.trim());
+        let row = self
+            .conn
+            .query_row(
+                r#"
+                SELECT
+                    d.allowed_lan_cidr,
+                    u.id,
+                    u.username,
+                    u.google_email,
+                    u.role,
+                    u.active,
+                    u.created_at,
+                    u.updated_at
+                FROM authorized_devices d
+                JOIN users u ON u.id = d.user_id
+                WHERE
+                    d.device_token_hash = ?1
+                    AND d.revoked_at IS NULL
+                    AND (d.expires_at IS NULL OR datetime(d.expires_at) > datetime('now'))
+                    AND u.active = 1
+                "#,
+                [&token_hash],
+                |row| Ok((row.get::<_, Option<String>>(0)?, user_from_columns(row, 1)?)),
+            )
+            .optional()?
+            .ok_or(DbError::Forbidden)?;
+
+        let (allowed_lan_cidr, user) = row;
+        if let Some(cidr) = allowed_lan_cidr.as_deref() {
+            if !ipv4_cidr_contains(cidr, remote_ip) {
+                return Err(DbError::Forbidden);
+            }
+        }
+
+        self.conn.execute(
+            r#"
+            UPDATE authorized_devices
+            SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE device_token_hash = ?1
+            "#,
+            [&token_hash],
+        )?;
+
+        Ok(user)
     }
 
     pub fn revoke_device(&self, actor_user_id: i64, device_id: i64) -> DbResult<AuthorizedDevice> {
@@ -4059,6 +4153,41 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn ipv4_cidr_contains(cidr: &str, ip: &str) -> bool {
+    let Some((network, prefix)) = cidr.split_once('/') else {
+        return cidr.trim() == ip.trim();
+    };
+    let Ok(prefix) = prefix.parse::<u32>() else {
+        return false;
+    };
+    if prefix > 32 {
+        return false;
+    }
+    let Some(network) = ipv4_to_u32(network.trim()) else {
+        return false;
+    };
+    let Some(ip) = ipv4_to_u32(ip.trim()) else {
+        return false;
+    };
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    (network & mask) == (ip & mask)
+}
+
+fn ipv4_to_u32(value: &str) -> Option<u32> {
+    let mut result = 0_u32;
+    let mut count = 0_u8;
+    for part in value.split('.') {
+        let octet = part.parse::<u8>().ok()?;
+        result = (result << 8) | u32::from(octet);
+        count += 1;
+    }
+    (count == 4).then_some(result)
+}
+
 fn normalize_email(email: &str) -> DbResult<String> {
     let normalized = email.trim().to_ascii_lowercase();
     if normalized.contains('@') && normalized.len() <= 254 {
@@ -4535,25 +4664,29 @@ fn appointment_from_offset_row(
 }
 
 fn user_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
-    let role: String = row.get(3)?;
-    let active: i64 = row.get(4)?;
+    user_from_columns(row, 0)
+}
+
+fn user_from_columns(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<User> {
+    let role: String = row.get(offset + 3)?;
+    let active: i64 = row.get(offset + 4)?;
 
     let role = Role::from_db_value(&role).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
-            3,
+            offset + 3,
             rusqlite::types::Type::Text,
             Box::new(DbError::InvalidRole(role)),
         )
     })?;
 
     Ok(User {
-        id: row.get(0)?,
-        username: row.get(1)?,
-        google_email: row.get(2)?,
+        id: row.get(offset)?,
+        username: row.get(offset + 1)?,
+        google_email: row.get(offset + 2)?,
         role,
         active: active == 1,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
+        created_at: row.get(offset + 5)?,
+        updated_at: row.get(offset + 6)?,
     })
 }
 

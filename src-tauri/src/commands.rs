@@ -1,6 +1,7 @@
 use crate::{
     auth::Role,
     billing::{self, FinancialPdf, PdfLine, PdfParty},
+    clinical::{self, BridgeUnits},
     db::{
         AgendaBlock, Appointment, AppointmentInput, AuthSession, AuthorizedDevice,
         AuthorizedGoogleAccount, BootstrapStatus, ChairConfig, ClinicalRecord,
@@ -15,7 +16,8 @@ use crate::{
         sumup::{self, SumupCheckout},
     },
     rx_acquisition::{MockRxAdapter, RxAcquisitionAdapter},
-    state::AppState,
+    server,
+    state::{AppState, PairingCodeInfo},
     ts_cns::{self, TsCnsPatientData},
 };
 use base64::{engine::general_purpose, Engine as _};
@@ -202,6 +204,11 @@ pub struct ActorRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PairingCodeRequest {
+    session_token: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ClinicalViewRequest {
     session_token: String,
     patient_id: i64,
@@ -243,6 +250,12 @@ pub struct MarkClinicalRecordQuoteRequest {
     session_token: String,
     record_id: i64,
     ready_for_quote: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CalculateBridgeUnitsRequest {
+    session_token: String,
+    selected_teeth: Vec<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -688,6 +701,15 @@ pub fn list_devices(
         .database()?
         .list_devices()
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_pairing_code(
+    state: State<'_, AppState>,
+    request: PairingCodeRequest,
+) -> Result<PairingCodeInfo, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state.create_pairing_code(actor.id, server::lan::LAN_SERVER_PORT)
 }
 
 #[tauri::command]
@@ -1370,6 +1392,15 @@ pub fn mark_clinical_record_ready_for_quote(
         .database()?
         .mark_clinical_record_ready_for_quote(actor.id, request.record_id, request.ready_for_quote)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn calculate_bridge_units(
+    state: State<'_, AppState>,
+    request: CalculateBridgeUnitsRequest,
+) -> Result<BridgeUnits, String> {
+    require_session(&state, &request.session_token)?;
+    clinical::calculate_bridge_units(&request.selected_teeth)
 }
 
 #[tauri::command]

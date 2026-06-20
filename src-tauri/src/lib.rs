@@ -23,6 +23,7 @@ pub fn run() {
         .setup(|app| {
             integrations::google::load_dotenv();
             app.manage(state::AppState::initialize()?);
+            server::lan::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -46,6 +47,7 @@ pub fn run() {
             commands::authorize_device,
             commands::revoke_device,
             commands::list_devices,
+            commands::get_pairing_code,
             commands::get_studio_settings,
             commands::update_studio_settings,
             commands::google_oauth_status,
@@ -87,6 +89,7 @@ pub fn run() {
             commands::create_clinical_record,
             commands::list_clinical_records,
             commands::mark_clinical_record_ready_for_quote,
+            commands::calculate_bridge_units,
             commands::import_rx_file,
             commands::mock_acquire_rx,
             commands::list_rx_assets,

@@ -49,6 +49,7 @@ interface MobileShellProps {
   activeRoute: MobileRouteKey;
   children: ReactNode;
   currentUser: User;
+  headerAccessory?: ReactNode;
   patientName?: string;
   title: string;
   onLogout: () => void;
@@ -59,6 +60,7 @@ export function MobileShell({
   activeRoute,
   children,
   currentUser,
+  headerAccessory,
   patientName,
   title,
   onLogout,
@@ -104,6 +106,7 @@ export function MobileShell({
             </Button>
           </div>
         </div>
+        {headerAccessory ? <div className="px-4 pb-3">{headerAccessory}</div> : null}
       </header>
 
       <main className="px-4 py-4" style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}>
