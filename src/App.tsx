@@ -3,6 +3,8 @@ import { L10nProvider } from "@/frontend/shared/i18n/L10nProvider";
 import { useEffect, useState, type ReactNode } from "react";
 import { Activity, KeyRound, ShieldCheck } from "lucide-react";
 import { MobileApp } from "@/frontend/mobile/MobileApp";
+import { MobilePairingGate } from "@/frontend/mobile/MobilePairingGate";
+import { clearStoredLanDeviceToken, isLanSessionToken } from "@/frontend/mobile/lanBridgeApi";
 import { DEFAULT_FIRST_ADMIN_GOOGLE_EMAIL } from "@/frontend/settings/authConfig";
 import {
   bootstrapStatus,
@@ -104,23 +106,23 @@ function AuthGate() {
   }
 
   if (currentUser?.session_token) {
-    return shouldUseMobileShell() ? (
-      <MobileApp currentUser={currentUser} onLogout={() => setCurrentUser(null)} />
+    return isLanSessionToken(currentUser.session_token) || shouldUseMobileShell() ? (
+      <MobileApp
+        currentUser={currentUser}
+        onLogout={() => {
+          if (currentUser.session_token && isLanSessionToken(currentUser.session_token)) {
+            clearStoredLanDeviceToken();
+          }
+          setCurrentUser(null);
+        }}
+      />
     ) : (
       <AppShell currentUser={currentUser} />
     );
   }
 
   if (!backendAvailable) {
-    return (
-      <AuthSurface
-        icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
-        title={t("authGateBackendUnavailableTitle")}
-        eyebrow={t("settingsSecurityEyebrow")}
-      >
-        <p className="text-sm leading-6 text-alabaster-grey-500">{t("authGateBackendUnavailableBody")}</p>
-      </AuthSurface>
-    );
+    return <MobilePairingGate onPaired={setCurrentUser} />;
   }
 
   if (licenseChecking || checking) {

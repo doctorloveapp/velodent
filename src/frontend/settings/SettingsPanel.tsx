@@ -8,6 +8,7 @@ import {
   addAuthorizedGoogleAccount,
   authorizeDevice,
   createUser,
+  getPairingCode,
   getStudioSettings,
   isTauriRuntime,
   listClinicalServices,
@@ -20,6 +21,7 @@ import {
   type AuthorizedDevice,
   type AuthorizedGoogleAccount,
   type ClinicalService,
+  type PairingCodeInfo,
   type Role,
   type StudioSettings,
   type User
@@ -41,6 +43,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [oneTimeToken, setOneTimeToken] = useState("");
+  const [pairingCode, setPairingCode] = useState<PairingCodeInfo | null>(null);
 
   const [studioForm, setStudioForm] = useState({
     clinicName: "",
@@ -178,6 +181,16 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     await refresh();
   }
 
+  async function handleGetPairingCode() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+    const nextPairingCode = await getPairingCode(currentUser.session_token);
+    setPairingCode(nextPairingCode);
+    setStatusMessage(t("settingsConnectSmartphone"));
+  }
+
   async function handleRevokeDevice(deviceId: number) {
     if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
@@ -287,6 +300,32 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             {t("settingsOneTimeToken")}: {oneTimeToken}
           </div>
         ) : null}
+        <div className="mt-3 rounded-xl border border-powder-blue-500/25 bg-ink-black-950 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
+                {t("settingsConnectSmartphone")}
+              </p>
+              <p className="mt-1 text-xs text-alabaster-grey-500">{t("settingsPairingHelp")}</p>
+            </div>
+            <Button type="button" variant="secondary" onClick={() => void handleGetPairingCode().catch(() => setStatusMessage(t("settingsGenericError")))}>
+              {t("settingsConnectSmartphone")}
+            </Button>
+          </div>
+          {pairingCode ? (
+            <div className="mt-4 rounded-md border border-powder-blue-500/35 bg-powder-blue-950 p-4 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
+                {t("settingsPairingPin")}
+              </p>
+              <p className="mt-2 font-mono text-4xl font-semibold tracking-[0.22em] text-white">
+                {pairingCode.code}
+              </p>
+              <p className="mt-2 text-xs text-alabaster-grey-500">
+                {t("settingsPairingExpires")} - {t("settingsPairingLanPort")}: {pairingCode.server_port}
+              </p>
+            </div>
+          ) : null}
+        </div>
         <DenseTable
           headers={[t("settingsDeviceLabel"), t("settingsUserId"), t("settingsLanCidr"), t("settingsStatus"), t("settingsAction")]}
           rows={devices.map((device) => [

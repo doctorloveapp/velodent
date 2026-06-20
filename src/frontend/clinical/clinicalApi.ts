@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { fromLanSessionToken, isLanSessionToken, lanFetch } from "@/frontend/mobile/lanBridgeApi";
 
 export type ToothState =
   | "healthy"
@@ -63,6 +64,9 @@ export interface ClinicalRecordInput {
 }
 
 export async function listClinicalServices(session_token: string) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<ClinicalService[]>("/api/clinical/services", fromLanSessionToken(session_token));
+  }
   return invoke<ClinicalService[]>("list_clinical_services", { request: { session_token } });
 }
 

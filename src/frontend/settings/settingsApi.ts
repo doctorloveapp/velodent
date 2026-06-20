@@ -57,6 +57,12 @@ export interface DeviceAuthorization {
   token_once: string;
 }
 
+export interface PairingCodeInfo {
+  code: string;
+  expires_at_epoch_ms: number;
+  server_port: number;
+}
+
 export interface GoogleAuthorizationUrl {
   authorization_url: string;
   redirect_uri: string;
@@ -167,6 +173,10 @@ export async function authorizeDevice(request: {
 
 export async function revokeDevice(request: { session_token: string; device_id: number }) {
   return invoke<AuthorizedDevice>("revoke_device", { request });
+}
+
+export async function getPairingCode(session_token: string) {
+  return invoke<PairingCodeInfo>("get_pairing_code", { request: { session_token } });
 }
 
 export async function getStudioSettings(session_token: string) {

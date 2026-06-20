@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { fromLanSessionToken, isLanSessionToken, lanFetch } from "@/frontend/mobile/lanBridgeApi";
 
 export interface Patient {
   id: number;
@@ -80,6 +81,11 @@ export async function validateTaxCode(tax_code: string) {
 }
 
 export async function readTsCns(session_token: string) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<TsCnsPatientData>("/api/ts-cns/read", fromLanSessionToken(session_token), {
+      method: "POST"
+    });
+  }
   return invoke<TsCnsPatientData>("read_ts_cns", { request: { session_token } });
 }
 

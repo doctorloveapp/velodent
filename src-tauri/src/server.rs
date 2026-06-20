@@ -108,6 +108,9 @@ pub mod lan {
         match (method, path.as_str()) {
             ("GET", "/health") => json_response(200, &json!({ "status": "ready" })),
             ("POST", "/pair") => handle_pair(body, remote_ip, app),
+            ("GET", "/api/me") => {
+                with_device_user(&headers, remote_ip, app, |_state, user| Ok(json!(user)))
+            }
             ("GET", "/api/patients/search") => {
                 with_device_user(&headers, remote_ip, app, |state, _user| {
                     let query = query.get("q").cloned().unwrap_or_default();
@@ -319,7 +322,7 @@ pub mod lan {
             _ => "OK",
         };
         format!(
-            "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type, X-VeloDent-Device-Token\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type, X-VeloDent-Device-Token\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Private-Network: true\r\nVary: Origin\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
     }
