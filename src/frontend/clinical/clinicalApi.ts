@@ -100,6 +100,17 @@ export async function createClinicalRecord(session_token: string, input: Clinica
   return invoke<ClinicalRecord>("create_clinical_record", { request: { session_token, ...input } });
 }
 
+export async function deleteClinicalRecord(session_token: string, record_id: number) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<{ deleted: boolean }>("/api/clinical/records", fromLanSessionToken(session_token), {
+      body: JSON.stringify({ record_id }),
+      headers: { "Content-Type": "application/json" },
+      method: "DELETE"
+    });
+  }
+  return invoke("delete_clinical_record", { request: { session_token, record_id } });
+}
+
 export async function listClinicalRecords(
   session_token: string,
   patient_id: number,

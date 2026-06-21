@@ -1,10 +1,10 @@
-import { Check, Plus } from "lucide-react";
+import { Check, Plus, Trash2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createClinicalRecord, listClinicalServices, type ClinicalService } from "@/frontend/clinical/clinicalApi";
+import { createClinicalRecord, deleteClinicalRecord, listClinicalServices, type ClinicalService } from "@/frontend/clinical/clinicalApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
-import { calculateBridgePreview } from "./bridge";
+import { calculateBridgePreview, calculateProsthesisLine } from "./bridge";
 
 type ClinicalMobileMode = "clinical" | "orthodontics";
 type ArchMode = "upper" | "lower";
@@ -22,6 +22,24 @@ const quickActionCategories: Record<QuickAction, string> = {
   mobileProsthesis: "protesi mobile"
 };
 
+const quickActionButtonClasses: Record<QuickAction, string> = {
+  caries: "border-emerald-400/45 bg-emerald-400/12 text-emerald-100 hover:bg-emerald-400/20",
+  endodontics: "border-violet-400/45 bg-violet-400/12 text-violet-100 hover:bg-violet-400/20",
+  periodontics: "border-sky-400/45 bg-sky-400/12 text-sky-100 hover:bg-sky-400/20",
+  crown: "border-amber-400/50 bg-amber-400/14 text-amber-100 hover:bg-amber-400/24",
+  extraction: "border-red-500/50 bg-red-500/14 text-red-100 hover:bg-red-500/24",
+  mobileProsthesis: "border-amber-300/45 bg-amber-300/10 text-amber-100 hover:bg-amber-300/20"
+};
+
+const recordedToothClasses: Record<QuickAction, string> = {
+  caries: "border-emerald-400/55 bg-emerald-400/18 text-white",
+  endodontics: "border-violet-400/55 bg-violet-400/18 text-white",
+  periodontics: "border-sky-400/55 bg-sky-400/18 text-white",
+  crown: "border-amber-400/60 bg-amber-400/20 text-white",
+  extraction: "border-red-500/60 bg-red-500/20 text-white",
+  mobileProsthesis: "border-amber-300/55 bg-amber-300/16 text-white"
+};
+
 interface MobileClinicalProps {
   activePatientId: number | null;
   mode: ClinicalMobileMode;
@@ -34,6 +52,11 @@ interface BridgeArcLayout {
   left: number;
   top: number;
   width: number;
+}
+
+interface RecordedToothRecord {
+  action: QuickAction;
+  recordId: number;
 }
 
 export function MobileClinical({
@@ -50,13 +73,15 @@ export function MobileClinical({
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [activeAction, setActiveAction] = useState<QuickAction | null>(null);
-  const [bridgeActive, setBridgeActive] = useState(false);
   const [bridgeLayout, setBridgeLayout] = useState<BridgeArcLayout | null>(null);
-  const [recordedTeeth, setRecordedTeeth] = useState<Set<number>>(() => new Set());
+  const [recordedToothRecords, setRecordedToothRecords] = useState<Partial<Record<number, RecordedToothRecord>>>({});
+  const [prosthesisLineTeeth, setProsthesisLineTeeth] = useState<number[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
   const teeth = arch === "upper" ? upperTeeth : lowerTeeth;
   const bridgePreview = calculateBridgePreview(selectedTeeth);
-  const visibleBridgePreview = bridgeActive ? bridgePreview : null;
+  const prosthesisLine = calculateProsthesisLine(prosthesisLineTeeth);
+  const visibleBridgePreview = prosthesisLine?.type === "bridge" ? prosthesisLine : null;
+  const singleProsthesisTooth = prosthesisLine?.type === "single" ? prosthesisLine.tooth : null;
   const bridgeKey = visibleBridgePreview?.includedTeeth.join("-") ?? "";
 
   useEffect(() => {
@@ -117,7 +142,7 @@ export function MobileClinical({
       return;
     }
     setActiveAction(null);
-    setBridgeActive(false);
+    setProsthesisLineTeeth([]);
     if (selectionMode) {
       setSelectedTeeth((current) => {
         if (current.includes(tooth)) {
@@ -134,7 +159,6 @@ export function MobileClinical({
     if (!activePatientId) {
       return;
     }
-    setBridgeActive(action === "crown" && selectedTeeth.length >= 2);
     setActiveAction(action);
   }
 
@@ -144,7 +168,7 @@ export function MobileClinical({
     }
     const targetTeeth = Array.from(
       new Set(
-        activeAction === "crown" && bridgeActive && bridgePreview
+        activeAction === "crown" && bridgePreview
           ? bridgePreview.includedTeeth
           : selectedTeeth
       )
@@ -153,7 +177,7 @@ export function MobileClinical({
       return;
     }
 
-    await Promise.all(
+    const records = await Promise.all(
       targetTeeth.map((tooth) =>
         createClinicalRecord(sessionToken, {
           patient_id: activePatientId,
@@ -166,16 +190,44 @@ export function MobileClinical({
       )
     );
 
-    setRecordedTeeth((current) => {
-      const next = new Set(current);
-      targetTeeth.forEach((tooth) => next.add(tooth));
+    setRecordedToothRecords((current) => {
+      const next = { ...current };
+      records.forEach((record, index) => {
+        const tooth = targetTeeth[index];
+        next[tooth] = { action: activeAction, recordId: record.id };
+      });
       return next;
     });
     setStatusMessage(t("mobileClinicalServiceRegistered"));
+    if (activeAction === "crown") {
+      setSelectedTeeth(targetTeeth);
+      setProsthesisLineTeeth(targetTeeth);
+    } else {
+      setSelectedTeeth([]);
+      setProsthesisLineTeeth([]);
+    }
+    setSelectionMode(false);
+    setActiveAction(null);
+  }
+
+  async function handleClearSelection() {
+    if (selectedTeeth.length > 0) {
+      const recordIds = selectedTeeth
+        .map((tooth) => recordedToothRecords[tooth]?.recordId)
+        .filter((recordId): recordId is number => typeof recordId === "number");
+      await Promise.all(recordIds.map((recordId) => deleteClinicalRecord(sessionToken, recordId)));
+      setRecordedToothRecords((current) => {
+        const selectedSet = new Set(selectedTeeth);
+        return Object.fromEntries(
+          Object.entries(current).filter(([tooth]) => !selectedSet.has(Number(tooth)))
+        );
+      });
+    }
     setSelectedTeeth([]);
     setSelectionMode(false);
     setActiveAction(null);
-    setBridgeActive(false);
+    setProsthesisLineTeeth([]);
+    setStatusMessage("");
   }
 
   if (!activePatientId) {
@@ -211,25 +263,27 @@ export function MobileClinical({
 
   return (
     <section className="grid gap-4">
-      <Button
-        type="button"
-        className="h-11 justify-center text-sm"
-        onClick={() => {
-          setArch((current) => (current === "upper" ? "lower" : "upper"));
-          setSelectedTeeth([]);
-          setSelectionMode(false);
-          setActiveAction(null);
-          setBridgeActive(false);
-        }}
-      >
-        {t("mobileSwitchArch")} - {arch === "upper" ? t("mobileUpperArch") : t("mobileLowerArch")}
-      </Button>
-
       <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
-            {arch === "upper" ? t("mobileUpperArch") : t("mobileLowerArch")}
-          </p>
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
+              {arch === "upper" ? t("mobileUpperArch") : t("mobileLowerArch")}
+            </p>
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-8 shrink-0 justify-center px-3 text-[11px]"
+              onClick={() => {
+                setArch((current) => (current === "upper" ? "lower" : "upper"));
+                setSelectedTeeth([]);
+                setSelectionMode(false);
+                setActiveAction(null);
+                setProsthesisLineTeeth([]);
+              }}
+            >
+              {arch === "upper" ? t("mobileLowerArch") : t("mobileUpperArch")}
+            </Button>
+          </div>
           {selectionMode ? (
             <span className="text-xs font-medium text-powder-blue-500">{t("mobileSelectionMode")}</span>
           ) : null}
@@ -241,7 +295,8 @@ export function MobileClinical({
           {teeth.map((tooth) => {
             const selected = selectedTeeth.includes(tooth);
             const included = visibleBridgePreview?.includedTeeth.includes(tooth) ?? false;
-            const recorded = recordedTeeth.has(tooth);
+            const recordedAction = recordedToothRecords[tooth]?.action;
+            const singleProsthesis = singleProsthesisTooth === tooth;
             return (
               <motion.button
                 key={tooth}
@@ -250,18 +305,21 @@ export function MobileClinical({
                 }}
                 className={[
                   "relative z-20 flex h-14 flex-col items-center justify-center gap-0.5 rounded-md border text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-powder-blue-500/70",
-                  selected
-                    ? "border-powder-blue-500 bg-powder-blue-950 text-white"
-                    : included
-                      ? "border-pale-sky-500/50 bg-pale-sky-950 text-white"
-                      : recorded
-                        ? "border-emerald-500/40 bg-emerald-500/10 text-white"
+                  recordedAction
+                    ? recordedToothClasses[recordedAction]
+                    : selected
+                      ? "border-powder-blue-500 bg-powder-blue-950 text-white"
+                      : included
+                        ? "border-pale-sky-500/50 bg-pale-sky-950 text-white"
                         : "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500"
                 ].join(" ")}
                 type="button"
                 whileTap={{ scale: 0.94 }}
                 onClick={() => handleToothPress(tooth)}
               >
+                {singleProsthesis ? (
+                  <span className="pointer-events-none absolute inset-1 rounded-full border-2 border-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.5)]" />
+                ) : null}
                 {selected ? (
                   <span className="absolute -right-1 -top-1 grid h-5 w-5 place-items-center rounded-full bg-powder-blue-500 text-white">
                     <Check aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={2} />
@@ -290,8 +348,10 @@ export function MobileClinical({
         <QuickActions
           activeAction={activeAction}
           activePatientId={activePatientId}
+          canClear={selectedTeeth.some((tooth) => Boolean(recordedToothRecords[tooth]))}
           useBridge={selectedTeeth.length >= 2}
           onAction={handleQuickAction}
+          onClear={() => void handleClearSelection().catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
           onSelectionMode={() => setSelectionMode(true)}
         />
       ) : null}
@@ -322,14 +382,18 @@ export function MobileClinical({
 function QuickActions({
   activeAction,
   activePatientId,
+  canClear,
   useBridge,
   onAction,
+  onClear,
   onSelectionMode
 }: {
   activeAction: QuickAction | null;
   activePatientId: number;
+  canClear: boolean;
   useBridge: boolean;
   onAction: (action: QuickAction) => void;
+  onClear: () => void;
   onSelectionMode: () => void;
 }) {
   const { t } = useL10n();
@@ -345,11 +409,18 @@ function QuickActions({
   return (
     <div className="grid gap-3">
       <div className="grid grid-cols-2 gap-2">
-        <Button
-          type="button"
-          className="h-14 justify-center border-amber-500/40 bg-amber-500/20 text-white hover:bg-amber-500/30"
-          onClick={onSelectionMode}
-        >
+        {canClear ? (
+          <Button
+            type="button"
+            variant="secondary"
+            className="h-14 justify-center border-red-500/45 text-red-300 hover:bg-red-500/15 hover:text-red-100"
+            onClick={onClear}
+          >
+            <Trash2 aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
+            {t("mobileClearTooth")}
+          </Button>
+        ) : null}
+        <Button type="button" className="h-14 justify-center border-powder-blue-500/45 bg-powder-blue-950 text-white hover:bg-powder-blue-500/25" onClick={onSelectionMode}>
           <Plus aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
           {t("mobileAddToSelection")}
         </Button>
@@ -357,8 +428,12 @@ function QuickActions({
           <Button
             key={action.key}
             type="button"
-            variant={activeAction === action.key ? "navActive" : "secondary"}
-            className="h-14 justify-center text-sm"
+            variant="secondary"
+            className={[
+              "h-14 justify-center text-sm",
+              quickActionButtonClasses[action.key],
+              activeAction === action.key ? "ring-2 ring-powder-blue-500/55" : ""
+            ].join(" ")}
             onClick={() => {
               if (!activePatientId) {
                 return;
@@ -387,10 +462,15 @@ function MobileServiceOverlay({
 }) {
   const { t } = useL10n();
   return (
-    <div className="fixed inset-0 z-50 grid content-end bg-black/45 p-4 backdrop-blur-sm">
+    <div
+      className="fixed inset-x-0 bottom-0 z-50 bg-black/45 px-4 pb-4 backdrop-blur-sm"
+      style={{
+        paddingBottom: "calc(1rem + env(safe-area-inset-bottom))",
+        top: "calc(5.25rem + env(safe-area-inset-top))"
+      }}
+    >
       <div
-        className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
-        style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}
+        className="mx-auto mt-3 flex max-h-[calc(100dvh-7rem)] w-full max-w-[520px] flex-col rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
       >
         <div className="mb-3 flex items-center justify-between gap-3">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{title}</p>
@@ -398,7 +478,7 @@ function MobileServiceOverlay({
             {t("mobileCloseMenu")}
           </Button>
         </div>
-        <div className="grid max-h-[48dvh] gap-2 overflow-y-auto">
+        <div className="grid min-h-0 gap-2 overflow-y-auto">
           {services.length ? (
             services.map((service) => (
               <Button
@@ -494,7 +574,7 @@ function BridgeArc({ layout }: { layout: BridgeArcLayout }) {
   return (
     <svg
       aria-hidden="true"
-      className="pointer-events-none absolute z-10 text-powder-blue-500"
+      className="pointer-events-none absolute z-10 text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.45)]"
       style={{
         height: layout.height,
         left: layout.left,

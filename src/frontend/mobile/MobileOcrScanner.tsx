@@ -1,17 +1,10 @@
 import { Camera, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
+import { recognize } from "tesseract.js";
 import type { TsCnsPatientData } from "@/frontend/patients/patientsApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
-
-declare global {
-  interface Window {
-    Tesseract?: {
-      recognize: (image: string, language?: string) => Promise<{ data: { text: string } }>;
-    };
-  }
-}
 
 interface MobileOcrScannerProps {
   open: boolean;
@@ -26,7 +19,6 @@ export function MobileOcrScanner({ open, onClose, onManualEntry, onSuccess }: Mo
   const streamRef = useRef<MediaStream | null>(null);
   const [statusMessage, setStatusMessage] = useState(t("mobileOcrWaiting"));
   const [processing, setProcessing] = useState(false);
-  const canSimulate = import.meta.env.DEV || !window.Tesseract;
 
   useEffect(() => {
     if (!open) {
@@ -82,15 +74,6 @@ export function MobileOcrScanner({ open, onClose, onManualEntry, onSuccess }: Mo
     }
   }
 
-  function handleSimulate() {
-    onSuccess({
-      date_of_birth: "1980-01-01",
-      first_name: "Mario",
-      last_name: "Rossi",
-      tax_code: "RSSMRA80A01H501U"
-    });
-  }
-
   return (
     <AnimatePresence>
       {open ? (
@@ -142,11 +125,6 @@ export function MobileOcrScanner({ open, onClose, onManualEntry, onSuccess }: Mo
                 <Camera aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
                 {t("mobileOcrCapture")}
               </Button>
-              {canSimulate ? (
-                <Button type="button" variant="secondary" className="h-12 justify-center text-sm" onClick={handleSimulate}>
-                  {t("mobileOcrSimulateTest")}
-                </Button>
-              ) : null}
               <Button type="button" variant="secondary" className="h-12 justify-center text-sm" onClick={onManualEntry}>
                 {t("mobileManualEntry")}
               </Button>
@@ -171,10 +149,7 @@ function captureVideoFrame(video: HTMLVideoElement) {
 }
 
 async function extractHealthCardData(image: string): Promise<TsCnsPatientData> {
-  if (!window.Tesseract) {
-    throw new Error("ocr unavailable");
-  }
-  const result = await window.Tesseract.recognize(image, "ita");
+  const result = await recognize(image, "ita");
   return parseHealthCardText(result.data.text);
 }
 

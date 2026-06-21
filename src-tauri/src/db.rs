@@ -2377,6 +2377,65 @@ impl Database {
             .ok_or(DbError::NotFound)
     }
 
+    pub fn delete_clinical_record(&self, actor_user_id: i64, record_id: i64) -> DbResult<()> {
+        self.assert_active_user(actor_user_id)?;
+        let record = self
+            .get_clinical_record(record_id)?
+            .ok_or(DbError::NotFound)?;
+        if record.status != "diagnosed" {
+            return Err(DbError::InvalidClinicalStatus(record.status));
+        }
+
+        self.conn
+            .execute("DELETE FROM clinical_records WHERE id = ?1", [record_id])?;
+
+        if let Some(tooth_number) = record.tooth_number {
+            let remaining_status = self
+                .conn
+                .query_row(
+                    r#"
+                    SELECT status
+                    FROM clinical_records
+                    WHERE patient_id = ?1 AND tooth_number = ?2
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    "#,
+                    params![record.patient_id, tooth_number],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let next_state = remaining_status
+                .as_deref()
+                .map(tooth_state_for_clinical_status)
+                .unwrap_or("healthy");
+            self.upsert_tooth_status_without_audit(
+                record.patient_id,
+                tooth_number,
+                next_state,
+                actor_user_id,
+            )?;
+        }
+
+        self.insert_patient_audit(
+            actor_user_id,
+            record.patient_id,
+            "clinical.record_deleted",
+            &format!(
+                r#"{{"record_id":{record_id},"tooth_number":{},"service_id":{}}}"#,
+                record
+                    .tooth_number
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "null".to_owned()),
+                record
+                    .service_id
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "null".to_owned())
+            ),
+        )?;
+
+        Ok(())
+    }
+
     pub fn register_rx_asset(
         &self,
         actor_user_id: i64,
@@ -5587,6 +5646,29 @@ mod tests {
             .expect("unmark quote flow");
         assert!(!flagged.ready_for_quote);
 
+        db.delete_clinical_record(admin.id, record.id)
+            .expect("delete diagnosed clinical record");
+        let records_after_delete = db
+            .list_clinical_records(
+                admin.id,
+                patient.id,
+                &ClinicalRecordFilters {
+                    date_from: None,
+                    date_to: None,
+                    tooth_number: Some(16),
+                    operator_user_id: None,
+                },
+            )
+            .expect("clinical diary after delete");
+        assert!(records_after_delete.is_empty());
+        let neutral_tooth = db
+            .get_tooth_statuses(admin.id, patient.id)
+            .expect("tooth statuses after delete")
+            .into_iter()
+            .find(|status| status.tooth_number == 16)
+            .expect("tooth status exists");
+        assert_eq!(neutral_tooth.state, "healthy");
+
         let audit_count: i64 = db
             .conn
             .query_row(
@@ -5596,6 +5678,15 @@ mod tests {
             )
             .expect("clinical view audit count");
         assert_eq!(audit_count, 1);
+        let delete_audit_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE patient_id = ?1 AND action = 'clinical.record_deleted'",
+                [patient.id],
+                |row| row.get(0),
+            )
+            .expect("clinical delete audit count");
+        assert_eq!(delete_audit_count, 1);
     }
 
     #[test]

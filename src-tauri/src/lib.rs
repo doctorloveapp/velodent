@@ -89,6 +89,7 @@ pub fn run() {
             commands::create_clinical_record,
             commands::list_clinical_records,
             commands::mark_clinical_record_ready_for_quote,
+            commands::delete_clinical_record,
             commands::calculate_bridge_units,
             commands::import_rx_file,
             commands::mock_acquire_rx,

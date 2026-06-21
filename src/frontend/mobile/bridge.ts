@@ -4,6 +4,10 @@ export interface BridgePreview {
   unitCount: number;
 }
 
+export type ProsthesisLine =
+  | { type: "single"; tooth: number }
+  | { type: "bridge"; includedTeeth: number[]; selectedTeeth: number[]; unitCount: number };
+
 export function calculateBridgePreview(selectedTeeth: number[]): BridgePreview | null {
   const selected = Array.from(new Set(selectedTeeth)).sort((left, right) => left - right);
   if (selected.length < 2) {
@@ -22,4 +26,19 @@ export function calculateBridgePreview(selectedTeeth: number[]): BridgePreview |
     includedTeeth,
     unitCount: includedTeeth.length
   };
+}
+
+export function calculateProsthesisLine(selectedTeeth: number[]): ProsthesisLine | null {
+  const selected = Array.from(new Set(selectedTeeth)).sort((left, right) => left - right);
+  if (selected.length === 0) {
+    return null;
+  }
+  if (selected.length === 1) {
+    return { tooth: selected[0], type: "single" };
+  }
+  const bridge = calculateBridgePreview(selected);
+  if (!bridge) {
+    return null;
+  }
+  return { ...bridge, type: "bridge" };
 }

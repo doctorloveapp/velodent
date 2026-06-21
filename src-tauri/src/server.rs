@@ -37,6 +37,11 @@ pub mod lan {
         notes: Option<String>,
     }
 
+    #[derive(Debug, Deserialize)]
+    struct DeleteClinicalRecordRequest {
+        record_id: i64,
+    }
+
     #[derive(Debug, Serialize)]
     struct ApiError {
         error: String,
@@ -205,6 +210,17 @@ pub mod lan {
                         )
                         .map_err(|error| error.to_string())?;
                     Ok(json!(record))
+                })
+            }
+            ("DELETE", "/api/clinical/records") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = serde_json::from_str::<DeleteClinicalRecordRequest>(body.trim())
+                        .map_err(|_| "invalid clinical record delete body".to_owned())?;
+                    state
+                        .database()?
+                        .delete_clinical_record(user.id, request.record_id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!({ "deleted": true }))
                 })
             }
             ("POST", "/api/ts-cns/read") => {

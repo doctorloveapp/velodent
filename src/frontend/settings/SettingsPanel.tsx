@@ -1,4 +1,4 @@
-import { ClipboardList, Laptop, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound } from "lucide-react";
+import { ClipboardList, Laptop, Save, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, UsersRound, Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Badge } from "@/frontend/shared/ui/badge";
@@ -243,7 +243,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
           <Input placeholder={t("settingsChairCount")} type="number" min={1} value={studioForm.chairCount} onChange={(event) => setStudioForm({ ...studioForm, chairCount: event.target.value })} />
           <Input placeholder={t("settingsDataDirectory")} value={studioForm.dataDirectory} onChange={(event) => setStudioForm({ ...studioForm, dataDirectory: event.target.value })} />
           <Input placeholder={t("settingsHolidayJson")} value={studioForm.holidayPeriodsJson} onChange={(event) => setStudioForm({ ...studioForm, holidayPeriodsJson: event.target.value })} />
-          <Button type="button" onClick={() => void handleUpdateStudio()}>{t("settingsSaveStudio")}</Button>
+          <Button type="button" className="h-10 w-fit justify-center px-4 font-semibold shadow-[0_0_18px_rgba(47,127,208,0.14)] hover:shadow-[0_0_26px_rgba(47,127,208,0.24)]" onClick={() => void handleUpdateStudio()}>
+            <Save aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+            {t("settingsSaveStudio")}
+          </Button>
         </DenseForm>
         {settings ? <p className="mt-3 text-xs text-alabaster-grey-500">{t("settingsCurrentChairs")}: {settings.chair_count}</p> : null}
       </SettingsSurface>
@@ -259,7 +262,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             <Input placeholder={t("settingsPasswordOptional")} type="password" value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} />
             <Input placeholder={t("settingsGoogleEmail")} value={userForm.googleEmail} onChange={(event) => setUserForm({ ...userForm, googleEmail: event.target.value })} />
             <RoleSelect value={userForm.role} onChange={(role) => setUserForm({ ...userForm, role })} />
-            <Button type="button" onClick={() => void handleCreateUser()}><UserPlus aria-hidden="true" className="h-4 w-4" />{t("settingsCreateUser")}</Button>
+            <Button type="button" className="h-10 w-fit justify-center px-4 font-semibold shadow-[0_0_18px_rgba(47,127,208,0.14)] hover:shadow-[0_0_26px_rgba(47,127,208,0.24)]" onClick={() => void handleCreateUser()}>
+              <UserPlus aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+              {t("settingsCreateUser")}
+            </Button>
           </DenseForm>
           <DenseTable
             headers={[t("settingsUsername"), t("settingsRole"), t("settingsGoogleEmail"), t("settingsStatus")]}
@@ -275,7 +281,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
           <DenseForm>
             <Input placeholder={t("settingsGoogleEmail")} value={googleForm.email} onChange={(event) => setGoogleForm({ ...googleForm, email: event.target.value })} />
             <RoleSelect value={googleForm.role} onChange={(role) => setGoogleForm({ ...googleForm, role })} />
-            <Button type="button" onClick={() => void handleAddGoogle()}>{t("settingsAuthorizeGoogle")}</Button>
+            <Button type="button" className="h-10 w-fit justify-center px-4 font-semibold shadow-[0_0_18px_rgba(47,127,208,0.14)] hover:shadow-[0_0_26px_rgba(47,127,208,0.24)]" onClick={() => void handleAddGoogle()}>
+              <ShieldCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+              {t("settingsAuthorizeGoogle")}
+            </Button>
           </DenseForm>
           <DenseTable
             headers={[t("settingsGoogleEmail"), t("settingsRole"), t("settingsStatus")]}
@@ -293,7 +302,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
           <Input placeholder={t("settingsDeviceLabel")} value={deviceForm.label} onChange={(event) => setDeviceForm({ ...deviceForm, label: event.target.value })} />
           <Input placeholder={t("settingsDeviceUserId")} value={deviceForm.userId} onChange={(event) => setDeviceForm({ ...deviceForm, userId: event.target.value })} />
           <Input placeholder={t("settingsLanCidr")} value={deviceForm.allowedLanCidr} onChange={(event) => setDeviceForm({ ...deviceForm, allowedLanCidr: event.target.value })} />
-          <Button type="button" onClick={() => void handleAuthorizeDevice()}>{t("settingsAuthorizeDevice")}</Button>
+          <Button type="button" className="h-10 w-fit justify-center px-4 font-semibold shadow-[0_0_18px_rgba(47,127,208,0.14)] hover:shadow-[0_0_26px_rgba(47,127,208,0.24)]" onClick={() => void handleAuthorizeDevice()}>
+            <Laptop aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+            {t("settingsAuthorizeDevice")}
+          </Button>
         </DenseForm>
         {oneTimeToken ? (
           <div className="mt-3 rounded-md border border-powder-blue-500/30 bg-powder-blue-950 p-3 font-mono text-xs text-white">
@@ -308,7 +320,8 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
               </p>
               <p className="mt-1 text-xs text-alabaster-grey-500">{t("settingsPairingHelp")}</p>
             </div>
-            <Button type="button" variant="secondary" onClick={() => void handleGetPairingCode().catch(() => setStatusMessage(t("settingsGenericError")))}>
+            <Button type="button" variant="secondary" className="h-10 w-fit justify-center px-4 shadow-[0_0_14px_rgba(47,127,208,0.10)] hover:shadow-[0_0_22px_rgba(47,127,208,0.18)]" onClick={() => void handleGetPairingCode().catch(() => setStatusMessage(t("settingsGenericError")))}>
+              <Wifi aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
               {t("settingsConnectSmartphone")}
             </Button>
           </div>
@@ -334,7 +347,8 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             device.allowed_lan_cidr ?? "-",
             device.revoked_at ? t("settingsRevoked") : t("settingsActive"),
             device.revoked_at ? "-" : (
-              <Button key={device.id} type="button" variant="secondary" size="sm" onClick={() => void handleRevokeDevice(device.id)}>
+              <Button key={device.id} type="button" variant="secondary" size="sm" className="w-fit text-red-300 hover:bg-red-500/15 hover:text-red-100" onClick={() => void handleRevokeDevice(device.id)}>
+                <Trash2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.6} />
                 {t("settingsRevoke")}
               </Button>
             )
@@ -430,7 +444,8 @@ function ServicePriceEditor({ cents, onSave }: { cents: number; onSave: (cents: 
   return (
     <div className="flex min-w-[150px] items-center gap-2">
       <Input className="h-8 w-24" min={0} step="0.01" type="number" value={value} onChange={(event) => setValue(event.target.value)} />
-      <Button type="button" variant="secondary" size="sm" onClick={() => onSave(euroInputToCents(value))}>
+      <Button type="button" variant="secondary" size="sm" className="w-fit shadow-[0_0_12px_rgba(47,127,208,0.10)] hover:shadow-[0_0_18px_rgba(47,127,208,0.18)]" onClick={() => onSave(euroInputToCents(value))}>
+        <Save aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.6} />
         {t("settingsServiceSave")}
       </Button>
     </div>

@@ -253,6 +253,12 @@ pub struct MarkClinicalRecordQuoteRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DeleteClinicalRecordRequest {
+    session_token: String,
+    record_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CalculateBridgeUnitsRequest {
     session_token: String,
     selected_teeth: Vec<i64>,
@@ -1391,6 +1397,18 @@ pub fn mark_clinical_record_ready_for_quote(
     state
         .database()?
         .mark_clinical_record_ready_for_quote(actor.id, request.record_id, request.ready_for_quote)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn delete_clinical_record(
+    state: State<'_, AppState>,
+    request: DeleteClinicalRecordRequest,
+) -> Result<(), String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .delete_clinical_record(actor.id, request.record_id)
         .map_err(|error| error.to_string())
 }
 

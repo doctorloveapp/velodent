@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { isTauriRuntime, readTsCns, type TsCnsPatientData } from "@/frontend/patients/patientsApi";
+import { readTsCns, type TsCnsPatientData } from "@/frontend/patients/patientsApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
 
@@ -25,7 +25,6 @@ export function MobileTsScanner({
   const { t } = useL10n();
   const [scannerState, setScannerState] = useState<ScannerState>("waiting");
   const [attempt, setAttempt] = useState(0);
-  const canSimulateScan = import.meta.env.DEV || !isTauriRuntime();
 
   useEffect(() => {
     if (!open) {
@@ -62,16 +61,6 @@ export function MobileTsScanner({
       window.clearTimeout(scanTimer);
     };
   }, [attempt, onSuccess, open, sessionToken]);
-
-  function handleSimulateScan() {
-    vibrateSuccess();
-    onSuccess({
-      date_of_birth: "1980-01-01",
-      first_name: "Mario",
-      last_name: "Rossi",
-      tax_code: "RSSMRA80A01H501U"
-    });
-  }
 
   return (
     <AnimatePresence>
@@ -118,11 +107,6 @@ export function MobileTsScanner({
                   <Button type="button" className="h-14 justify-center text-base" onClick={() => setAttempt((current) => current + 1)}>
                     {t("mobileRetry")}
                   </Button>
-                  {canSimulateScan ? (
-                    <Button type="button" variant="secondary" className="h-12 justify-center text-sm" onClick={handleSimulateScan}>
-                      {t("mobileSimulateScanTest")}
-                    </Button>
-                  ) : null}
                   <Button type="button" variant="secondary" className="h-14 justify-center text-base" onClick={onManualEntry}>
                     {t("mobileManualEntry")}
                   </Button>
@@ -154,11 +138,6 @@ export function MobileTsScanner({
                   <p className="text-xl font-semibold text-white">
                     {scannerState === "reading" ? t("mobileScannerReading") : t("mobileScannerWaiting")}
                   </p>
-                  {canSimulateScan ? (
-                    <Button type="button" variant="secondary" className="mt-5 h-11 justify-center text-xs" onClick={handleSimulateScan}>
-                      {t("mobileSimulateScanTest")}
-                    </Button>
-                  ) : null}
                 </div>
               </div>
             )}
