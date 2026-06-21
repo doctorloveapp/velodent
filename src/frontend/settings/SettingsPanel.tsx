@@ -1,5 +1,6 @@
 import { ClipboardList, Laptop, Save, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, UsersRound, Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
@@ -44,6 +45,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [statusMessage, setStatusMessage] = useState("");
   const [oneTimeToken, setOneTimeToken] = useState("");
   const [pairingCode, setPairingCode] = useState<PairingCodeInfo | null>(null);
+  const [pairingQrDataUrl, setPairingQrDataUrl] = useState("");
 
   const [studioForm, setStudioForm] = useState({
     clinicName: "",
@@ -97,6 +99,40 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError"));
     });
   }, [currentUser?.session_token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const publicUrl = pairingCode?.public_url;
+    if (!publicUrl) {
+      setPairingQrDataUrl("");
+      return;
+    }
+
+    void QRCode.toDataURL(publicUrl, {
+      color: {
+        dark: "#070f1c",
+        light: "#f4f7fb"
+      },
+      errorCorrectionLevel: "M",
+      margin: 1,
+      scale: 6
+    })
+      .then((dataUrl) => {
+        if (!cancelled) {
+          setPairingQrDataUrl(dataUrl);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("VeloDent pairing QR generation error:", error);
+        if (!cancelled) {
+          setPairingQrDataUrl("");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pairingCode?.public_url]);
 
   if (!backendAvailable) {
     return (
@@ -337,11 +373,23 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
                 {t("settingsPairingExpires")} - {t("settingsPairingLanPort")}: {pairingCode.server_port}
               </p>
               {pairingCode.public_url ? (
-                <div className="mt-4 rounded-md border border-emerald-400/25 bg-emerald-400/10 p-3 text-left">
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-200">
-                    {t("settingsMobileTunnelUrl")}
-                  </p>
-                  <p className="mt-2 break-all font-mono text-sm text-white">{pairingCode.public_url}</p>
+                <div className="mt-4 grid gap-3 rounded-md border border-emerald-400/25 bg-emerald-400/10 p-3 text-left md:grid-cols-[auto,1fr]">
+                  {pairingQrDataUrl ? (
+                    <div className="rounded-md border border-alabaster-grey-500/20 bg-alabaster-grey-500 p-2">
+                      <img
+                        alt={t("settingsPairingQrAlt")}
+                        className="h-32 w-32"
+                        src={pairingQrDataUrl}
+                      />
+                    </div>
+                  ) : null}
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-200">
+                      {t("settingsMobileTunnelUrl")}
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-emerald-100">{t("settingsPairingQrHelp")}</p>
+                    <p className="mt-2 break-all font-mono text-sm text-white">{pairingCode.public_url}</p>
+                  </div>
                 </div>
               ) : null}
               {pairingCode.tunnel_error ? (
