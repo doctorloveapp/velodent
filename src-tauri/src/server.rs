@@ -1,5 +1,5 @@
 pub mod lan {
-    use crate::{state::AppState, ts_cns};
+    use crate::{db::NewClinicalRecord, state::AppState, ts_cns};
     use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
     use std::{
@@ -16,12 +16,25 @@ pub mod lan {
     #[derive(Debug, Deserialize)]
     struct PairRequest {
         pin: String,
+        device_uid: Option<String>,
         label: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
     struct PatientOpenRequest {
         patient_id: i64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ClinicalRecordRequest {
+        patient_id: i64,
+        service_id: Option<i64>,
+        tooth_number: Option<i64>,
+        tooth_surface: Option<String>,
+        pathology_description: Option<String>,
+        status: String,
+        ready_for_quote: bool,
+        notes: Option<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -171,6 +184,29 @@ pub mod lan {
                     Ok(json!(services))
                 })
             }
+            ("POST", "/api/clinical/records") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = serde_json::from_str::<ClinicalRecordRequest>(body.trim())
+                        .map_err(|_| "invalid clinical record body".to_owned())?;
+                    let record = state
+                        .database()?
+                        .create_clinical_record(
+                            user.id,
+                            &NewClinicalRecord {
+                                patient_id: request.patient_id,
+                                service_id: request.service_id,
+                                tooth_number: request.tooth_number,
+                                tooth_surface: request.tooth_surface.as_deref(),
+                                pathology_description: request.pathology_description.as_deref(),
+                                status: &request.status,
+                                ready_for_quote: request.ready_for_quote,
+                                notes: request.notes.as_deref(),
+                            },
+                        )
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(record))
+                })
+            }
             ("POST", "/api/ts-cns/read") => {
                 with_device_user(&headers, remote_ip, app, |state, actor| {
                     let result = ts_cns::read_ts_cns_from_mobile_nfc();
@@ -214,8 +250,13 @@ pub mod lan {
             IpAddr::V6(_) => None,
         };
         match state.database().and_then(|db| {
-            db.authorize_paired_device(user_id, label, cidr.as_deref())
-                .map_err(|error| error.to_string())
+            db.authorize_paired_device(
+                user_id,
+                label,
+                request.device_uid.as_deref(),
+                cidr.as_deref(),
+            )
+            .map_err(|error| error.to_string())
         }) {
             Ok(authorization) => json_response(200, &authorization),
             Err(error) => json_response(500, &ApiError { error }),

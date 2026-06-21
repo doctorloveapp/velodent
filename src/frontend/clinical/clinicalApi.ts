@@ -90,6 +90,13 @@ export async function setToothStatus(
 }
 
 export async function createClinicalRecord(session_token: string, input: ClinicalRecordInput) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<ClinicalRecord>("/api/clinical/records", fromLanSessionToken(session_token), {
+      body: JSON.stringify(input),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+  }
   return invoke<ClinicalRecord>("create_clinical_record", { request: { session_token, ...input } });
 }
 

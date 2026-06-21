@@ -97,7 +97,7 @@ export function MobileShell({
             </Badge>
             <Button
               aria-label={t("mobileMenu")}
-              className="h-12 w-12 p-0"
+              className="h-12 w-12 justify-center p-0"
               type="button"
               variant="secondary"
               onClick={() => setMenuOpen(true)}
@@ -144,7 +144,7 @@ export function MobileShell({
                 </div>
                 <Button
                   aria-label={t("mobileMenu")}
-                  className="h-11 w-11 p-0"
+                  className="h-11 w-11 justify-center p-0"
                   type="button"
                   variant="secondary"
                   onClick={() => setMenuOpen(false)}

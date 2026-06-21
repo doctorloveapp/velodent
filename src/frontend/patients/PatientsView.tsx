@@ -74,6 +74,7 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
   const [statusMessage, setStatusMessage] = useState("");
   const [editing, setEditing] = useState(false);
   const [lastOpenedPatientId, setLastOpenedPatientId] = useState<number | null>(null);
+  const [taxCodeTouched, setTaxCodeTouched] = useState(false);
 
   const canUseClinicalData = Boolean(backendAvailable && currentUser);
   const normalizedTaxCode = useMemo(() => normalizeTaxCode(form.tax_code), [form.tax_code]);
@@ -110,6 +111,7 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
     onPatientSelected(opened);
     setLastOpenedPatientId(opened.id);
     setForm(patientToForm(opened));
+    setTaxCodeTouched(false);
     setEditing(true);
     setActiveTab("summary");
     setTimeline(await patientTimeline(currentUser.session_token, opened.id));
@@ -145,6 +147,11 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
   }
 
   function updateForm(key: keyof typeof emptyPatientForm, value: string) {
+    if (key === "tax_code") {
+      setTaxCodeTouched(true);
+      setForm((current) => ({ ...current, tax_code: value.toUpperCase() }));
+      return;
+    }
     setForm((current) => ({ ...current, [key]: value }));
   }
 
@@ -187,6 +194,7 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
 
     onPatientSelected(saved);
     setForm(patientToForm(saved));
+    setTaxCodeTouched(false);
     setEditing(true);
     setTimeline(await patientTimeline(currentUser.session_token, saved.id));
     setStatusMessage(editing ? t("patientsUpdated") : t("patientsCreated"));
@@ -225,14 +233,16 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
       first_name: scanned.first_name,
       last_name: scanned.last_name,
       date_of_birth: scanned.date_of_birth,
-      tax_code: scanned.tax_code
+      tax_code: scanned.tax_code.toUpperCase()
     }));
+    setTaxCodeTouched(false);
     setStatusMessage(t("patientsTsScanned"));
   }
 
   function handleNewPatient() {
     onPatientSelected(null);
     setForm(emptyPatientForm);
+    setTaxCodeTouched(false);
     setEditing(false);
     setLastOpenedPatientId(null);
     setTimeline([]);
@@ -316,8 +326,8 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
               <Input className="xl:col-span-2" placeholder={t("patientsAddress")} value={form.address} onChange={(event) => updateForm("address", event.target.value)} />
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <Badge variant={taxCodeValid ? "success" : "danger"}>
-                {taxCodeValid ? t("patientsTaxCodeValid") : t("patientsTaxCodeInvalid")}
+              <Badge variant={taxCodeTouched ? (taxCodeValid ? "success" : "danger") : "default"}>
+                {taxCodeTouched ? (taxCodeValid ? t("patientsTaxCodeValid") : t("patientsTaxCodeInvalid")) : t("patientsTaxCodeBadge")}
               </Badge>
               <div className="flex gap-2">
                 <Button

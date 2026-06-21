@@ -4,7 +4,13 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Activity, KeyRound, ShieldCheck } from "lucide-react";
 import { MobileApp } from "@/frontend/mobile/MobileApp";
 import { MobilePairingGate } from "@/frontend/mobile/MobilePairingGate";
-import { clearStoredLanDeviceToken, isLanSessionToken } from "@/frontend/mobile/lanBridgeApi";
+import {
+  clearStoredLanDeviceToken,
+  isLanSessionToken,
+  lanCurrentUser,
+  lanHealth,
+  storedLanDeviceToken
+} from "@/frontend/mobile/lanBridgeApi";
 import { DEFAULT_FIRST_ADMIN_GOOGLE_EMAIL } from "@/frontend/settings/authConfig";
 import {
   bootstrapStatus,
@@ -34,6 +40,7 @@ function AuthGate() {
   const [backendAvailable] = useState(isTauriRuntime());
   const [checking, setChecking] = useState(true);
   const [licenseChecking, setLicenseChecking] = useState(true);
+  const [lanAutoLoginChecking, setLanAutoLoginChecking] = useState(() => !isTauriRuntime() && Boolean(storedLanDeviceToken()));
   const [license, setLicense] = useState<LicenseStatus | null>(null);
   const [activationKey, setActivationKey] = useState("");
   const [needsFirstAdmin, setNeedsFirstAdmin] = useState(false);
@@ -62,6 +69,25 @@ function AuthGate() {
       })
       .finally(() => setLicenseChecking(false));
   }, [backendAvailable, t]);
+
+  useEffect(() => {
+    if (backendAvailable) {
+      return;
+    }
+    const token = storedLanDeviceToken();
+    if (!token) {
+      setLanAutoLoginChecking(false);
+      return;
+    }
+    setLanAutoLoginChecking(true);
+    void lanHealth()
+      .then(() => lanCurrentUser(token))
+      .then((user) => setCurrentUser(user))
+      .catch(() => {
+        clearStoredLanDeviceToken();
+      })
+      .finally(() => setLanAutoLoginChecking(false));
+  }, [backendAvailable]);
 
   useEffect(() => {
     if (!backendAvailable || licenseChecking || !license?.activated) {
@@ -122,10 +148,21 @@ function AuthGate() {
   }
 
   if (!backendAvailable) {
+    if (lanAutoLoginChecking) {
+      return (
+        <AuthSurface
+          icon={<Activity aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+          title={t("authGateCheckingTitle")}
+          eyebrow={t("settingsSecurityEyebrow")}
+        >
+          <p className="text-sm text-alabaster-grey-500">{t("healthChecking")}</p>
+        </AuthSurface>
+      );
+    }
     return <MobilePairingGate onPaired={setCurrentUser} />;
   }
 
-  if (licenseChecking || checking) {
+  if (licenseChecking || checking || lanAutoLoginChecking) {
     return (
       <AuthSurface
         icon={<Activity aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
@@ -170,16 +207,22 @@ function AuthGate() {
       title={t("settingsFirstAdminTitle")}
       eyebrow={t("settingsSecurityEyebrow")}
     >
-      <div className="grid gap-3">
+      <form
+        className="grid gap-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void handleCreateFirstAdmin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")));
+        }}
+      >
         <p className="text-sm leading-6 text-alabaster-grey-500">{t("authGateFirstAdminHelp")}</p>
         <Input placeholder={t("settingsUsername")} value={adminForm.username} onChange={(event) => setAdminForm({ ...adminForm, username: event.target.value })} />
         <Input placeholder={t("settingsPassword")} type="password" value={adminForm.password} onChange={(event) => setAdminForm({ ...adminForm, password: event.target.value })} />
         <Input placeholder={t("settingsGoogleEmail")} value={adminForm.googleEmail} onChange={(event) => setAdminForm({ ...adminForm, googleEmail: event.target.value })} />
-        <Button type="button" onClick={() => void handleCreateFirstAdmin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}>
+        <Button type="submit">
           {t("settingsCreateFirstAdmin")}
         </Button>
         {statusMessage ? <p className="text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
-      </div>
+      </form>
     </AuthSurface>
   ) : (
     <AuthSurface
@@ -187,17 +230,23 @@ function AuthGate() {
       title={t("settingsLoginTitle")}
       eyebrow={t("settingsSecurityEyebrow")}
     >
-      <div className="grid gap-3">
+      <form
+        className="grid gap-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void handleLogin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")));
+        }}
+      >
         <Input placeholder={t("settingsUsername")} value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} />
         <Input placeholder={t("settingsPassword")} type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} />
-        <Button type="button" onClick={() => void handleLogin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}>
+        <Button type="submit">
           {t("settingsLoginAction")}
         </Button>
         <GoogleLoginControls
           statusMessage={statusMessage}
           onStart={() => void handleStartGoogleLogin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
         />
-      </div>
+      </form>
     </AuthSurface>
   );
 }

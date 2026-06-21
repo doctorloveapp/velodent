@@ -1,11 +1,11 @@
-import { CreditCard, Keyboard, Save } from "lucide-react";
+import { Camera, Keyboard, Save, type LucideIcon } from "lucide-react";
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import type { TsCnsPatientData } from "@/frontend/patients/patientsApi";
-import { MobileTsScanner } from "./MobileTsScanner";
+import { MobileOcrScanner } from "./MobileOcrScanner";
 
 interface MobilePatientDraft {
   first_name: string;
@@ -29,30 +29,26 @@ const emptyDraft: MobilePatientDraft = {
   address: ""
 };
 
-interface MobilePatientRegistrationProps {
-  sessionToken: string;
-}
-
-export function MobilePatientRegistration({ sessionToken }: MobilePatientRegistrationProps) {
+export function MobilePatientRegistration() {
   const { t } = useL10n();
-  const [scannerOpen, setScannerOpen] = useState(false);
+  const [ocrOpen, setOcrOpen] = useState(false);
   const [draft, setDraft] = useState<MobilePatientDraft | null>(null);
   const [draftSource, setDraftSource] = useState<DraftSource>("manual");
 
   function startManualEntry() {
-    setScannerOpen(false);
+    setOcrOpen(false);
     setDraftSource("manual");
     setDraft(emptyDraft);
   }
 
-  function handleScannerSuccess(data: TsCnsPatientData) {
-    setScannerOpen(false);
+  function handleOcrSuccess(data: TsCnsPatientData) {
+    setOcrOpen(false);
     setDraftSource("card");
     setDraft({
       ...emptyDraft,
       first_name: data.first_name,
       last_name: data.last_name,
-      tax_code: data.tax_code,
+      tax_code: data.tax_code.toUpperCase(),
       date_of_birth: data.date_of_birth
     });
   }
@@ -79,9 +75,9 @@ export function MobilePatientRegistration({ sessionToken }: MobilePatientRegistr
 
           <div className="grid gap-3">
             <MobileChoiceButton
-              icon={CreditCard}
-              label={t("mobileHealthCardReader")}
-              onClick={() => setScannerOpen(true)}
+              icon={Camera}
+              label={t("mobileHealthCardOcr")}
+              onClick={() => setOcrOpen(true)}
             />
             <MobileChoiceButton
               icon={Keyboard}
@@ -104,12 +100,11 @@ export function MobilePatientRegistration({ sessionToken }: MobilePatientRegistr
         </div>
       ) : null}
 
-      <MobileTsScanner
-        open={scannerOpen}
-        sessionToken={sessionToken}
-        onClose={() => setScannerOpen(false)}
+      <MobileOcrScanner
+        open={ocrOpen}
+        onClose={() => setOcrOpen(false)}
         onManualEntry={startManualEntry}
-        onSuccess={handleScannerSuccess}
+        onSuccess={handleOcrSuccess}
       />
     </section>
   );
@@ -120,7 +115,7 @@ function MobileChoiceButton({
   label,
   onClick
 }: {
-  icon: typeof CreditCard;
+  icon: LucideIcon;
   label: string;
   onClick: () => void;
 }) {
@@ -184,7 +179,7 @@ function MobilePatientDraftForm({
         <LabeledInput
           label={t("patientsTaxCode")}
           value={draft.tax_code}
-          onChange={(value) => update("tax_code", value)}
+          onChange={(value) => update("tax_code", value.toUpperCase())}
         />
         <LabeledInput
           inputMode="tel"

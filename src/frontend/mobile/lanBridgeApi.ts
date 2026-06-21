@@ -1,6 +1,7 @@
 import type { User } from "@/frontend/settings/settingsApi";
 
 const LAN_TOKEN_STORAGE_KEY = "velodent:lan-device-token";
+const LAN_DEVICE_UID_STORAGE_KEY = "velodent:lan-device-uid";
 const LAN_SESSION_PREFIX = "lan:";
 
 interface PairResponse {
@@ -48,6 +49,18 @@ export function clearStoredLanDeviceToken() {
   window.localStorage.removeItem(LAN_TOKEN_STORAGE_KEY);
 }
 
+export function storedLanDeviceUid() {
+  const existing = window.localStorage.getItem(LAN_DEVICE_UID_STORAGE_KEY);
+  if (existing) {
+    return existing;
+  }
+  const generated = typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `vd-${String(Date.now())}-${Math.random().toString(36).slice(2, 12)}`;
+  window.localStorage.setItem(LAN_DEVICE_UID_STORAGE_KEY, generated);
+  return generated;
+}
+
 export async function lanHealth() {
   const response = await fetch(`${lanBridgeBaseUrl()}/health`);
   if (!response.ok) {
@@ -59,6 +72,7 @@ export async function pairLanDevice(pin: string) {
   const response = await fetch(`${lanBridgeBaseUrl()}/pair`, {
     body: JSON.stringify({
       pin,
+      device_uid: storedLanDeviceUid(),
       label: navigator.userAgent.slice(0, 80)
     }),
     headers: { "Content-Type": "application/json" },

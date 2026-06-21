@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 9;
+const CURRENT_SCHEMA_VERSION: i64 = 10;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -1059,26 +1059,62 @@ impl Database {
         &self,
         user_id: i64,
         label: &str,
+        device_uid: Option<&str>,
         allowed_lan_cidr: Option<&str>,
     ) -> DbResult<DeviceAuthorization> {
         self.assert_active_user(user_id)?;
         let generated = auth::generate_device_token();
+        let normalized_device_uid = normalize_optional(device_uid);
 
-        self.conn.execute(
-            r#"
-            INSERT INTO authorized_devices (
-                user_id,
-                label,
-                device_token_hash,
-                allowed_lan_cidr,
-                expires_at
-            )
-            VALUES (?1, ?2, ?3, ?4, datetime('now', '+30 days'))
-            "#,
-            params![user_id, label.trim(), generated.hash, allowed_lan_cidr],
-        )?;
+        let updated = if let Some(uid) = normalized_device_uid.as_deref() {
+            self.conn.execute(
+                r#"
+                UPDATE authorized_devices
+                SET
+                    user_id = ?1,
+                    label = ?2,
+                    device_token_hash = ?3,
+                    allowed_lan_cidr = ?4,
+                    revoked_at = NULL,
+                    expires_at = datetime('now', '+30 days'),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE device_uid = ?5
+                "#,
+                params![user_id, label.trim(), generated.hash, allowed_lan_cidr, uid],
+            )?
+        } else {
+            0
+        };
 
-        let device_id = self.conn.last_insert_rowid();
+        let device_id = if updated > 0 {
+            self.conn.query_row(
+                "SELECT id FROM authorized_devices WHERE device_uid = ?1",
+                [normalized_device_uid.as_deref().unwrap_or_default()],
+                |row| row.get::<_, i64>(0),
+            )?
+        } else {
+            self.conn.execute(
+                r#"
+                INSERT INTO authorized_devices (
+                    user_id,
+                    label,
+                    device_uid,
+                    device_token_hash,
+                    allowed_lan_cidr,
+                    expires_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', '+30 days'))
+                "#,
+                params![
+                    user_id,
+                    label.trim(),
+                    normalized_device_uid.as_deref(),
+                    generated.hash,
+                    allowed_lan_cidr
+                ],
+            )?;
+            self.conn.last_insert_rowid()
+        };
         self.insert_audit(
             Some(user_id),
             Some(device_id),
@@ -4377,6 +4413,15 @@ fn configure_connection(conn: &Connection) -> DbResult<()> {
 
 fn run_migrations(conn: &Connection) -> DbResult<()> {
     conn.execute_batch(SCHEMA_SQL)?;
+    ensure_column(conn, "authorized_devices", "device_uid", "TEXT")?;
+    conn.execute(
+        r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_authorized_devices_device_uid
+        ON authorized_devices(device_uid)
+        WHERE device_uid IS NOT NULL
+        "#,
+        [],
+    )?;
     ensure_column(conn, "patients", "deleted_at", "TEXT")?;
     ensure_column(
         conn,
@@ -4396,7 +4441,7 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "agenda_blocks_dicom_tariffario"],
+        params![CURRENT_SCHEMA_VERSION, "mobile_pairing_device_uid"],
     )?;
     Ok(())
 }
@@ -4777,6 +4822,7 @@ CREATE TABLE IF NOT EXISTS authorized_devices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     label TEXT NOT NULL,
+    device_uid TEXT,
     device_token_hash TEXT NOT NULL UNIQUE,
     allowed_lan_cidr TEXT,
     revoked_at TEXT,
@@ -4885,6 +4931,14 @@ VALUES
     ('OTT-001', 'Otturazione composito', 'conservativa', 9500),
     ('DEV-001', 'Devitalizzazione', 'endodonzia', 25000),
     ('VIS-001', 'Visita diagnostica', 'diagnosi', 5000);
+
+INSERT OR IGNORE INTO clinical_services_catalog (code, name, category, base_price_cents)
+VALUES
+    ('ENDO-RET', 'Ritrattamento endodontico', 'endodonzia', 6000),
+    ('ENDO-1C', 'Trattamento endodontico 1 canale', 'endodonzia', 18000),
+    ('ENDO-2C', 'Trattamento endodontico 2 canali', 'endodonzia', 24000),
+    ('ENDO-3C', 'Trattamento endodontico 3 canali', 'endodonzia', 30000),
+    ('ENDO-4C', 'Trattamento endodontico 4 canali', 'endodonzia', 36000);
 
 INSERT OR IGNORE INTO clinical_services_catalog (code, name, category, base_price_cents)
 VALUES
