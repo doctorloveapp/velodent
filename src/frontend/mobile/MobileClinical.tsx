@@ -268,6 +268,13 @@ export function MobileClinical({
           Object.entries(current).filter(([tooth]) => !selectedSet.has(Number(tooth)))
         );
       });
+      setToothStates((current) => {
+        const next = { ...current };
+        selectedTeeth.forEach((tooth) => {
+          next[tooth] = "healthy";
+        });
+        return next;
+      });
     }
     setSelectedTeeth([]);
     setSelectionMode(false);
@@ -379,11 +386,6 @@ export function MobileClinical({
             );
           })}
         </div>
-        {bridgeGroups.length > 0 ? (
-          <p className="mt-3 text-xs text-alabaster-grey-500">
-            {t("mobileBridgePreview")}: {bridgeGroups.map((group) => group.teeth.length).join(" / ")}
-          </p>
-        ) : null}
         {statusMessage ? <p className="mt-3 text-xs text-powder-blue-500">{statusMessage}</p> : null}
         {selectedTeeth.length === 0 ? (
           <p className="mt-3 text-sm leading-6 text-alabaster-grey-500">

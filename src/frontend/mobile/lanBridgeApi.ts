@@ -25,8 +25,7 @@ interface LanUser {
 }
 
 export function lanBridgeBaseUrl() {
-  const host = window.location.hostname || "127.0.0.1";
-  return `http://${host}:1422`;
+  return "https://velodent.local:1422";
 }
 
 export function isLanSessionToken(sessionToken: string) {

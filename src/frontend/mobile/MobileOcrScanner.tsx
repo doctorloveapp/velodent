@@ -30,9 +30,18 @@ export function MobileOcrScanner({ open, onClose, onManualEntry, onSuccess }: Mo
     let cancelled = false;
     setStatusMessage(t("mobileOcrWaiting"));
 
+    const getUserMedia = Reflect.get(navigator.mediaDevices, "getUserMedia");
+    if (typeof getUserMedia !== "function") {
+      console.error("VeloDent OCR camera error: navigator.mediaDevices.getUserMedia unavailable");
+      setStatusMessage(t("mobileOcrCameraUnavailable"));
+      return () => {
+        cancelled = true;
+      };
+    }
+
     try {
-      void navigator.mediaDevices
-        .getUserMedia({ video: { facingMode: { ideal: "environment" } } })
+      void getUserMedia
+        .call(navigator.mediaDevices, { video: { facingMode: { ideal: "environment" } } })
         .then((stream) => {
           if (cancelled) {
             stopCamera(stream);
@@ -43,8 +52,12 @@ export function MobileOcrScanner({ open, onClose, onManualEntry, onSuccess }: Mo
             videoRef.current.srcObject = stream;
           }
         })
-        .catch(() => setStatusMessage(t("mobileOcrCameraUnavailable")));
-    } catch {
+        .catch((error: unknown) => {
+          console.error("VeloDent OCR camera error:", error);
+          setStatusMessage(t("mobileOcrCameraUnavailable"));
+        });
+    } catch (error) {
+      console.error("VeloDent OCR camera error:", error);
       setStatusMessage(t("mobileOcrCameraUnavailable"));
     }
 
@@ -67,7 +80,8 @@ export function MobileOcrScanner({ open, onClose, onManualEntry, onSuccess }: Mo
       const image = captureVideoFrame(video);
       const data = await extractHealthCardData(image);
       onSuccess(data);
-    } catch {
+    } catch (error) {
+      console.error("VeloDent OCR processing error:", error);
       setStatusMessage(t("mobileOcrEngineUnavailable"));
     } finally {
       setProcessing(false);

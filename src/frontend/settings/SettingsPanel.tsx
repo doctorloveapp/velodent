@@ -243,10 +243,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
           <Input placeholder={t("settingsChairCount")} type="number" min={1} value={studioForm.chairCount} onChange={(event) => setStudioForm({ ...studioForm, chairCount: event.target.value })} />
           <Input placeholder={t("settingsDataDirectory")} value={studioForm.dataDirectory} onChange={(event) => setStudioForm({ ...studioForm, dataDirectory: event.target.value })} />
           <Input placeholder={t("settingsHolidayJson")} value={studioForm.holidayPeriodsJson} onChange={(event) => setStudioForm({ ...studioForm, holidayPeriodsJson: event.target.value })} />
-          <Button type="button" className="h-10 w-fit justify-center px-4 font-semibold shadow-[0_0_18px_rgba(47,127,208,0.14)] hover:shadow-[0_0_26px_rgba(47,127,208,0.24)]" onClick={() => void handleUpdateStudio()}>
+          <SettingsActionButton onClick={() => void handleUpdateStudio()}>
             <Save aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
             {t("settingsSaveStudio")}
-          </Button>
+          </SettingsActionButton>
         </DenseForm>
         {settings ? <p className="mt-3 text-xs text-alabaster-grey-500">{t("settingsCurrentChairs")}: {settings.chair_count}</p> : null}
       </SettingsSurface>
@@ -262,10 +262,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             <Input placeholder={t("settingsPasswordOptional")} type="password" value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} />
             <Input placeholder={t("settingsGoogleEmail")} value={userForm.googleEmail} onChange={(event) => setUserForm({ ...userForm, googleEmail: event.target.value })} />
             <RoleSelect value={userForm.role} onChange={(role) => setUserForm({ ...userForm, role })} />
-            <Button type="button" className="h-10 w-fit justify-center px-4 font-semibold shadow-[0_0_18px_rgba(47,127,208,0.14)] hover:shadow-[0_0_26px_rgba(47,127,208,0.24)]" onClick={() => void handleCreateUser()}>
+            <SettingsActionButton onClick={() => void handleCreateUser()}>
               <UserPlus aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
               {t("settingsCreateUser")}
-            </Button>
+            </SettingsActionButton>
           </DenseForm>
           <DenseTable
             headers={[t("settingsUsername"), t("settingsRole"), t("settingsGoogleEmail"), t("settingsStatus")]}
@@ -281,10 +281,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
           <DenseForm>
             <Input placeholder={t("settingsGoogleEmail")} value={googleForm.email} onChange={(event) => setGoogleForm({ ...googleForm, email: event.target.value })} />
             <RoleSelect value={googleForm.role} onChange={(role) => setGoogleForm({ ...googleForm, role })} />
-            <Button type="button" className="h-10 w-fit justify-center px-4 font-semibold shadow-[0_0_18px_rgba(47,127,208,0.14)] hover:shadow-[0_0_26px_rgba(47,127,208,0.24)]" onClick={() => void handleAddGoogle()}>
+            <SettingsActionButton onClick={() => void handleAddGoogle()}>
               <ShieldCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
               {t("settingsAuthorizeGoogle")}
-            </Button>
+            </SettingsActionButton>
           </DenseForm>
           <DenseTable
             headers={[t("settingsGoogleEmail"), t("settingsRole"), t("settingsStatus")]}
@@ -302,10 +302,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
           <Input placeholder={t("settingsDeviceLabel")} value={deviceForm.label} onChange={(event) => setDeviceForm({ ...deviceForm, label: event.target.value })} />
           <Input placeholder={t("settingsDeviceUserId")} value={deviceForm.userId} onChange={(event) => setDeviceForm({ ...deviceForm, userId: event.target.value })} />
           <Input placeholder={t("settingsLanCidr")} value={deviceForm.allowedLanCidr} onChange={(event) => setDeviceForm({ ...deviceForm, allowedLanCidr: event.target.value })} />
-          <Button type="button" className="h-10 w-fit justify-center px-4 font-semibold shadow-[0_0_18px_rgba(47,127,208,0.14)] hover:shadow-[0_0_26px_rgba(47,127,208,0.24)]" onClick={() => void handleAuthorizeDevice()}>
+          <SettingsActionButton onClick={() => void handleAuthorizeDevice()}>
             <Laptop aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
             {t("settingsAuthorizeDevice")}
-          </Button>
+          </SettingsActionButton>
         </DenseForm>
         {oneTimeToken ? (
           <div className="mt-3 rounded-md border border-powder-blue-500/30 bg-powder-blue-950 p-3 font-mono text-xs text-white">
@@ -320,10 +320,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
               </p>
               <p className="mt-1 text-xs text-alabaster-grey-500">{t("settingsPairingHelp")}</p>
             </div>
-            <Button type="button" variant="secondary" className="h-10 w-fit justify-center px-4 shadow-[0_0_14px_rgba(47,127,208,0.10)] hover:shadow-[0_0_22px_rgba(47,127,208,0.18)]" onClick={() => void handleGetPairingCode().catch(() => setStatusMessage(t("settingsGenericError")))}>
+            <SettingsActionButton onClick={() => void handleGetPairingCode().catch(() => setStatusMessage(t("settingsGenericError")))}>
               <Wifi aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
               {t("settingsConnectSmartphone")}
-            </Button>
+            </SettingsActionButton>
           </div>
           {pairingCode ? (
             <div className="mt-4 rounded-md border border-powder-blue-500/35 bg-powder-blue-950 p-4 text-center">
@@ -347,10 +347,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             device.allowed_lan_cidr ?? "-",
             device.revoked_at ? t("settingsRevoked") : t("settingsActive"),
             device.revoked_at ? "-" : (
-              <Button key={device.id} type="button" variant="secondary" size="sm" className="w-fit text-red-300 hover:bg-red-500/15 hover:text-red-100" onClick={() => void handleRevokeDevice(device.id)}>
+              <SettingsActionButton key={device.id} tone="danger" size="sm" onClick={() => void handleRevokeDevice(device.id)}>
                 <Trash2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.6} />
                 {t("settingsRevoke")}
-              </Button>
+              </SettingsActionButton>
             )
           ])}
         />
@@ -412,7 +412,40 @@ function SettingsSurface({ children, eyebrow, icon, title }: { children: React.R
 }
 
 function DenseForm({ children }: { children: React.ReactNode }) {
-  return <div className="grid items-center gap-2 md:grid-cols-[repeat(auto-fit,minmax(150px,1fr))]">{children}</div>;
+  return <div className="grid items-center gap-2 md:grid-cols-[repeat(auto-fit,minmax(170px,1fr))]">{children}</div>;
+}
+
+function SettingsActionButton({
+  children,
+  onClick,
+  size = "default",
+  tone = "primary"
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  size?: "default" | "sm";
+  tone?: "primary" | "danger";
+}) {
+  const baseClass = size === "sm"
+    ? "h-9 min-w-[104px] gap-2 px-3 text-xs"
+    : "h-10 min-w-[136px] gap-2 px-4 text-sm";
+  const toneClass = tone === "danger"
+    ? "border-red-500/35 bg-red-500/10 text-red-200 hover:border-red-400/60 hover:bg-red-500/20 hover:text-red-100 hover:shadow-[0_0_18px_rgba(239,68,68,0.18)]"
+    : "border-powder-blue-500/35 bg-powder-blue-950/60 text-powder-blue-100 hover:border-powder-blue-400/60 hover:bg-powder-blue-500/20 hover:text-white hover:shadow-[0_0_20px_rgba(47,127,208,0.18)]";
+  return (
+    <Button
+      type="button"
+      variant="secondary"
+      className={[
+        baseClass,
+        toneClass,
+        "w-fit justify-center justify-self-start whitespace-nowrap rounded-md font-semibold transition-[border-color,background-color,box-shadow,color]"
+      ].join(" ")}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  );
 }
 
 function RoleSelect({ onChange, value }: { onChange: (role: Role) => void; value: Role }) {
@@ -444,10 +477,10 @@ function ServicePriceEditor({ cents, onSave }: { cents: number; onSave: (cents: 
   return (
     <div className="flex min-w-[150px] items-center gap-2">
       <Input className="h-8 w-24" min={0} step="0.01" type="number" value={value} onChange={(event) => setValue(event.target.value)} />
-      <Button type="button" variant="secondary" size="sm" className="w-fit shadow-[0_0_12px_rgba(47,127,208,0.10)] hover:shadow-[0_0_18px_rgba(47,127,208,0.18)]" onClick={() => onSave(euroInputToCents(value))}>
+      <SettingsActionButton size="sm" onClick={() => onSave(euroInputToCents(value))}>
         <Save aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.6} />
         {t("settingsServiceSave")}
-      </Button>
+      </SettingsActionButton>
     </div>
   );
 }

@@ -2382,58 +2382,110 @@ impl Database {
         let record = self
             .get_clinical_record(record_id)?
             .ok_or(DbError::NotFound)?;
-        if record.status != "diagnosed" {
+        if !matches!(record.status.as_str(), "diagnosed" | "in_quote") {
             return Err(DbError::InvalidClinicalStatus(record.status));
         }
 
-        self.conn
-            .execute("DELETE FROM clinical_records WHERE id = ?1", [record_id])?;
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
 
-        if let Some(tooth_number) = record.tooth_number {
-            let remaining_status = self
-                .conn
-                .query_row(
-                    r#"
-                    SELECT status
-                    FROM clinical_records
-                    WHERE patient_id = ?1 AND tooth_number = ?2
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                    "#,
-                    params![record.patient_id, tooth_number],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?;
-            let next_state = remaining_status
-                .as_deref()
-                .map(tooth_state_for_clinical_status)
-                .unwrap_or("healthy");
-            self.upsert_tooth_status_without_audit(
-                record.patient_id,
-                tooth_number,
-                next_state,
-                actor_user_id,
+            let locked_quote_count: i64 = self.conn.query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM quote_lines ql
+                JOIN quotes q ON q.id = ql.quote_id
+                WHERE ql.clinical_record_id = ?1
+                  AND q.status <> 'draft'
+                "#,
+                [record_id],
+                |row| row.get(0),
             )?;
+            if locked_quote_count > 0 {
+                return Err(DbError::InvalidFinancialState(
+                    "clinical record is linked to a locked quote".to_owned(),
+                ));
+            }
+
+            let quote_ids = {
+                let mut statement = self.conn.prepare(
+                    r#"
+                    SELECT DISTINCT quote_id
+                    FROM quote_lines
+                    WHERE clinical_record_id = ?1
+                    "#,
+                )?;
+                let ids = statement
+                    .query_map([record_id], |row| row.get::<_, i64>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                ids
+            };
+
+            self.conn.execute(
+                "DELETE FROM quote_lines WHERE clinical_record_id = ?1",
+                [record_id],
+            )?;
+            self.conn
+                .execute("DELETE FROM clinical_records WHERE id = ?1", [record_id])?;
+
+            for quote_id in quote_ids {
+                self.recalculate_quote_totals(quote_id)?;
+            }
+
+            if let Some(tooth_number) = record.tooth_number {
+                let remaining_status = self
+                    .conn
+                    .query_row(
+                        r#"
+                        SELECT status
+                        FROM clinical_records
+                        WHERE patient_id = ?1 AND tooth_number = ?2
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        "#,
+                        params![record.patient_id, tooth_number],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?;
+                let next_state = remaining_status
+                    .as_deref()
+                    .map(tooth_state_for_clinical_status)
+                    .unwrap_or("healthy");
+                self.upsert_tooth_status_without_audit(
+                    record.patient_id,
+                    tooth_number,
+                    next_state,
+                    actor_user_id,
+                )?;
+            }
+
+            self.insert_patient_audit(
+                actor_user_id,
+                record.patient_id,
+                "clinical.record_deleted",
+                &format!(
+                    r#"{{"record_id":{record_id},"tooth_number":{},"service_id":{}}}"#,
+                    record
+                        .tooth_number
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "null".to_owned()),
+                    record
+                        .service_id
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "null".to_owned())
+                ),
+            )?;
+
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
         }
-
-        self.insert_patient_audit(
-            actor_user_id,
-            record.patient_id,
-            "clinical.record_deleted",
-            &format!(
-                r#"{{"record_id":{record_id},"tooth_number":{},"service_id":{}}}"#,
-                record
-                    .tooth_number
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "null".to_owned()),
-                record
-                    .service_id
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "null".to_owned())
-            ),
-        )?;
-
-        Ok(())
     }
 
     pub fn register_rx_asset(
@@ -5877,6 +5929,71 @@ mod tests {
             )
             .expect("agenda block sync jobs count");
         assert_eq!(block_jobs, 1);
+    }
+
+    #[test]
+    fn deleting_clinical_record_linked_to_draft_quote_recalculates_totals() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Sara",
+                    last_name: "Quote",
+                    tax_code: "BNCLGU85T41H501W",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let service = db
+            .list_clinical_services(admin.id)
+            .expect("services")
+            .into_iter()
+            .find(|service| service.code == "OTT-001")
+            .expect("base service");
+        let record = db
+            .create_clinical_record(
+                admin.id,
+                &NewClinicalRecord {
+                    patient_id: patient.id,
+                    service_id: Some(service.id),
+                    tooth_number: Some(16),
+                    tooth_surface: None,
+                    pathology_description: Some("Carie"),
+                    status: "diagnosed",
+                    ready_for_quote: true,
+                    notes: None,
+                },
+            )
+            .expect("create clinical record");
+        let quote = db
+            .create_quote_from_ready_records(admin.id, patient.id, "Preventivo bozza")
+            .expect("quote from diagnosis");
+        assert_eq!(quote.lines.len(), 1);
+        assert_eq!(quote.gross_total_cents, service.base_price_cents);
+
+        db.delete_clinical_record(admin.id, record.id)
+            .expect("delete in-quote clinical record");
+        let updated_quote = db
+            .get_quote_for_document(admin.id, quote.id)
+            .expect("quote after delete");
+        assert!(updated_quote.lines.is_empty());
+        assert_eq!(updated_quote.gross_total_cents, 0);
+        assert_eq!(updated_quote.net_total_cents, 0);
+        let neutral_tooth = db
+            .get_tooth_statuses(admin.id, patient.id)
+            .expect("tooth statuses after delete")
+            .into_iter()
+            .find(|status| status.tooth_number == 16)
+            .expect("tooth status exists");
+        assert_eq!(neutral_tooth.state, "healthy");
     }
 
     #[test]

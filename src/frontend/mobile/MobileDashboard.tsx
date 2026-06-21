@@ -9,8 +9,10 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
 import type { L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
+import { Button } from "@/frontend/shared/ui/button";
 import type { MobileRouteKey } from "./MobileShell";
 
 interface MobileDashboardAction {
@@ -34,7 +36,26 @@ interface MobileDashboardProps {
 
 export function MobileDashboard({ onRouteChange }: MobileDashboardProps) {
   const { t } = useL10n();
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const showInstallHint = shouldShowInstallHint();
+
+  useEffect(() => {
+    function handleBeforeInstallPrompt(event: Event) {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    }
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+  }, []);
+
+  async function handleInstall() {
+    if (!installPrompt) {
+      return;
+    }
+    await installPrompt.prompt();
+    setInstallPrompt(null);
+  }
 
   return (
     <section className="grid gap-3 sm:grid-cols-2">
@@ -47,6 +68,15 @@ export function MobileDashboard({ onRouteChange }: MobileDashboardProps) {
             <div>
               <p className="text-sm font-semibold text-white">{t("mobileInstallHintTitle")}</p>
               <p className="mt-1 text-xs leading-5 text-alabaster-grey-500">{t("mobileInstallHintBody")}</p>
+              {installPrompt ? (
+                <Button
+                  type="button"
+                  className="mt-3 h-12 justify-center border-powder-blue-500/35 bg-powder-blue-950 px-4 text-xs font-semibold uppercase tracking-[0.14em] text-powder-blue-100 shadow-[0_0_18px_rgba(47,127,208,0.12)] hover:bg-powder-blue-500/20 hover:shadow-[0_0_26px_rgba(47,127,208,0.2)]"
+                  onClick={() => void handleInstall()}
+                >
+                  {t("mobileInstallVeloDent")}
+                </Button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -77,4 +107,8 @@ function shouldShowInstallHint() {
   const iosStandalone = Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
   const standalone = window.matchMedia("(display-mode: standalone)").matches || iosStandalone;
   return !tauriRuntime && !standalone;
+}
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
 }
