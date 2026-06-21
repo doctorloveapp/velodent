@@ -20,6 +20,7 @@ dotenvy = "0.15.7"
 dicom-object = "=0.8.2"
 ed25519-dalek = "2.2.0"
 hex = "0.4.3"
+mdns-sd = "=0.20.0"
 opener = "=0.8.5"
 printpdf = "=0.7.0"
 rand_core = { version = "0.6.4", features = ["getrandom"] }

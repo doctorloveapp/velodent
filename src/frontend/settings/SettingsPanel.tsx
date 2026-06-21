@@ -412,7 +412,7 @@ function SettingsSurface({ children, eyebrow, icon, title }: { children: React.R
 }
 
 function DenseForm({ children }: { children: React.ReactNode }) {
-  return <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">{children}</div>;
+  return <div className="grid items-center gap-2 md:grid-cols-[repeat(auto-fit,minmax(150px,1fr))]">{children}</div>;
 }
 
 function RoleSelect({ onChange, value }: { onChange: (role: Role) => void; value: Role }) {

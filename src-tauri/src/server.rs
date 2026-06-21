@@ -1,5 +1,6 @@
 pub mod lan {
     use crate::{db::NewClinicalRecord, state::AppState, ts_cns};
+    use mdns_sd::{ServiceDaemon, ServiceInfo};
     use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
     use std::{
@@ -12,6 +13,7 @@ pub mod lan {
     use tauri::{AppHandle, Manager};
 
     pub const LAN_SERVER_PORT: u16 = 1422;
+    pub const PWA_FRONTEND_PORT: u16 = 1420;
 
     #[derive(Debug, Deserialize)]
     struct PairRequest {
@@ -42,12 +44,18 @@ pub mod lan {
         record_id: i64,
     }
 
+    #[derive(Debug, Deserialize)]
+    struct PatientClinicalQuery {
+        patient_id: i64,
+    }
+
     #[derive(Debug, Serialize)]
     struct ApiError {
         error: String,
     }
 
     pub fn start(app: AppHandle) {
+        start_mdns_discovery();
         thread::spawn(move || {
             let listener = match TcpListener::bind(("0.0.0.0", LAN_SERVER_PORT)) {
                 Ok(listener) => listener,
@@ -189,6 +197,35 @@ pub mod lan {
                     Ok(json!(services))
                 })
             }
+            ("GET", "/api/clinical/records") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = patient_clinical_query(&query)?;
+                    let records = state
+                        .database()?
+                        .list_clinical_records(
+                            user.id,
+                            request.patient_id,
+                            &crate::db::ClinicalRecordFilters {
+                                date_from: None,
+                                date_to: None,
+                                tooth_number: None,
+                                operator_user_id: None,
+                            },
+                        )
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(records))
+                })
+            }
+            ("GET", "/api/clinical/tooth-statuses") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = patient_clinical_query(&query)?;
+                    let statuses = state
+                        .database()?
+                        .get_tooth_statuses(user.id, request.patient_id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(statuses))
+                })
+            }
             ("POST", "/api/clinical/records") => {
                 with_device_user(&headers, remote_ip, app, |state, user| {
                     let request = serde_json::from_str::<ClinicalRecordRequest>(body.trim())
@@ -242,6 +279,55 @@ pub mod lan {
                 },
             ),
         }
+    }
+
+    fn start_mdns_discovery() {
+        thread::spawn(|| {
+            let mdns = match ServiceDaemon::new() {
+                Ok(mdns) => mdns,
+                Err(error) => {
+                    eprintln!("VeloDent mDNS unavailable: {error}");
+                    return;
+                }
+            };
+            let properties = [
+                ("app", "VeloDent"),
+                ("api_port", "1422"),
+                ("frontend_port", "1420"),
+                ("path", "/"),
+            ];
+            let service_info = match ServiceInfo::new(
+                "_http._tcp.local.",
+                "VeloDent",
+                "velodent.local.",
+                "",
+                PWA_FRONTEND_PORT,
+                &properties[..],
+            ) {
+                Ok(info) => info.enable_addr_auto(),
+                Err(error) => {
+                    eprintln!("VeloDent mDNS service invalid: {error}");
+                    return;
+                }
+            };
+            if let Err(error) = mdns.register(service_info) {
+                eprintln!("VeloDent mDNS register failed: {error}");
+                return;
+            }
+            loop {
+                thread::park();
+            }
+        });
+    }
+
+    fn patient_clinical_query(
+        query: &HashMap<String, String>,
+    ) -> Result<PatientClinicalQuery, String> {
+        query
+            .get("patient_id")
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|patient_id| PatientClinicalQuery { patient_id })
+            .ok_or_else(|| "missing patient_id".to_owned())
     }
 
     fn handle_pair(body: &str, remote_ip: IpAddr, app: &AppHandle) -> String {

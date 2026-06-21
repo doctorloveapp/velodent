@@ -12,6 +12,15 @@ licensing-tools/
 .DS_Store
 Thumbs.db
 
+# SQLite / SQLCipher database and temporary files
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# VeloDent local data directory (Dati sensibili pazienti)
+src-tauri/data/
+
+
 Documenti/
 progress.md
 piano_fasi.md

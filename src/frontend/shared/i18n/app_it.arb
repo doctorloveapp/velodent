@@ -28,6 +28,8 @@
   "mobilePrecision": "Mobile Precision",
   "mobileDashboardTitle": "Dashboard mobile",
   "mobileDashboardBody": "Azioni rapide per smartphone e pad autorizzati dello studio.",
+  "mobileInstallHintTitle": "Aggiungi VeloDent alla schermata Home",
+  "mobileInstallHintBody": "Usa la modalita' app standalone per eliminare barra indirizzi e avvisi del browser durante il lavoro in studio.",
   "mobileAgendaTitle": "Agenda mobile",
   "mobileAgendaBody": "Vista agenda giorno touch-first predisposta per la prossima fase.",
   "mobileNewPatientTitle": "Nuovo paziente",

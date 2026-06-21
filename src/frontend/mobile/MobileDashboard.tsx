@@ -2,6 +2,7 @@ import {
   CalendarDays,
   ClipboardList,
   FileText,
+  Home,
   Search,
   Smartphone,
   UserPlus,
@@ -33,9 +34,23 @@ interface MobileDashboardProps {
 
 export function MobileDashboard({ onRouteChange }: MobileDashboardProps) {
   const { t } = useL10n();
+  const showInstallHint = shouldShowInstallHint();
 
   return (
     <section className="grid gap-3 sm:grid-cols-2">
+      {showInstallHint ? (
+        <div className="rounded-xl border border-powder-blue-500/25 bg-glaucous-950 p-4 shadow-[0_18px_48px_rgba(0,0,0,0.22)] sm:col-span-2">
+          <div className="flex items-start gap-3">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-md border border-powder-blue-500/30 bg-powder-blue-950 text-powder-blue-500">
+              <Home aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-white">{t("mobileInstallHintTitle")}</p>
+              <p className="mt-1 text-xs leading-5 text-alabaster-grey-500">{t("mobileInstallHintBody")}</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {actions.map((action) => {
         const Icon = action.icon;
         return (
@@ -55,4 +70,11 @@ export function MobileDashboard({ onRouteChange }: MobileDashboardProps) {
       })}
     </section>
   );
+}
+
+function shouldShowInstallHint() {
+  const tauriRuntime = "__TAURI__" in window;
+  const iosStandalone = Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+  const standalone = window.matchMedia("(display-mode: standalone)").matches || iosStandalone;
+  return !tauriRuntime && !standalone;
 }

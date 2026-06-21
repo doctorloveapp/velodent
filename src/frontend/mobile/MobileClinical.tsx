@@ -1,10 +1,19 @@
 import { Check, Plus, Trash2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createClinicalRecord, deleteClinicalRecord, listClinicalServices, type ClinicalService } from "@/frontend/clinical/clinicalApi";
+import {
+  createClinicalRecord,
+  deleteClinicalRecord,
+  getToothStatuses,
+  listClinicalRecords,
+  listClinicalServices,
+  type ClinicalRecord,
+  type ClinicalService,
+  type ToothState
+} from "@/frontend/clinical/clinicalApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
-import { calculateBridgePreview, calculateProsthesisLine } from "./bridge";
+import { calculateBridgePreview } from "./bridge";
 
 type ClinicalMobileMode = "clinical" | "orthodontics";
 type ArchMode = "upper" | "lower";
@@ -40,6 +49,14 @@ const recordedToothClasses: Record<QuickAction, string> = {
   mobileProsthesis: "border-amber-300/55 bg-amber-300/16 text-white"
 };
 
+const toothStateClasses: Partial<Record<ToothState, string>> = {
+  healthy: "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500",
+  in_progress: "border-powder-blue-500/35 bg-powder-blue-950 text-white",
+  missing: "border-dashed border-alabaster-grey-500/20 bg-ink-black-950/40 text-alabaster-grey-500/45",
+  pathology: "border-red-500/35 bg-red-500/10 text-white",
+  performed: "border-emerald-400/35 bg-emerald-400/10 text-white"
+};
+
 interface MobileClinicalProps {
   activePatientId: number | null;
   mode: ClinicalMobileMode;
@@ -59,6 +76,11 @@ interface RecordedToothRecord {
   recordId: number;
 }
 
+interface ProsthesisGroup {
+  key: string;
+  teeth: number[];
+}
+
 export function MobileClinical({
   activePatientId,
   mode,
@@ -73,16 +95,18 @@ export function MobileClinical({
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [activeAction, setActiveAction] = useState<QuickAction | null>(null);
-  const [bridgeLayout, setBridgeLayout] = useState<BridgeArcLayout | null>(null);
+  const [bridgeLayouts, setBridgeLayouts] = useState<Partial<Record<string, BridgeArcLayout>>>({});
   const [recordedToothRecords, setRecordedToothRecords] = useState<Partial<Record<number, RecordedToothRecord>>>({});
-  const [prosthesisLineTeeth, setProsthesisLineTeeth] = useState<number[]>([]);
+  const [toothStates, setToothStates] = useState<Partial<Record<number, ToothState>>>({});
   const [statusMessage, setStatusMessage] = useState("");
   const teeth = arch === "upper" ? upperTeeth : lowerTeeth;
   const bridgePreview = calculateBridgePreview(selectedTeeth);
-  const prosthesisLine = calculateProsthesisLine(prosthesisLineTeeth);
-  const visibleBridgePreview = prosthesisLine?.type === "bridge" ? prosthesisLine : null;
-  const singleProsthesisTooth = prosthesisLine?.type === "single" ? prosthesisLine.tooth : null;
-  const bridgeKey = visibleBridgePreview?.includedTeeth.join("-") ?? "";
+  const prosthesisGroups = buildProsthesisGroups(recordedToothRecords, teeth);
+  const bridgeGroups = prosthesisGroups.filter((group) => group.teeth.length >= 2);
+  const singleProsthesisTeeth = new Set(
+    prosthesisGroups.filter((group) => group.teeth.length === 1).map((group) => group.teeth[0])
+  );
+  const bridgeKey = bridgeGroups.map((group) => group.key).join("|");
 
   useEffect(() => {
     if (!activePatientId) {
@@ -99,42 +123,67 @@ export function MobileClinical({
       .catch(() => setServices([]));
   }, [sessionToken]);
 
-  useLayoutEffect(() => {
-    const includedTeeth = bridgeKey ? bridgeKey.split("-").map(Number) : [];
-    if (includedTeeth.length < 2 || !archRef.current) {
-      setBridgeLayout(null);
+  useEffect(() => {
+    if (!activePatientId || !sessionToken || services.length === 0) {
+      setRecordedToothRecords({});
+      setToothStates({});
       return;
     }
 
-    function measureBridge() {
+    void Promise.all([
+      listClinicalRecords(sessionToken, activePatientId, {}),
+      getToothStatuses(sessionToken, activePatientId)
+    ])
+      .then(([records, statuses]) => {
+        setRecordedToothRecords(clinicalRecordsToToothRecords(records, services));
+        setToothStates(
+          Object.fromEntries(statuses.map((status) => [status.tooth_number, status.state]))
+        );
+      })
+      .catch(() => {
+        setRecordedToothRecords({});
+        setToothStates({});
+      });
+  }, [activePatientId, services, sessionToken]);
+
+  useLayoutEffect(() => {
+    if (bridgeGroups.length === 0 || !archRef.current) {
+      setBridgeLayouts({});
+      return;
+    }
+
+    function measureBridges() {
       if (!archRef.current) {
         return;
       }
       const containerRect = archRef.current.getBoundingClientRect();
-      const rects = includedTeeth
-        .map((tooth) => toothRefs.current[tooth]?.getBoundingClientRect())
-        .filter((rect): rect is DOMRect => Boolean(rect));
+      const layouts: Partial<Record<string, BridgeArcLayout>> = {};
+      bridgeGroups.forEach((group) => {
+        const rects = group.teeth
+          .map((tooth) => toothRefs.current[tooth]?.getBoundingClientRect())
+          .filter((rect): rect is DOMRect => Boolean(rect));
 
-      if (rects.length < 2) {
-        setBridgeLayout(null);
-        return;
-      }
+        if (rects.length < 2) {
+          return;
+        }
 
-      const left = Math.min(...rects.map((rect) => rect.left)) - containerRect.left;
-      const right = Math.max(...rects.map((rect) => rect.right)) - containerRect.left;
-      const top = Math.max(0, Math.min(...rects.map((rect) => rect.top)) - containerRect.top - 30);
+        const left = Math.min(...rects.map((rect) => rect.left)) - containerRect.left;
+        const right = Math.max(...rects.map((rect) => rect.right)) - containerRect.left;
+        const top = Math.max(2, Math.min(...rects.map((rect) => rect.top)) - containerRect.top - 13);
 
-      setBridgeLayout({
-        height: 34,
-        left,
-        top,
-        width: Math.max(48, right - left)
+        layouts[group.key] = {
+          height: 12,
+          left,
+          top,
+          width: Math.max(48, right - left)
+        };
       });
+      setBridgeLayouts(layouts);
     }
 
-    measureBridge();
-    window.addEventListener("resize", measureBridge);
-    return () => window.removeEventListener("resize", measureBridge);
+    measureBridges();
+    window.addEventListener("resize", measureBridges);
+    return () => window.removeEventListener("resize", measureBridges);
   }, [arch, bridgeKey]);
 
   function handleToothPress(tooth: number) {
@@ -142,7 +191,6 @@ export function MobileClinical({
       return;
     }
     setActiveAction(null);
-    setProsthesisLineTeeth([]);
     if (selectionMode) {
       setSelectedTeeth((current) => {
         if (current.includes(tooth)) {
@@ -201,10 +249,8 @@ export function MobileClinical({
     setStatusMessage(t("mobileClinicalServiceRegistered"));
     if (activeAction === "crown") {
       setSelectedTeeth(targetTeeth);
-      setProsthesisLineTeeth(targetTeeth);
     } else {
       setSelectedTeeth([]);
-      setProsthesisLineTeeth([]);
     }
     setSelectionMode(false);
     setActiveAction(null);
@@ -226,7 +272,6 @@ export function MobileClinical({
     setSelectedTeeth([]);
     setSelectionMode(false);
     setActiveAction(null);
-    setProsthesisLineTeeth([]);
     setStatusMessage("");
   }
 
@@ -278,7 +323,6 @@ export function MobileClinical({
                 setSelectedTeeth([]);
                 setSelectionMode(false);
                 setActiveAction(null);
-                setProsthesisLineTeeth([]);
               }}
             >
               {arch === "upper" ? t("mobileLowerArch") : t("mobileUpperArch")}
@@ -289,14 +333,16 @@ export function MobileClinical({
           ) : null}
         </div>
         <div ref={archRef} className="relative grid grid-cols-8 gap-2 overflow-visible pt-8">
-          {visibleBridgePreview && bridgeLayout ? (
-            <BridgeArc layout={bridgeLayout} />
-          ) : null}
+          {bridgeGroups.map((group) => {
+            const layout = bridgeLayouts[group.key];
+            return layout ? <BridgeArc key={group.key} layout={layout} /> : null;
+          })}
           {teeth.map((tooth) => {
             const selected = selectedTeeth.includes(tooth);
-            const included = visibleBridgePreview?.includedTeeth.includes(tooth) ?? false;
+            const included = bridgeGroups.some((group) => group.teeth.includes(tooth));
             const recordedAction = recordedToothRecords[tooth]?.action;
-            const singleProsthesis = singleProsthesisTooth === tooth;
+            const toothState = toothStates[tooth];
+            const singleProsthesis = singleProsthesisTeeth.has(tooth);
             return (
               <motion.button
                 key={tooth}
@@ -311,7 +357,9 @@ export function MobileClinical({
                       ? "border-powder-blue-500 bg-powder-blue-950 text-white"
                       : included
                         ? "border-pale-sky-500/50 bg-pale-sky-950 text-white"
-                        : "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500"
+                        : toothState
+                          ? toothStateClasses[toothState] ?? "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500"
+                          : "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500"
                 ].join(" ")}
                 type="button"
                 whileTap={{ scale: 0.94 }}
@@ -331,9 +379,9 @@ export function MobileClinical({
             );
           })}
         </div>
-        {visibleBridgePreview ? (
+        {bridgeGroups.length > 0 ? (
           <p className="mt-3 text-xs text-alabaster-grey-500">
-            {t("mobileBridgePreview")}: {visibleBridgePreview.unitCount}
+            {t("mobileBridgePreview")}: {bridgeGroups.map((group) => group.teeth.length).join(" / ")}
           </p>
         ) : null}
         {statusMessage ? <p className="mt-3 text-xs text-powder-blue-500">{statusMessage}</p> : null}
@@ -515,6 +563,71 @@ function quickActionLabel(action: QuickAction, useBridge: boolean, t: ReturnType
   return labels[action];
 }
 
+function clinicalRecordsToToothRecords(
+  records: ClinicalRecord[],
+  services: ClinicalService[]
+): Partial<Record<number, RecordedToothRecord>> {
+  const serviceCategoryById = new Map(services.map((service) => [service.id, service.category?.toLowerCase() ?? ""]));
+  const next: Partial<Record<number, RecordedToothRecord>> = {};
+  records.forEach((record) => {
+    if (!record.tooth_number || next[record.tooth_number]) {
+      return;
+    }
+    const category = record.service_id ? serviceCategoryById.get(record.service_id) ?? "" : "";
+    const action = quickActionFromCategory(category);
+    if (!action) {
+      return;
+    }
+    next[record.tooth_number] = { action, recordId: record.id };
+  });
+  return next;
+}
+
+function quickActionFromCategory(category: string): QuickAction | null {
+  if (category.includes("conservativa")) {
+    return "caries";
+  }
+  if (category.includes("endodonzia")) {
+    return "endodontics";
+  }
+  if (category.includes("parodontale")) {
+    return "periodontics";
+  }
+  if (category.includes("protesi fissa")) {
+    return "crown";
+  }
+  if (category.includes("chirurgia orale")) {
+    return "extraction";
+  }
+  if (category.includes("protesi mobile")) {
+    return "mobileProsthesis";
+  }
+  return null;
+}
+
+function buildProsthesisGroups(
+  records: Partial<Record<number, RecordedToothRecord>>,
+  visibleTeeth: number[]
+): ProsthesisGroup[] {
+  const prosthesisTeeth = visibleTeeth
+    .filter((tooth) => records[tooth]?.action === "crown")
+    .sort((left, right) => left - right);
+  const groups: number[][] = [];
+  prosthesisTeeth.forEach((tooth) => {
+    const previousGroup = groups.at(-1);
+    const previousTooth = previousGroup?.at(-1);
+    if (previousGroup && previousTooth && Math.floor(previousTooth / 10) === Math.floor(tooth / 10) && tooth === previousTooth + 1) {
+      previousGroup.push(tooth);
+      return;
+    }
+    groups.push([tooth]);
+  });
+  return groups.map((teethGroup) => ({
+    key: teethGroup.join("-"),
+    teeth: teethGroup
+  }));
+}
+
 function MobileServicePanel({ services, title }: { services: ClinicalService[]; title: string }) {
   const { t } = useL10n();
   return (
@@ -581,15 +694,15 @@ function BridgeArc({ layout }: { layout: BridgeArcLayout }) {
         top: layout.top,
         width: layout.width
       }}
-      viewBox="0 0 100 34"
+      viewBox="0 0 100 12"
       preserveAspectRatio="none"
     >
       <path
-        d="M4 30 C 24 2, 76 2, 96 30"
+        d="M4 6 L96 6"
         fill="none"
         stroke="currentColor"
         strokeLinecap="round"
-        strokeWidth="5"
+        strokeWidth="4"
       />
     </svg>
   );

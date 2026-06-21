@@ -75,6 +75,12 @@ export async function openClinicalView(session_token: string, patient_id: number
 }
 
 export async function getToothStatuses(session_token: string, patient_id: number) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<ToothStatus[]>(
+      `/api/clinical/tooth-statuses?patient_id=${encodeURIComponent(String(patient_id))}`,
+      fromLanSessionToken(session_token)
+    );
+  }
   return invoke<ToothStatus[]>("get_tooth_statuses", { request: { session_token, patient_id } });
 }
 
@@ -121,6 +127,10 @@ export async function listClinicalRecords(
     operator_user_id?: number;
   }
 ) {
+  if (isLanSessionToken(session_token)) {
+    const params = new URLSearchParams({ patient_id: String(patient_id) });
+    return lanFetch<ClinicalRecord[]>(`/api/clinical/records?${params.toString()}`, fromLanSessionToken(session_token));
+  }
   return invoke<ClinicalRecord[]>("list_clinical_records", {
     request: { session_token, patient_id, ...filters }
   });
