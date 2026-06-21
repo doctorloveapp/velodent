@@ -1,18 +1,12 @@
 pub mod lan {
     use crate::{db::NewClinicalRecord, state::AppState, ts_cns};
     use mdns_sd::{ServiceDaemon, ServiceInfo};
-    use rcgen::{generate_simple_self_signed, CertifiedKey};
-    use rustls::{
-        pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
-        ServerConfig, ServerConnection, StreamOwned,
-    };
     use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
     use std::{
         collections::HashMap,
         io::{Read, Write},
         net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
-        sync::Arc,
         thread,
         time::Duration,
     };
@@ -63,17 +57,10 @@ pub mod lan {
     pub fn start(app: AppHandle) {
         start_mdns_discovery();
         thread::spawn(move || {
-            let tls_config = match tls_config() {
-                Ok(config) => Arc::new(config),
-                Err(error) => {
-                    eprintln!("VeloDent LAN HTTPS unavailable: {error}");
-                    return;
-                }
-            };
             let listener = match TcpListener::bind(("0.0.0.0", LAN_SERVER_PORT)) {
                 Ok(listener) => listener,
                 Err(error) => {
-                    eprintln!("VeloDent LAN HTTPS server unavailable: {error}");
+                    eprintln!("VeloDent LAN server unavailable: {error}");
                     return;
                 }
             };
@@ -82,30 +69,17 @@ pub mod lan {
                 match stream {
                     Ok(stream) => {
                         let app = app.clone();
-                        let tls_config = tls_config.clone();
-                        thread::spawn(move || handle_tls_stream(stream, tls_config, app));
+                        thread::spawn(move || handle_stream(stream, app));
                     }
-                    Err(error) => eprintln!("VeloDent LAN HTTPS request failed: {error}"),
+                    Err(error) => eprintln!("VeloDent LAN request failed: {error}"),
                 }
             }
         });
     }
 
-    fn handle_tls_stream(stream: TcpStream, tls_config: Arc<ServerConfig>, app: AppHandle) {
+    fn handle_stream(mut stream: TcpStream, app: AppHandle) {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
         let peer = stream.peer_addr().ok();
-        let connection = match ServerConnection::new(tls_config) {
-            Ok(connection) => connection,
-            Err(error) => {
-                eprintln!("VeloDent LAN TLS session failed: {error}");
-                return;
-            }
-        };
-        let mut stream = StreamOwned::new(connection, stream);
-        handle_stream(&mut stream, peer, app);
-    }
-
-    fn handle_stream<S: Read + Write>(stream: &mut S, peer: Option<SocketAddr>, app: AppHandle) {
         let mut buffer = [0_u8; 16384];
         let read = match stream.read(&mut buffer) {
             Ok(read) if read > 0 => read,
@@ -114,22 +88,6 @@ pub mod lan {
         let request = String::from_utf8_lossy(&buffer[..read]);
         let response = route_request(&request, peer, &app);
         let _ = stream.write_all(response.as_bytes());
-    }
-
-    pub(super) fn tls_config() -> Result<ServerConfig, String> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![
-            "velodent.local".to_owned(),
-            "localhost".to_owned(),
-            "127.0.0.1".to_owned(),
-        ])
-        .map_err(|error| error.to_string())?;
-        let cert_chain = vec![cert.der().clone()];
-        let private_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
-        ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, private_key)
-            .map_err(|error| error.to_string())
     }
 
     fn route_request(request: &str, peer: Option<SocketAddr>, app: &AppHandle) -> String {
@@ -335,12 +293,12 @@ pub mod lan {
             let properties = [
                 ("app", "VeloDent"),
                 ("api_port", "1422"),
-                ("api_protocol", "https"),
+                ("api_protocol", "http"),
                 ("frontend_port", "1420"),
                 ("path", "/"),
             ];
             let service_info = match ServiceInfo::new(
-                "_https._tcp.local.",
+                "_http._tcp.local.",
                 "VeloDent",
                 "velodent.local.",
                 "",
@@ -545,8 +503,4 @@ mod tests {
         assert_eq!(LAN_SERVER_PORT, 1422);
     }
 
-    #[test]
-    fn lan_https_tls_config_builds() {
-        assert!(super::lan::tls_config().is_ok());
-    }
 }

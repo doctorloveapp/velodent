@@ -715,7 +715,16 @@ pub fn get_pairing_code(
     request: PairingCodeRequest,
 ) -> Result<PairingCodeInfo, String> {
     let actor = require_session(&state, &request.session_token)?;
-    state.create_pairing_code(actor.id, server::lan::LAN_SERVER_PORT)
+    let mut pairing_code = state.create_pairing_code(actor.id, server::lan::LAN_SERVER_PORT)?;
+    match state.ensure_mobile_tunnel() {
+        Ok(tunnel) => {
+            pairing_code.public_url = Some(format!("{}?mobile=1", tunnel.public_url));
+        }
+        Err(error) => {
+            pairing_code.tunnel_error = Some(error);
+        }
+    }
+    Ok(pairing_code)
 }
 
 #[tauri::command]

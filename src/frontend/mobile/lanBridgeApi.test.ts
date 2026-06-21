@@ -13,7 +13,10 @@ function createLocalStorage() {
 describe("LAN bridge session persistence", () => {
   beforeEach(() => {
     const localStorage = createLocalStorage();
-    vi.stubGlobal("window", { localStorage });
+    vi.stubGlobal("window", {
+      location: { hostname: "velodent-demo.trycloudflare.com", port: "" },
+      localStorage
+    });
     vi.stubGlobal("navigator", { userAgent: "VeloDent Test Device" });
     vi.stubGlobal("crypto", { randomUUID: () => "device-uid-1" });
   });
@@ -48,7 +51,7 @@ describe("LAN bridge session persistence", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(pairLanDevice("123456")).resolves.toBe("token-1");
-    expect(fetchMock).toHaveBeenCalledWith("https://velodent.local:1422/pair", expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith("/pair", expect.any(Object));
     expect(storedLanDeviceToken()).toBe("token-1");
   });
 });

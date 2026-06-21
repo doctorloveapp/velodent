@@ -60,7 +60,9 @@ export interface DeviceAuthorization {
 export interface PairingCodeInfo {
   code: string;
   expires_at_epoch_ms: number;
+  public_url: string | null;
   server_port: number;
+  tunnel_error: string | null;
 }
 
 export interface GoogleAuthorizationUrl {

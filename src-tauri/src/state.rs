@@ -1,6 +1,7 @@
 use crate::{
     auth,
     db::{Database, DbError},
+    tunnel::{self, MobileTunnelInfo, MobileTunnelProcess},
 };
 use rand_core::{OsRng, RngCore};
 use serde::Serialize;
@@ -13,6 +14,7 @@ const PAIRING_CODE_TTL: Duration = Duration::from_secs(300);
 
 pub struct AppState {
     database: Mutex<Database>,
+    mobile_tunnel: Mutex<Option<MobileTunnelProcess>>,
     pairing_code: Mutex<Option<PairingCode>>,
 }
 
@@ -26,13 +28,16 @@ struct PairingCode {
 pub struct PairingCodeInfo {
     pub code: String,
     pub expires_at_epoch_ms: u128,
+    pub public_url: Option<String>,
     pub server_port: u16,
+    pub tunnel_error: Option<String>,
 }
 
 impl AppState {
     pub fn initialize() -> Result<Self, DbError> {
         Ok(Self {
             database: Mutex::new(Database::open_default()?),
+            mobile_tunnel: Mutex::new(None),
             pairing_code: Mutex::new(None),
         })
     }
@@ -69,8 +74,27 @@ impl AppState {
         Ok(PairingCodeInfo {
             code,
             expires_at_epoch_ms,
+            public_url: None,
             server_port,
+            tunnel_error: None,
         })
+    }
+
+    pub fn ensure_mobile_tunnel(&self) -> Result<MobileTunnelInfo, String> {
+        let mut tunnel_process = self
+            .mobile_tunnel
+            .lock()
+            .map_err(|_| "mobile tunnel lock poisoned".to_owned())?;
+        if let Some(process) = tunnel_process.as_mut() {
+            if process.is_running() {
+                return Ok(process.info.clone());
+            }
+            process.stop();
+        }
+        let next_process = tunnel::start_cloudflare_quick_tunnel()?;
+        let info = next_process.info.clone();
+        *tunnel_process = Some(next_process);
+        Ok(info)
     }
 
     pub fn consume_pairing_code(&self, code: &str) -> Result<i64, String> {

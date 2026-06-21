@@ -336,6 +336,22 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
               <p className="mt-2 text-xs text-alabaster-grey-500">
                 {t("settingsPairingExpires")} - {t("settingsPairingLanPort")}: {pairingCode.server_port}
               </p>
+              {pairingCode.public_url ? (
+                <div className="mt-4 rounded-md border border-emerald-400/25 bg-emerald-400/10 p-3 text-left">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-200">
+                    {t("settingsMobileTunnelUrl")}
+                  </p>
+                  <p className="mt-2 break-all font-mono text-sm text-white">{pairingCode.public_url}</p>
+                </div>
+              ) : null}
+              {pairingCode.tunnel_error ? (
+                <div className="mt-4 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-left">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-red-200">
+                    {t("settingsMobileTunnelUnavailable")}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-red-100">{pairingCode.tunnel_error}</p>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

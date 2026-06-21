@@ -25,7 +25,16 @@ interface LanUser {
 }
 
 export function lanBridgeBaseUrl() {
-  return "https://velodent.local:1422";
+  const host = window.location.hostname || "127.0.0.1";
+  const servedByFrontend =
+    window.location.port === "1420" ||
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host.endsWith(".trycloudflare.com");
+  if (servedByFrontend) {
+    return "";
+  }
+  return `http://${host}:1422`;
 }
 
 export function isLanSessionToken(sessionToken: string) {

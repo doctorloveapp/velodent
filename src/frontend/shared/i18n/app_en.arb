@@ -206,6 +206,8 @@
   "settingsPairingExpires": "Expires in 5 minutes",
   "settingsPairingHelp": "Open VeloDent on the phone and enter this PIN.",
   "settingsPairingLanPort": "LAN port",
+  "settingsMobileTunnelUrl": "Secure mobile URL",
+  "settingsMobileTunnelUnavailable": "Mobile tunnel unavailable",
   "settingsAction": "Action",
   "settingsFutureTitle": "Future integrations",
   "settingsFutureEyebrow": "Placeholder",

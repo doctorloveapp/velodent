@@ -15,6 +15,7 @@ mod rx_acquisition;
 mod server;
 mod state;
 mod ts_cns;
+mod tunnel;
 
 use tauri::Manager;
 
