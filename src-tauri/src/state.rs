@@ -80,7 +80,7 @@ impl AppState {
         })
     }
 
-    pub fn ensure_mobile_tunnel(&self) -> Result<MobileTunnelInfo, String> {
+    pub fn ensure_mobile_tunnel(&self, app: &tauri::AppHandle) -> Result<MobileTunnelInfo, String> {
         let mut tunnel_process = self
             .mobile_tunnel
             .lock()
@@ -91,7 +91,7 @@ impl AppState {
             }
             process.stop();
         }
-        let next_process = tunnel::start_cloudflare_quick_tunnel()?;
+        let next_process = tunnel::start_cloudflare_quick_tunnel(app)?;
         let info = next_process.info.clone();
         *tunnel_process = Some(next_process);
         Ok(info)

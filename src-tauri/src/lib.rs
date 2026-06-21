@@ -21,6 +21,7 @@ use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             integrations::google::load_dotenv();
             app.manage(state::AppState::initialize()?);

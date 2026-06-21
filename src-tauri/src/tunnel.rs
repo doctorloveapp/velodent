@@ -1,10 +1,11 @@
 use serde::Serialize;
 use std::{
-    io::{BufRead, BufReader},
-    process::{Child, Command, Stdio},
     sync::mpsc,
-    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tauri_plugin_shell::{
+    process::{CommandChild, CommandEvent},
+    ShellExt,
 };
 
 const CLOUDFLARED_TIMEOUT: Duration = Duration::from_secs(25);
@@ -19,17 +20,20 @@ pub struct MobileTunnelInfo {
 
 pub(crate) struct MobileTunnelProcess {
     pub info: MobileTunnelInfo,
-    child: Child,
+    child: Option<CommandChild>,
+    running: bool,
 }
 
 impl MobileTunnelProcess {
     pub fn is_running(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        self.running
     }
 
     pub fn stop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(child) = self.child.take() {
+            let _ = child.kill();
+        }
+        self.running = false;
     }
 }
 
@@ -39,38 +43,37 @@ impl Drop for MobileTunnelProcess {
     }
 }
 
-pub fn start_cloudflare_quick_tunnel() -> Result<MobileTunnelProcess, String> {
-    let mut command = Command::new("cloudflared");
-    command
-        .args(["tunnel", "--url", FRONTEND_LOCAL_URL])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    hide_windows_console(&mut command);
-
-    let mut child = command.spawn().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            "cloudflared non trovato nel PATH. Installa Cloudflare Tunnel o aggiungi cloudflared al PATH.".to_owned()
-        } else {
-            format!("cloudflared non avviato: {error}")
-        }
-    })?;
-
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+pub fn start_cloudflare_quick_tunnel(app: &tauri::AppHandle) -> Result<MobileTunnelProcess, String> {
+    let sidecar = app
+        .shell()
+        .sidecar("cloudflared")
+        .map_err(|error| format!("sidecar cloudflared non risolto dal pacchetto VeloDent: {error}"))?
+        .args(["tunnel", "--url", FRONTEND_LOCAL_URL]);
+    let (mut events, child) = sidecar
+        .spawn()
+        .map_err(|error| format!("sidecar cloudflared non avviato dal pacchetto VeloDent: {error}"))?;
     let (tx, rx) = mpsc::channel::<String>();
-    if let Some(stdout) = stdout {
-        read_cloudflared_output(stdout, tx.clone());
-    }
-    if let Some(stderr) = stderr {
-        read_cloudflared_output(stderr, tx);
-    }
+
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = events.recv().await {
+            match event {
+                CommandEvent::Stdout(line_bytes) | CommandEvent::Stderr(line_bytes) => {
+                    let line = String::from_utf8_lossy(&line_bytes);
+                    if let Some(url) = extract_trycloudflare_url(&line) {
+                        let _ = tx.send(url);
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
 
     let public_url = match rx.recv_timeout(CLOUDFLARED_TIMEOUT) {
         Ok(url) => url,
         Err(_) => {
             let _ = child.kill();
-            let _ = child.wait();
-            return Err("cloudflared avviato ma nessun URL trycloudflare ricevuto entro 25 secondi".to_owned());
+            return Err("sidecar cloudflared avviato ma nessun URL trycloudflare ricevuto entro 25 secondi".to_owned());
         }
     };
 
@@ -80,23 +83,9 @@ pub fn start_cloudflare_quick_tunnel() -> Result<MobileTunnelProcess, String> {
             local_url: FRONTEND_LOCAL_URL.to_owned(),
             started_at_epoch_ms: now_epoch_ms()?,
         },
-        child,
+        child: Some(child),
+        running: true,
     })
-}
-
-fn read_cloudflared_output<R>(reader: R, sender: mpsc::Sender<String>)
-where
-    R: std::io::Read + Send + 'static,
-{
-    thread::spawn(move || {
-        let reader = BufReader::new(reader);
-        for line in reader.lines().map_while(Result::ok) {
-            if let Some(url) = extract_trycloudflare_url(&line) {
-                let _ = sender.send(url);
-                return;
-            }
-        }
-    });
 }
 
 fn extract_trycloudflare_url(line: &str) -> Option<String> {
@@ -114,16 +103,6 @@ fn now_epoch_ms() -> Result<u128, String> {
         .map(|duration| duration.as_millis())
         .map_err(|error| error.to_string())
 }
-
-#[cfg(windows)]
-fn hide_windows_console(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(windows))]
-fn hide_windows_console(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {

@@ -29,7 +29,7 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, String> {
@@ -711,12 +711,13 @@ pub fn list_devices(
 
 #[tauri::command]
 pub fn get_pairing_code(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: PairingCodeRequest,
 ) -> Result<PairingCodeInfo, String> {
     let actor = require_session(&state, &request.session_token)?;
     let mut pairing_code = state.create_pairing_code(actor.id, server::lan::LAN_SERVER_PORT)?;
-    match state.ensure_mobile_tunnel() {
+    match state.ensure_mobile_tunnel(&app) {
         Ok(tunnel) => {
             pairing_code.public_url = Some(format!("{}?mobile=1", tunnel.public_url));
         }

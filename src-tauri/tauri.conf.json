@@ -27,6 +27,9 @@
   },
   "bundle": {
     "active": true,
+    "externalBin": [
+      "bin/cloudflared"
+    ],
     "targets": "all"
   }
 }
