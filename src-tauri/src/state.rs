@@ -1,8 +1,9 @@
 use crate::{
     auth,
     db::{Database, DbError},
-    tunnel::{self, MobileTunnelInfo, MobileTunnelProcess},
 };
+#[cfg(feature = "mobile-tunnel")]
+use crate::tunnel::{self, MobileTunnelInfo, MobileTunnelProcess};
 use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 use std::{
@@ -14,6 +15,7 @@ const PAIRING_CODE_TTL: Duration = Duration::from_secs(300);
 
 pub struct AppState {
     database: Mutex<Database>,
+    #[cfg(feature = "mobile-tunnel")]
     mobile_tunnel: Mutex<Option<MobileTunnelProcess>>,
     pairing_code: Mutex<Option<PairingCode>>,
 }
@@ -37,6 +39,7 @@ impl AppState {
     pub fn initialize() -> Result<Self, DbError> {
         Ok(Self {
             database: Mutex::new(Database::open_default()?),
+            #[cfg(feature = "mobile-tunnel")]
             mobile_tunnel: Mutex::new(None),
             pairing_code: Mutex::new(None),
         })
@@ -80,6 +83,7 @@ impl AppState {
         })
     }
 
+    #[cfg(feature = "mobile-tunnel")]
     pub fn ensure_mobile_tunnel(&self, app: &tauri::AppHandle) -> Result<MobileTunnelInfo, String> {
         let mut tunnel_process = self
             .mobile_tunnel

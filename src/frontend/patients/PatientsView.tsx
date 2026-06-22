@@ -578,11 +578,11 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
         </Button>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)]">
+        <div className="grid min-w-0 content-start gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <select
-              className="h-10 min-w-[220px] rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
+              className="h-10 min-w-0 flex-1 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500 sm:min-w-[220px]"
               value={selectedQuote?.id ?? ""}
               onChange={(event) => {
                 setSelectedQuoteId(event.target.value);
@@ -609,9 +609,9 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                   formatCents(line.total_cents)
                 ])}
               />
-              <div className="grid gap-2 md:grid-cols-[1fr_100px_auto]">
+              <div className="grid min-w-0 gap-2 md:grid-cols-[minmax(0,1fr)_100px_auto]">
                 <select
-                  className="h-10 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
+                  className="h-10 min-w-0 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
                   disabled={selectedQuote.status !== "draft"}
                   value={serviceId}
                   onChange={(event) => setServiceId(event.target.value)}
@@ -628,14 +628,14 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                   {t("billingAddLine")}
                 </Button>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-alabaster-grey-500/15 pt-3">
+              <div className="grid min-w-0 gap-3 border-t border-alabaster-grey-500/15 pt-3 2xl:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
                 <div className="grid gap-1 text-sm text-alabaster-grey-500">
                   <span>{t("billingGross")}: {formatCents(selectedQuote.gross_total_cents)}</span>
                   <span>{t("billingDiscount")}: {formatCents(selectedQuote.discount_cents)}</span>
                   <span className="font-semibold text-white">{t("billingNet")}: {formatCents(selectedQuote.net_total_cents)}</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input className="w-28" disabled={selectedQuote.status !== "draft"} type="number" min={0} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} />
+                <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 2xl:justify-end">
+                  <Input className="w-28 shrink-0" disabled={selectedQuote.status !== "draft"} type="number" min={0} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} />
                   <Button disabled={selectedQuote.status !== "draft"} type="button" variant="secondary" size="sm" onClick={() => void handleDiscount().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
                     {t("billingSaveDiscount")}
                   </Button>
@@ -659,7 +659,7 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
           )}
         </div>
 
-        <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
+        <div className="grid min-w-0 content-start gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
           <h3 className="text-sm font-semibold text-white">{t("billingInvoicesTitle")}</h3>
           {invoices.length === 0 ? (
             <p className="text-sm text-alabaster-grey-500">{t("billingInvoicesEmpty")}</p>
@@ -677,8 +677,8 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                   <span>{t("billingNet")}: {formatCents(invoice.total_cents)}</span>
                   <span>{t("billingPaid")}: {formatCents(invoice.paid_cents)}</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input className="w-28" type="number" min={0} step="0.01" placeholder={t("billingPaymentAmount")} value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} />
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Input className="w-28 shrink-0" type="number" min={0} step="0.01" placeholder={t("billingPaymentAmount")} value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} />
                   <Button type="button" variant="secondary" size="sm" onClick={() => void handlePayment(invoice, "cash").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
                     {t("billingCash")}
                   </Button>
@@ -705,8 +705,8 @@ function DenseBillingRows({ rows }: { rows: string[][] }) {
   const { t } = useL10n();
 
   return (
-    <div className="overflow-hidden rounded-md border border-alabaster-grey-500/20">
-      <table className="w-full border-collapse text-left text-sm">
+    <div className="min-w-0 overflow-x-auto rounded-md border border-alabaster-grey-500/20">
+      <table className="min-w-[560px] w-full border-collapse text-left text-sm">
         <thead className="bg-glaucous-950 text-[10px] uppercase tracking-widest text-alabaster-grey-500">
           <tr>
             {[t("billingDescription"), t("billingQuantity"), t("billingUnit"), t("billingTotal")].map((header) => (

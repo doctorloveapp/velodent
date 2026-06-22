@@ -15,6 +15,7 @@ mod rx_acquisition;
 mod server;
 mod state;
 mod ts_cns;
+#[cfg(feature = "mobile-tunnel")]
 mod tunnel;
 
 use tauri::Manager;
@@ -77,6 +78,7 @@ pub fn run() {
             commands::list_clinical_services,
             commands::update_clinical_service_price,
             commands::upsert_clinical_service,
+            commands::reorder_clinical_service,
             commands::list_quotes,
             commands::create_quote_from_diagnosis,
             commands::add_quote_line,

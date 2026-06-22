@@ -7,6 +7,7 @@ import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import {
   isTauriRuntime,
   listClinicalServices,
+  reorderClinicalService,
   upsertClinicalService,
   type ClinicalService,
   type User
@@ -97,12 +98,22 @@ export function TariffarioView({ currentUser }: TariffarioViewProps) {
       return;
     }
     const target = rows[targetIndex];
-    await Promise.all([
-      upsertServiceWithSort(currentUser.session_token, service, target.sort_order),
-      upsertServiceWithSort(currentUser.session_token, target, service.sort_order)
-    ]);
-    setStatusMessage(t("settingsServiceReordered"));
-    await refreshServices();
+    const previousServices = services;
+    setServices((current) =>
+      reorderCategoryServicesOptimistically(current, category, service.id, target.id)
+    );
+    try {
+      await reorderClinicalService({
+        session_token: currentUser.session_token,
+        service_id: service.id,
+        target_service_id: target.id
+      });
+      setStatusMessage(t("settingsServiceReordered"));
+      await refreshServices();
+    } catch (error) {
+      setServices(previousServices);
+      throw error;
+    }
   }
 
   async function handleCreate(category: string) {
@@ -267,6 +278,28 @@ function compareServices(left: ClinicalService, right: ClinicalService) {
   return sortDelta === 0 ? left.name.localeCompare(right.name) : sortDelta;
 }
 
+function reorderCategoryServicesOptimistically(
+  services: ClinicalService[],
+  category: string,
+  serviceId: number,
+  targetServiceId: number
+) {
+  const categoryRows = services
+    .filter((item) => normalizedCategory(item.category) === category)
+    .sort(compareServices);
+  const serviceIndex = categoryRows.findIndex((item) => item.id === serviceId);
+  const targetIndex = categoryRows.findIndex((item) => item.id === targetServiceId);
+  if (serviceIndex < 0 || targetIndex < 0) {
+    return services;
+  }
+  categoryRows.splice(targetIndex, 0, ...categoryRows.splice(serviceIndex, 1));
+  const nextSortOrderById = new Map(categoryRows.map((item, index) => [item.id, (index + 1) * 10]));
+  return services.map((item) => {
+    const nextSortOrder = nextSortOrderById.get(item.id);
+    return nextSortOrder === undefined ? item : { ...item, sort_order: nextSortOrder };
+  });
+}
+
 function normalizedCategory(category: string | null) {
   const trimmed = category?.trim();
   if (trimmed && trimmed.length > 0) {
@@ -301,17 +334,4 @@ function euroInputToCents(value: string) {
     return 0;
   }
   return Math.round(parsed * 100);
-}
-
-function upsertServiceWithSort(sessionToken: string, service: ClinicalService, sortOrder: number) {
-  return upsertClinicalService({
-    session_token: sessionToken,
-    service_id: service.id,
-    code: service.code,
-    name: service.name,
-    category: service.category ?? undefined,
-    base_price_cents: service.base_price_cents,
-    sort_order: sortOrder,
-    active: service.active
-  });
 }

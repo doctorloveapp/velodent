@@ -7,7 +7,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
   server: {
-    allowedHosts: ["localhost", "127.0.0.1", ".trycloudflare.com"],
+    host: true,
+    allowedHosts: ["localhost", "127.0.0.1", "velodent.local", ".local"],
     port: 1420,
     strictPort: true,
     proxy: {

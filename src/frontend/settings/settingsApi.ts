@@ -231,6 +231,14 @@ export async function upsertClinicalService(request: {
   return invoke<ClinicalService>("upsert_clinical_service", { request });
 }
 
+export async function reorderClinicalService(request: {
+  session_token: string;
+  service_id: number;
+  target_service_id: number;
+}) {
+  return invoke<ClinicalService[]>("reorder_clinical_service", { request });
+}
+
 export async function listGoogleCalendarAccounts(session_token: string) {
   return invoke<GoogleCalendarAccount[]>("list_google_calendar_accounts", { request: { session_token } });
 }

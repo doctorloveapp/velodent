@@ -373,6 +373,13 @@ pub struct ClinicalServiceUpsertRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ClinicalServiceReorderRequest {
+    session_token: String,
+    service_id: i64,
+    target_service_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateQuoteFromDiagnosisRequest {
     session_token: String,
     patient_id: i64,
@@ -1186,6 +1193,19 @@ pub fn upsert_clinical_service(
         )
     }
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn reorder_clinical_service(
+    state: State<'_, AppState>,
+    request: ClinicalServiceReorderRequest,
+) -> Result<Vec<ClinicalService>, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .reorder_clinical_service(actor.id, request.service_id, request.target_service_id)
+        .map(|(service, target)| vec![service, target])
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

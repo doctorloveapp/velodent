@@ -1677,6 +1677,94 @@ impl Database {
             .ok_or(DbError::NotFound)
     }
 
+    pub fn reorder_clinical_service(
+        &self,
+        actor_user_id: i64,
+        service_id: i64,
+        target_service_id: i64,
+    ) -> DbResult<(ClinicalService, ClinicalService)> {
+        self.assert_admin(actor_user_id)?;
+        if service_id == target_service_id {
+            return Err(DbError::Sql("target service must be different".to_owned()));
+        }
+
+        self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+        let result = (|| -> DbResult<(ClinicalService, ClinicalService)> {
+            let service = self
+                .get_clinical_service(service_id)?
+                .ok_or(DbError::NotFound)?;
+            let target = self
+                .get_clinical_service(target_service_id)?
+                .ok_or(DbError::NotFound)?;
+            if category_key(service.category.as_deref()) != category_key(target.category.as_deref()) {
+                return Err(DbError::Sql("services must belong to the same category".to_owned()));
+            }
+            let category = category_key(service.category.as_deref());
+            let mut ordered_ids = {
+                let mut statement = self.conn.prepare(
+                    r#"
+                    SELECT id
+                    FROM clinical_services_catalog
+                    WHERE active = 1 AND lower(trim(coalesce(category, ''))) = ?1
+                    ORDER BY sort_order ASC, name ASC, id ASC
+                    "#,
+                )?;
+                let ids = statement
+                    .query_map([category], |row| row.get::<_, i64>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                ids
+            };
+            let service_index = ordered_ids
+                .iter()
+                .position(|id| *id == service.id)
+                .ok_or(DbError::NotFound)?;
+            let target_index = ordered_ids
+                .iter()
+                .position(|id| *id == target.id)
+                .ok_or(DbError::NotFound)?;
+            ordered_ids.swap(service_index, target_index);
+            for (index, id) in ordered_ids.into_iter().enumerate() {
+                self.conn.execute(
+                    r#"
+                    UPDATE clinical_services_catalog
+                    SET sort_order = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id = ?2
+                    "#,
+                    params![((index as i64) + 1) * 10, id],
+                )?;
+            }
+            self.insert_audit(
+                Some(actor_user_id),
+                None,
+                "settings.clinical_service_reordered",
+                Some("clinical_services_catalog"),
+                Some(service.id),
+                &serde_json::json!({
+                    "target_service_id": target.id,
+                    "normalized_category_order": true,
+                })
+                .to_string(),
+            )?;
+            let updated_service = self
+                .get_clinical_service(service.id)?
+                .ok_or(DbError::NotFound)?;
+            let updated_target = self
+                .get_clinical_service(target.id)?
+                .ok_or(DbError::NotFound)?;
+            Ok((updated_service, updated_target))
+        })();
+        match result {
+            Ok(pair) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(pair)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     pub fn list_quotes(&self, actor_user_id: i64, patient_id: i64) -> DbResult<Vec<Quote>> {
         self.assert_active_user(actor_user_id)?;
         self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
@@ -4533,6 +4621,14 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn category_key(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
 fn ipv4_cidr_contains(cidr: &str, ip: &str) -> bool {
     let Some((network, prefix)) = cidr.split_once('/') else {
         return cidr.trim() == ip.trim();
@@ -6415,6 +6511,47 @@ mod tests {
         assert_eq!(updated.name, "Voce test aggiornata");
         assert_eq!(updated.base_price_cents, 13000);
         assert_eq!(updated.sort_order, 5);
+
+        let second = db
+            .create_clinical_service(
+                admin.id,
+                "TEST-ORD-2",
+                "Seconda voce ordinabile",
+                Some("test"),
+                9000,
+                5,
+            )
+            .expect("create second service");
+        let other_category = db
+            .create_clinical_service(
+                admin.id,
+                "TEST-ORD-3",
+                "Voce altra categoria",
+                Some("altro"),
+                9000,
+                25,
+            )
+            .expect("create other category service");
+
+        let (first_after_swap, second_after_swap) = db
+            .reorder_clinical_service(admin.id, updated.id, second.id)
+            .expect("swap service positions");
+        assert_eq!(first_after_swap.sort_order, 10);
+        assert_eq!(second_after_swap.sort_order, 20);
+
+        let service_from_db = db
+            .get_clinical_service(updated.id)
+            .expect("read swapped service")
+            .expect("swapped service exists");
+        let target_from_db = db
+            .get_clinical_service(second.id)
+            .expect("read swapped target")
+            .expect("swapped target exists");
+        assert_eq!(service_from_db.sort_order, 10);
+        assert_eq!(target_from_db.sort_order, 20);
+        assert!(db
+            .reorder_clinical_service(admin.id, updated.id, other_category.id)
+            .is_err());
     }
 
     #[test]

@@ -10,6 +10,10 @@ rust-version = "1.77"
 name = "velodent_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+mobile-tunnel = []
+
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
 
