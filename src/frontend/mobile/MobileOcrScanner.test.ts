@@ -30,4 +30,15 @@ describe("parseHealthCardText", () => {
 
     expect(parsed.date_of_birth).toBe("1980-01-01");
   });
+
+  it("normalizes common OCR mistakes inside the tax code", () => {
+    const parsed = parseHealthCardText(`
+      PASSAMONTE
+      GIULIA
+      PSSGLIIZD64GZ73M
+    `);
+
+    expect(parsed.tax_code).toBe("PSSGLI12D64G273M");
+    expect(parsed.date_of_birth).toBe("2012-04-24");
+  });
 });

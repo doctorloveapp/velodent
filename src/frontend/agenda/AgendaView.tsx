@@ -1,4 +1,4 @@
-import { CalendarClock, ChevronLeft, ChevronRight, ExternalLink, LockKeyhole, RefreshCw, Trash2 } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, LockKeyhole, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import type { L10nKey } from "@/frontend/shared/i18n/translations";
@@ -12,12 +12,10 @@ import {
   createAppointment,
   deleteAgendaBlock,
   getChairConfig,
-  googleCalendarAuthorizationUrl,
   googleCalendarSyncStatus,
   listAgendaBlocks,
   listAppointments,
   moveAppointment,
-  processGoogleCalendarSync,
   updateAppointmentStatus,
   type AgendaBlock,
   type Appointment,
@@ -45,7 +43,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   const [statusMessage, setStatusMessage] = useState("");
   const [form, setForm] = useState({
     patientId: "",
-    title: "",
+    title: t("agendaDefaultAppointmentTitle"),
     date: todayDateInput(),
     time: "09:00",
     duration: String(DEFAULT_DURATION_MINUTES),
@@ -128,7 +126,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
       color_tag: "powder_blue"
     });
     setStatusMessage(t("agendaAppointmentCreated"));
-    setForm({ ...form, title: "" });
+    setForm({ ...form, title: t("agendaDefaultAppointmentTitle") });
     await refreshAgenda();
   }
 
@@ -190,47 +188,17 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     await refreshAgenda();
   }
 
-  async function handleGoogleAuthorize() {
-    if (currentUser?.role !== "admin" || !currentUser.session_token) {
-      return;
-    }
-    const authorization = await googleCalendarAuthorizationUrl(currentUser.session_token);
-    window.open(authorization.authorization_url, "_blank", "noopener,noreferrer");
-    setStatusMessage(t("agendaGoogleAuthOpened"));
-  }
-
-  async function handleProcessSync() {
-    if (currentUser?.role !== "admin" || !currentUser.session_token) {
-      return;
-    }
-    const result = await processGoogleCalendarSync(currentUser.session_token, 10);
-    setStatusMessage(`${t("agendaSyncProcessed")}: ${String(result.processed)} / ${String(result.failed)}`);
-    await refreshAgenda();
-  }
-
   return (
     <section className="grid gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <PageTitle eyebrow={t("agendaEyebrow")} title={t("agendaTitle")} />
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={syncStatus?.failed_jobs ? "danger" : syncStatus?.connected ? "success" : "warning"}>
-            {syncStatus?.connected ? t("agendaGoogleConnected") : t("agendaGooglePending")}
+            {syncStatus?.connected ? t("agendaCalendarConnected") : t("agendaGooglePending")}
           </Badge>
           <Badge variant="default">
             {t("agendaQueuedJobs")}: {syncStatus?.queued_jobs ?? 0}
           </Badge>
-          {currentUser.role === "admin" ? (
-            <>
-              <Button type="button" variant="secondary" size="sm" onClick={() => void handleGoogleAuthorize()}>
-                <ExternalLink aria-hidden="true" className="h-4 w-4" />
-                {t("agendaAuthorizeGoogle")}
-              </Button>
-              <Button type="button" variant="secondary" size="sm" onClick={() => void handleProcessSync()}>
-                <RefreshCw aria-hidden="true" className="h-4 w-4" />
-                {t("agendaProcessSync")}
-              </Button>
-            </>
-          ) : null}
         </div>
       </div>
 

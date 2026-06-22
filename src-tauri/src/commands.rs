@@ -1,4 +1,5 @@
 use crate::{
+    agenda,
     auth::Role,
     billing::{self, FinancialPdf, PdfLine, PdfParty},
     clinical::{self, BridgeUnits},
@@ -6,9 +7,10 @@ use crate::{
         AgendaBlock, Appointment, AppointmentInput, AuthSession, AuthorizedDevice,
         AuthorizedGoogleAccount, BootstrapStatus, ChairConfig, ClinicalRecord,
         ClinicalRecordFilters, ClinicalService, CreateUserInput, DatabaseStatus,
-        DeviceAuthorization, GeneratedDocument, GoogleCalendarSyncStatus, Invoice, LicenseStatus,
-        NewAgendaBlock, NewClinicalRecord, NewPatient, NewRxAsset, Patient, PatientTimelineEvent,
-        Payment, Quote, RxAsset, StudioSettings, StudioSettingsUpdate, ToothStatus, User,
+        DeviceAuthorization, GeneratedDocument, GoogleCalendarAccount, GoogleCalendarSyncStatus,
+        Invoice, LicenseStatus, NewAgendaBlock, NewClinicalRecord, NewPatient, NewRxAsset,
+        Patient, PatientTimelineEvent, Payment, Quote, RxAsset, StudioSettings,
+        StudioSettingsUpdate, ToothStatus, User,
     },
     dicom_meta, files,
     integrations::{
@@ -356,6 +358,18 @@ pub struct UpdateClinicalServicePriceRequest {
     session_token: String,
     service_id: i64,
     base_price_cents: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClinicalServiceUpsertRequest {
+    session_token: String,
+    service_id: Option<i64>,
+    code: String,
+    name: String,
+    category: Option<String>,
+    base_price_cents: i64,
+    sort_order: i64,
+    active: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -813,6 +827,61 @@ pub async fn exchange_google_oauth_code(
 }
 
 #[tauri::command]
+pub fn list_google_calendar_accounts(
+    state: State<'_, AppState>,
+    request: GoogleOAuthStatusRequest,
+) -> Result<Vec<GoogleCalendarAccount>, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .list_google_calendar_accounts(actor.id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn start_google_calendar_account_link(
+    state: State<'_, AppState>,
+    request: GoogleAuthorizationUrlRequest,
+) -> Result<GoogleCalendarAccount, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    let expected_state = request
+        .state
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("velodent-calendar")
+        .to_owned();
+    let authorization =
+        google::authorization_url(&expected_state).map_err(|error| error.to_string())?;
+    let listener = TcpListener::bind(("127.0.0.1", 1421)).map_err(|error| {
+        format!("unable to start Google Calendar listener on port 1421: {error}")
+    })?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
+    opener::open(&authorization.authorization_url)
+        .map_err(|error| format!("unable to open the default browser: {error}"))?;
+
+    let code = tauri::async_runtime::spawn_blocking(move || {
+        wait_for_google_oauth_code(listener, &expected_state)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+
+    let token = google::exchange_authorization_code(code.trim())
+        .await
+        .map_err(|error| error.to_string())?;
+    let user_info = google::user_info(&token.access_token)
+        .await
+        .map_err(|error| error.to_string())?;
+    let token_json = serde_json::to_string(&token).map_err(|error| error.to_string())?;
+    state
+        .database()?
+        .store_google_calendar_account_token(actor.id, Some(&user_info.email), "primary", &token_json)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn validate_tax_code(request: ValidateTaxCodeRequest) -> bool {
     crate::db::validate_tax_code(&request.tax_code)
 }
@@ -864,11 +933,12 @@ pub fn list_agenda_blocks(
 
 #[tauri::command]
 pub fn create_agenda_block(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: CreateAgendaBlockRequest,
 ) -> Result<AgendaBlock, String> {
     let actor = require_admin_session(&state, &request.session_token)?;
-    state
+    let block = state
         .database()?
         .create_agenda_block(
             actor.id,
@@ -879,7 +949,9 @@ pub fn create_agenda_block(
                 all_day: request.all_day,
             },
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    agenda::trigger_google_calendar_sync(&app, actor.id);
+    Ok(block)
 }
 
 #[tauri::command]
@@ -912,11 +984,12 @@ pub fn list_appointments(
 
 #[tauri::command]
 pub fn create_appointment(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: CreateAppointmentRequest,
 ) -> Result<Appointment, String> {
     let actor = require_session(&state, &request.session_token)?;
-    state
+    let appointment = state
         .database()?
         .create_appointment(
             actor.id,
@@ -931,16 +1004,19 @@ pub fn create_appointment(
                 notes: request.notes.as_deref(),
             },
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    agenda::trigger_google_calendar_sync(&app, actor.id);
+    Ok(appointment)
 }
 
 #[tauri::command]
 pub fn move_appointment(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: MoveAppointmentRequest,
 ) -> Result<Appointment, String> {
     let actor = require_session(&state, &request.session_token)?;
-    state
+    let appointment = state
         .database()?
         .move_appointment(
             actor.id,
@@ -949,19 +1025,24 @@ pub fn move_appointment(
             request.ends_at.trim(),
             request.chair_number,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    agenda::trigger_google_calendar_sync(&app, actor.id);
+    Ok(appointment)
 }
 
 #[tauri::command]
 pub fn update_appointment_status(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: UpdateAppointmentStatusRequest,
 ) -> Result<Appointment, String> {
     let actor = require_session(&state, &request.session_token)?;
-    state
+    let appointment = state
         .database()?
         .update_appointment_status(actor.id, request.appointment_id, request.status.trim())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    agenda::trigger_google_calendar_sync(&app, actor.id);
+    Ok(appointment)
 }
 
 #[tauri::command]
@@ -1069,6 +1150,37 @@ pub fn update_clinical_service_price(
         .database()?
         .update_clinical_service_price(actor.id, request.service_id, request.base_price_cents)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn upsert_clinical_service(
+    state: State<'_, AppState>,
+    request: ClinicalServiceUpsertRequest,
+) -> Result<ClinicalService, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    let database = state.database()?;
+    if let Some(service_id) = request.service_id {
+        database.update_clinical_service(
+            actor.id,
+            service_id,
+            request.code.trim(),
+            request.name.trim(),
+            request.category.as_deref(),
+            request.base_price_cents,
+            request.sort_order,
+            request.active,
+        )
+    } else {
+        database.create_clinical_service(
+            actor.id,
+            request.code.trim(),
+            request.name.trim(),
+            request.category.as_deref(),
+            request.base_price_cents,
+            request.sort_order,
+        )
+    }
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1560,136 +1672,14 @@ pub fn rx_asset_data_url(
 
 #[tauri::command]
 pub async fn process_google_calendar_sync(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: ProcessGoogleCalendarSyncRequest,
 ) -> Result<GoogleCalendarSyncRunResult, String> {
     let actor = require_admin_session(&state, &request.session_token)?;
-    let token_json = {
-        let database = state.database()?;
-        database
-            .google_calendar_token_json(actor.id)
-            .map_err(|error| error.to_string())?
-    };
-    let token = serde_json::from_str::<google::GoogleCalendarToken>(&token_json)
-        .map_err(|_| "stored google calendar token is not readable".to_owned())?;
-    if token.access_token.trim().is_empty() {
-        return Err("stored google calendar token is empty".to_owned());
-    }
-
-    let jobs = {
-        let database = state.database()?;
-        database
-            .pending_google_calendar_sync_jobs(actor.id, request.limit.unwrap_or(10))
-            .map_err(|error| error.to_string())?
-    };
-    let block_jobs = {
-        let database = state.database()?;
-        database
-            .pending_google_calendar_block_sync_jobs(actor.id, request.limit.unwrap_or(10))
-            .map_err(|error| error.to_string())?
-    };
-
-    let mut processed = 0;
-    let mut failed = 0;
-    for job in jobs {
-        let payload = google_payload_for_appointment(&job.appointment);
-        let result = google::upsert_calendar_event(
-            &token.access_token,
-            "primary",
-            job.appointment.google_calendar_event_id.as_deref(),
-            &payload,
-        )
-        .await;
-
-        let database = state.database()?;
-        match result {
-            Ok(event_id) => {
-                database
-                    .complete_google_calendar_sync_job(
-                        job.job_id,
-                        job.appointment.id,
-                        event_id.trim(),
-                    )
-                    .map_err(|error| error.to_string())?;
-                processed += 1;
-            }
-            Err(error) => {
-                database
-                    .fail_google_calendar_sync_job(job.job_id, &error.to_string())
-                    .map_err(|db_error| db_error.to_string())?;
-                failed += 1;
-            }
-        }
-    }
-
-    for job in block_jobs {
-        let payload = google_payload_for_agenda_block(&job.block);
-        let result = google::upsert_calendar_event(
-            &token.access_token,
-            "primary",
-            job.block.google_calendar_event_id.as_deref(),
-            &payload,
-        )
-        .await;
-
-        let database = state.database()?;
-        match result {
-            Ok(event_id) => {
-                database
-                    .complete_google_calendar_block_sync_job(
-                        job.job_id,
-                        job.block.id,
-                        event_id.trim(),
-                    )
-                    .map_err(|error| error.to_string())?;
-                processed += 1;
-            }
-            Err(error) => {
-                database
-                    .fail_google_calendar_sync_job(job.job_id, &error.to_string())
-                    .map_err(|db_error| db_error.to_string())?;
-                failed += 1;
-            }
-        }
-    }
-
+    let _ = request.limit;
+    let (processed, failed) = agenda::process_google_calendar_sync(&app, actor.id).await?;
     Ok(GoogleCalendarSyncRunResult { processed, failed })
-}
-
-fn google_payload_for_appointment(appointment: &Appointment) -> google::GoogleCalendarEventPayload {
-    let summary = appointment
-        .patient_name
-        .as_ref()
-        .map(|patient_name| format!("{patient_name} - {} (VeloDent)", appointment.title))
-        .unwrap_or_else(|| format!("{} (VeloDent)", appointment.title));
-
-    google::GoogleCalendarEventPayload {
-        summary,
-        description: "VeloDent agenda sync".to_owned(),
-        start: google::GoogleCalendarEventDateTime {
-            date_time: appointment.starts_at.clone(),
-            time_zone: "Europe/Rome".to_owned(),
-        },
-        end: google::GoogleCalendarEventDateTime {
-            date_time: appointment.ends_at.clone(),
-            time_zone: "Europe/Rome".to_owned(),
-        },
-    }
-}
-
-fn google_payload_for_agenda_block(block: &AgendaBlock) -> google::GoogleCalendarEventPayload {
-    google::GoogleCalendarEventPayload {
-        summary: format!("{} (VeloDent)", block.title),
-        description: "VeloDent busy/closed time".to_owned(),
-        start: google::GoogleCalendarEventDateTime {
-            date_time: block.starts_at.clone(),
-            time_zone: "Europe/Rome".to_owned(),
-        },
-        end: google::GoogleCalendarEventDateTime {
-            date_time: block.ends_at.clone(),
-            time_zone: "Europe/Rome".to_owned(),
-        },
-    }
 }
 
 fn render_quote_pdf(

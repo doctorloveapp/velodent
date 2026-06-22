@@ -23,6 +23,7 @@ export interface ClinicalService {
   name: string;
   category: string | null;
   base_price_cents: number;
+  sort_order: number;
   active: boolean;
 }
 

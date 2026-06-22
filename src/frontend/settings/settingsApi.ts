@@ -77,7 +77,17 @@ export interface ClinicalService {
   name: string;
   category: string | null;
   base_price_cents: number;
+  sort_order: number;
   active: boolean;
+}
+
+export interface GoogleCalendarAccount {
+  id: number;
+  email: string | null;
+  calendar_id: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface LicenseStatus {
@@ -206,6 +216,29 @@ export async function updateClinicalServicePrice(request: {
   base_price_cents: number;
 }) {
   return invoke<ClinicalService>("update_clinical_service_price", { request });
+}
+
+export async function upsertClinicalService(request: {
+  session_token: string;
+  service_id?: number;
+  code: string;
+  name: string;
+  category?: string;
+  base_price_cents: number;
+  sort_order: number;
+  active: boolean;
+}) {
+  return invoke<ClinicalService>("upsert_clinical_service", { request });
+}
+
+export async function listGoogleCalendarAccounts(session_token: string) {
+  return invoke<GoogleCalendarAccount[]>("list_google_calendar_accounts", { request: { session_token } });
+}
+
+export async function startGoogleCalendarAccountLink(session_token: string) {
+  return invoke<GoogleCalendarAccount>("start_google_calendar_account_link", {
+    request: { session_token, state: "velodent-calendar" }
+  });
 }
 
 function toSessionUser(session: AuthSession): User {

@@ -1,5 +1,5 @@
 pub mod lan {
-    use crate::{db::NewClinicalRecord, state::AppState, ts_cns};
+    use crate::{agenda, db::{AppointmentInput, NewClinicalRecord}, state::AppState, ts_cns};
     use mdns_sd::{ServiceDaemon, ServiceInfo};
     use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
@@ -25,6 +25,18 @@ pub mod lan {
     #[derive(Debug, Deserialize)]
     struct PatientOpenRequest {
         patient_id: i64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct AppointmentRequest {
+        patient_id: Option<i64>,
+        chair_number: i64,
+        title: String,
+        starts_at: String,
+        ends_at: String,
+        status: String,
+        color_tag: Option<String>,
+        notes: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -177,6 +189,30 @@ pub mod lan {
                         .list_appointments(user.id, starts_from, starts_to)
                         .map_err(|error| error.to_string())?;
                     Ok(json!(appointments))
+                })
+            }
+            ("POST", "/api/agenda/appointments") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = serde_json::from_str::<AppointmentRequest>(body.trim())
+                        .map_err(|_| "invalid appointment body".to_owned())?;
+                    let appointment = state
+                        .database()?
+                        .create_appointment(
+                            user.id,
+                            &AppointmentInput {
+                                patient_id: request.patient_id,
+                                chair_number: request.chair_number,
+                                title: &request.title,
+                                starts_at: &request.starts_at,
+                                ends_at: &request.ends_at,
+                                status: &request.status,
+                                color_tag: request.color_tag.as_deref(),
+                                notes: request.notes.as_deref(),
+                            },
+                        )
+                        .map_err(|error| error.to_string())?;
+                    agenda::trigger_google_calendar_sync(app, user.id);
+                    Ok(json!(appointment))
                 })
             }
             ("GET", "/api/clinical/services") => {

@@ -6,6 +6,7 @@ import type { User } from "@/frontend/settings/settingsApi";
 import { Button } from "@/frontend/shared/ui/button";
 import type { Patient } from "@/frontend/patients/patientsApi";
 import { MobileShell, type MobileRouteKey } from "./MobileShell";
+import { MobileAgenda } from "./MobileAgenda";
 import { MobileClinical } from "./MobileClinical";
 import { MobileDashboard } from "./MobileDashboard";
 import { MobilePatientRegistration } from "./MobilePatientRegistration";
@@ -98,6 +99,8 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
         >
           {activeRoute === "dashboard" ? (
             <MobileDashboard onRouteChange={setActiveRoute} />
+          ) : activeRoute === "agenda" ? (
+            <MobileAgenda sessionToken={currentUser.session_token ?? ""} />
           ) : activeRoute === "newPatient" ? (
             <MobilePatientRegistration />
           ) : activeRoute === "searchPatient" ? (

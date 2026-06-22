@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 10;
+const CURRENT_SCHEMA_VERSION: i64 = 11;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -31,7 +31,6 @@ pub enum DbError {
     AppointmentConflict,
     AgendaBlocked,
     InvalidFinancialState(String),
-    GoogleCalendarNotConnected,
     InvalidCredentials,
     BootstrapAlreadyCompleted,
     NotFound,
@@ -61,7 +60,6 @@ impl std::fmt::Display for DbError {
             Self::AppointmentConflict => write!(f, "appointment conflicts on the same chair"),
             Self::AgendaBlocked => write!(f, "appointment overlaps a closed agenda block"),
             Self::InvalidFinancialState(message) => write!(f, "invalid financial state: {message}"),
-            Self::GoogleCalendarNotConnected => write!(f, "google calendar is not connected"),
             Self::InvalidCredentials => write!(f, "invalid credentials"),
             Self::BootstrapAlreadyCompleted => write!(f, "first admin already exists"),
             Self::NotFound => write!(f, "record not found"),
@@ -344,6 +342,12 @@ pub struct GoogleCalendarSyncJob {
     pub appointment: Appointment,
 }
 
+#[derive(Debug, Clone)]
+pub struct GoogleCalendarTokenRecord {
+    pub calendar_id: String,
+    pub token_json: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AgendaBlockSyncJob {
     pub job_id: i64,
@@ -357,7 +361,18 @@ pub struct ClinicalService {
     pub name: String,
     pub category: Option<String>,
     pub base_price_cents: i64,
+    pub sort_order: i64,
     pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GoogleCalendarAccount {
+    pub id: i64,
+    pub email: Option<String>,
+    pub calendar_id: String,
+    pub active: bool,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1508,10 +1523,10 @@ impl Database {
         self.assert_active_user(actor_user_id)?;
         let mut statement = self.conn.prepare(
             r#"
-            SELECT id, code, name, category, base_price_cents, active
+            SELECT id, code, name, category, base_price_cents, sort_order, active
             FROM clinical_services_catalog
             WHERE active = 1
-            ORDER BY category ASC, name ASC
+            ORDER BY sort_order ASC, category ASC, name ASC
             "#,
         )?;
 
@@ -1557,6 +1572,108 @@ impl Database {
             .to_string(),
         )?;
         self.get_clinical_service(service_id)?
+            .ok_or(DbError::NotFound)
+    }
+
+    pub fn create_clinical_service(
+        &self,
+        actor_user_id: i64,
+        code: &str,
+        name: &str,
+        category: Option<&str>,
+        base_price_cents: i64,
+        sort_order: i64,
+    ) -> DbResult<ClinicalService> {
+        self.assert_admin(actor_user_id)?;
+        let code = code.trim();
+        let name = name.trim();
+        if code.is_empty() || name.is_empty() || base_price_cents < 0 {
+            return Err(DbError::Sql("clinical service input is not valid".to_owned()));
+        }
+        self.conn.execute(
+            r#"
+            INSERT INTO clinical_services_catalog (
+                code,
+                name,
+                category,
+                base_price_cents,
+                sort_order,
+                active
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, 1)
+            "#,
+            params![code, name, category.map(str::trim), base_price_cents, sort_order],
+        )?;
+        let service_id = self.conn.last_insert_rowid();
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.clinical_service_created",
+            Some("clinical_services_catalog"),
+            Some(service_id),
+            "{}",
+        )?;
+        self.get_clinical_service(service_id)?
+            .ok_or(DbError::NotFound)
+    }
+
+    pub fn update_clinical_service(
+        &self,
+        actor_user_id: i64,
+        service_id: i64,
+        code: &str,
+        name: &str,
+        category: Option<&str>,
+        base_price_cents: i64,
+        sort_order: i64,
+        active: bool,
+    ) -> DbResult<ClinicalService> {
+        self.assert_admin(actor_user_id)?;
+        let code = code.trim();
+        let name = name.trim();
+        if code.is_empty() || name.is_empty() || base_price_cents < 0 {
+            return Err(DbError::Sql("clinical service input is not valid".to_owned()));
+        }
+        let affected = self.conn.execute(
+            r#"
+            UPDATE clinical_services_catalog
+            SET
+                code = ?1,
+                name = ?2,
+                category = ?3,
+                base_price_cents = ?4,
+                sort_order = ?5,
+                active = ?6,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?7
+            "#,
+            params![
+                code,
+                name,
+                category.map(str::trim),
+                base_price_cents,
+                sort_order,
+                if active { 1 } else { 0 },
+                service_id
+            ],
+        )?;
+        if affected == 0 {
+            return Err(DbError::NotFound);
+        }
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.clinical_service_updated",
+            Some("clinical_services_catalog"),
+            Some(service_id),
+            &serde_json::json!({
+                "base_price_cents": base_price_cents,
+                "sort_order": sort_order,
+                "active": active,
+            })
+            .to_string(),
+        )?;
+        self.get_clinical_service_any(service_id)?
             .ok_or(DbError::NotFound)
     }
 
@@ -2996,8 +3113,8 @@ impl Database {
         let connected: i64 = self.conn.query_row(
             r#"
             SELECT COUNT(*)
-            FROM integration_accounts
-            WHERE integration_type = 'google_calendar' AND label = 'primary' AND active = 1
+            FROM google_calendar_accounts
+            WHERE active = 1
             "#,
             [],
             |row| row.get(0),
@@ -3044,6 +3161,7 @@ impl Database {
             "#,
             [token_json],
         )?;
+        self.store_google_calendar_account_token(actor_user_id, None, "primary", token_json)?;
         self.insert_audit(
             Some(actor_user_id),
             None,
@@ -3054,20 +3172,105 @@ impl Database {
         )
     }
 
-    pub fn google_calendar_token_json(&self, actor_user_id: i64) -> DbResult<String> {
+    pub fn list_google_calendar_accounts(
+        &self,
+        actor_user_id: i64,
+    ) -> DbResult<Vec<GoogleCalendarAccount>> {
         self.assert_admin(actor_user_id)?;
-        self.conn
-            .query_row(
-                r#"
-                SELECT config_json
-                FROM integration_accounts
-                WHERE integration_type = 'google_calendar' AND label = 'primary' AND active = 1
-                "#,
-                [],
-                |row| row.get(0),
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, email, calendar_id, active, created_at, updated_at
+            FROM google_calendar_accounts
+            ORDER BY active DESC, email ASC, calendar_id ASC
+            "#,
+        )?;
+        let accounts = statement
+            .query_map([], google_calendar_account_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(accounts)
+    }
+
+    pub fn store_google_calendar_account_token(
+        &self,
+        actor_user_id: i64,
+        email: Option<&str>,
+        calendar_id: &str,
+        token_json: &str,
+    ) -> DbResult<GoogleCalendarAccount> {
+        self.assert_admin(actor_user_id)?;
+        let calendar_id = calendar_id
+            .trim()
+            .is_empty()
+            .then_some("primary")
+            .unwrap_or_else(|| calendar_id.trim());
+        let normalized_email = email
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase);
+        self.conn.execute(
+            r#"
+            INSERT INTO google_calendar_accounts (
+                email,
+                calendar_id,
+                token_json,
+                active,
+                created_by_user_id
             )
-            .optional()?
-            .ok_or(DbError::GoogleCalendarNotConnected)
+            VALUES (?1, ?2, ?3, 1, ?4)
+            ON CONFLICT(email, calendar_id) DO UPDATE SET
+                token_json = excluded.token_json,
+                active = 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            params![normalized_email, calendar_id, token_json, actor_user_id],
+        )?;
+        let account_id = self.conn.query_row(
+            r#"
+            SELECT id
+            FROM google_calendar_accounts
+            WHERE ((?1 IS NULL AND email IS NULL) OR email = ?1) AND calendar_id = ?2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+            params![normalized_email, calendar_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.google_calendar_account_connected",
+            Some("google_calendar_accounts"),
+            Some(account_id),
+            "{}",
+        )?;
+        self.get_google_calendar_account(account_id)?
+            .ok_or(DbError::NotFound)
+    }
+
+    pub fn active_google_calendar_tokens(
+        &self,
+        actor_user_id: i64,
+    ) -> DbResult<Vec<GoogleCalendarTokenRecord>> {
+        self.assert_admin(actor_user_id)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT calendar_id, token_json
+            FROM google_calendar_accounts
+            WHERE active = 1
+            ORDER BY id ASC
+            "#,
+        )?;
+        let tokens = statement
+            .query_map([], |row| {
+                Ok(GoogleCalendarTokenRecord {
+                    calendar_id: row.get(0)?,
+                    token_json: row.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(tokens)
     }
 
     pub fn pending_google_calendar_sync_jobs(
@@ -3537,12 +3740,42 @@ impl Database {
         self.conn
             .query_row(
                 r#"
-                SELECT id, code, name, category, base_price_cents, active
+                SELECT id, code, name, category, base_price_cents, sort_order, active
                 FROM clinical_services_catalog
                 WHERE id = ?1 AND active = 1
                 "#,
                 [id],
                 clinical_service_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn get_clinical_service_any(&self, id: i64) -> DbResult<Option<ClinicalService>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, code, name, category, base_price_cents, sort_order, active
+                FROM clinical_services_catalog
+                WHERE id = ?1
+                "#,
+                [id],
+                clinical_service_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn get_google_calendar_account(&self, id: i64) -> DbResult<Option<GoogleCalendarAccount>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, email, calendar_id, active, created_at, updated_at
+                FROM google_calendar_accounts
+                WHERE id = ?1
+                "#,
+                [id],
+                google_calendar_account_from_row,
             )
             .optional()
             .map_err(DbError::from)
@@ -4525,6 +4758,12 @@ fn configure_connection(conn: &Connection) -> DbResult<()> {
 fn run_migrations(conn: &Connection) -> DbResult<()> {
     conn.execute_batch(SCHEMA_SQL)?;
     ensure_column(conn, "authorized_devices", "device_uid", "TEXT")?;
+    ensure_column(
+        conn,
+        "clinical_services_catalog",
+        "sort_order",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     conn.execute(
         r#"
         CREATE UNIQUE INDEX IF NOT EXISTS idx_authorized_devices_device_uid
@@ -4667,7 +4906,7 @@ fn patient_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
 }
 
 fn clinical_service_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClinicalService> {
-    let active: i64 = row.get(5)?;
+    let active: i64 = row.get(6)?;
 
     Ok(ClinicalService {
         id: row.get(0)?,
@@ -4675,7 +4914,23 @@ fn clinical_service_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Clinic
         name: row.get(2)?,
         category: row.get(3)?,
         base_price_cents: row.get(4)?,
+        sort_order: row.get(5)?,
         active: active == 1,
+    })
+}
+
+fn google_calendar_account_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<GoogleCalendarAccount> {
+    let active: i64 = row.get(3)?;
+
+    Ok(GoogleCalendarAccount {
+        id: row.get(0)?,
+        email: row.get(1)?,
+        calendar_id: row.get(2)?,
+        active: active == 1,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
     })
 }
 
@@ -5030,6 +5285,7 @@ CREATE TABLE IF NOT EXISTS clinical_services_catalog (
     name TEXT NOT NULL,
     category TEXT,
     base_price_cents INTEGER NOT NULL CHECK(base_price_cents >= 0),
+    sort_order INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -5336,6 +5592,19 @@ CREATE TABLE IF NOT EXISTS integration_accounts (
     UNIQUE(integration_type, label)
 );
 
+CREATE TABLE IF NOT EXISTS google_calendar_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT,
+    calendar_id TEXT NOT NULL DEFAULT 'primary',
+    token_json TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+    created_by_user_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE(email, calendar_id)
+);
+
 CREATE TABLE IF NOT EXISTS sync_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     integration_type TEXT NOT NULL,
@@ -5392,6 +5661,7 @@ CREATE INDEX IF NOT EXISTS idx_invoices_year_number ON invoices(invoice_year, in
 CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_audit_patient_created ON audit_log(patient_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_action_created ON audit_log(action, created_at);
+CREATE INDEX IF NOT EXISTS idx_google_calendar_accounts_active ON google_calendar_accounts(active);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_status_run_after ON sync_jobs(status, run_after);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token_hash);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
@@ -6108,6 +6378,89 @@ mod tests {
             .find(|row| row.id == invoice.id)
             .expect("paid invoice");
         assert_eq!(paid.payment_status, "paid");
+    }
+
+    #[test]
+    fn clinical_services_can_be_ordered_and_edited_by_admin() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+
+        let created = db
+            .create_clinical_service(
+                admin.id,
+                "TEST-ORD",
+                "Voce test ordinabile",
+                Some("test"),
+                12345,
+                -10,
+            )
+            .expect("create service");
+        assert_eq!(created.sort_order, -10);
+
+        let updated = db
+            .update_clinical_service(
+                admin.id,
+                created.id,
+                "TEST-ORD",
+                "Voce test aggiornata",
+                Some("test"),
+                13000,
+                5,
+                true,
+            )
+            .expect("update service");
+        assert_eq!(updated.name, "Voce test aggiornata");
+        assert_eq!(updated.base_price_cents, 13000);
+        assert_eq!(updated.sort_order, 5);
+    }
+
+    #[test]
+    fn google_calendar_accounts_are_multi_account_and_drive_connected_status() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+
+        assert!(
+            !db.google_calendar_sync_status(admin.id)
+                .expect("initial sync status")
+                .connected
+        );
+
+        db.store_google_calendar_account_token(
+            admin.id,
+            Some("calendar-one@example.test"),
+            "primary",
+            r#"{"access_token":"token-one","refresh_token":null,"token_type":"Bearer","scope":null,"expires_at_epoch_seconds":null}"#,
+        )
+        .expect("store first calendar account");
+        db.store_google_calendar_account_token(
+            admin.id,
+            Some("calendar-two@example.test"),
+            "primary",
+            r#"{"access_token":"token-two","refresh_token":null,"token_type":"Bearer","scope":null,"expires_at_epoch_seconds":null}"#,
+        )
+        .expect("store second calendar account");
+
+        let accounts = db
+            .list_google_calendar_accounts(admin.id)
+            .expect("calendar accounts");
+        assert_eq!(accounts.len(), 2);
+        assert!(
+            db.google_calendar_sync_status(admin.id)
+                .expect("connected sync status")
+                .connected
+        );
+        assert_eq!(
+            db.active_google_calendar_tokens(admin.id)
+                .expect("active tokens")
+                .len(),
+            2
+        );
     }
 
     fn test_database_path() -> PathBuf {

@@ -181,9 +181,12 @@ export function MobileOcrScanner({ open, onClose, onManualEntry, onSuccess }: Mo
               </div>
             </div>
 
-            <p className="text-sm leading-6 text-alabaster-grey-500">{statusMessage}</p>
+            <p className="pb-32 text-sm leading-6 text-alabaster-grey-500">{statusMessage}</p>
 
-            <div className="grid gap-3">
+            <div
+              className="fixed inset-x-4 bottom-4 z-[9999] mx-auto grid max-w-[460px] gap-3 rounded-xl border border-alabaster-grey-500/20 bg-ink-black-950/92 p-3 shadow-[0_18px_60px_rgba(0,0,0,0.5)] backdrop-blur"
+              style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
+            >
               <Button
                 type="button"
                 className="h-14 justify-center text-base"
@@ -206,13 +209,14 @@ export function MobileOcrScanner({ open, onClose, onManualEntry, onSuccess }: Mo
 
 function getOcrWorker() {
   sharedOcrWorkerPromise ??= createWorker("ita+eng", OEM.LSTM_ONLY, {
-    corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0",
+    corePath: "/tesseract-core",
     errorHandler: (error: unknown) => logOcrError("worker internal error", error),
-    langPath: "https://tessdata.projectnaptha.com/4.0.0",
+    gzip: false,
+    langPath: "/tesseract-lang",
     logger: (message) => {
       console.info("VeloDent OCR worker", message.status, Math.round(message.progress * 100));
     },
-    workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js"
+    workerPath: "/tesseract/worker.min.js"
   }).then(async (worker) => {
     await worker.setParameters({
       preserve_interword_spaces: "1",
@@ -260,15 +264,23 @@ function captureAndPreprocessVideoFrame(video: HTMLVideoElement) {
 
 async function extractHealthCardData(image: string): Promise<TsCnsPatientData> {
   const worker = await getOcrWorker();
-  const result = await worker.recognize(image);
-  console.info("VeloDent OCR recognized characters", result.data.text.length);
-  return parseHealthCardText(result.data.text);
+  const variants = await buildOcrImageVariants(image);
+  let lastError: unknown = null;
+  for (const variant of variants) {
+    const result = await worker.recognize(variant, { rotateAuto: true });
+    console.info("VeloDent OCR recognized characters", result.data.text.length);
+    try {
+      return parseHealthCardText(result.data.text);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("ocr parse incomplete");
 }
 
 export function parseHealthCardText(text: string): TsCnsPatientData {
   const normalizedText = normalizeOcrText(text);
-  const taxCodeMatch = /[A-Z]{6}[0-9]{2}[A-Z][0-9]{2}[A-Z][0-9]{3}[A-Z]/.exec(normalizedText);
-  const taxCode = taxCodeMatch?.[0] ?? "";
+  const taxCode = extractTaxCode(normalizedText);
   const birthDate = parseBirthDate(normalizedText) || parseBirthDateFromTaxCode(taxCode);
   const lines = normalizedText
     .split(/\r?\n/)
@@ -293,6 +305,185 @@ export function parseHealthCardText(text: string): TsCnsPatientData {
     last_name: normalizeName(lastName),
     tax_code: taxCode
   };
+}
+
+async function buildOcrImageVariants(image: string) {
+  return [
+    image,
+    await rotateImageDataUrl(image, 90),
+    await rotateImageDataUrl(image, 270),
+    await rotateImageDataUrl(image, 180)
+  ];
+}
+
+function rotateImageDataUrl(image: string, degrees: 90 | 180 | 270) {
+  return new Promise<string>((resolve, reject) => {
+    const source = new Image();
+    source.onload = () => {
+      const canvas = document.createElement("canvas");
+      const rightAngle = degrees === 90 || degrees === 270;
+      canvas.width = rightAngle ? source.height : source.width;
+      canvas.height = rightAngle ? source.width : source.height;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        reject(new Error("canvas unavailable"));
+        return;
+      }
+      context.translate(canvas.width / 2, canvas.height / 2);
+      context.rotate((degrees * Math.PI) / 180);
+      context.drawImage(source, -source.width / 2, -source.height / 2);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    source.onerror = () => reject(new Error("ocr image rotation failed"));
+    source.src = image;
+  });
+}
+
+function extractTaxCode(text: string) {
+  const exactMatches = Array.from(text.matchAll(/[A-Z]{6}[0-9]{2}[A-Z][0-9]{2}[A-Z][0-9]{3}[A-Z]/g)).map((match) => match[0]);
+  const exactValid = exactMatches.find(isValidTaxCodeChecksum);
+  if (exactValid) {
+    return exactValid;
+  }
+  if (exactMatches.length > 0) {
+    return exactMatches.at(-1) ?? "";
+  }
+
+  const compact = text.replace(/[^A-Z0-9]/g, "");
+  const candidates: string[] = [];
+  for (let index = 0; index <= compact.length - 16; index += 1) {
+    const candidate = normalizeTaxCodeCandidate(compact.slice(index, index + 16));
+    if (/^[A-Z]{6}[0-9]{2}[A-Z][0-9]{2}[A-Z][0-9]{3}[A-Z]$/.test(candidate)) {
+      candidates.push(candidate);
+    }
+  }
+  return candidates.find(isValidTaxCodeChecksum) ?? candidates.at(-1) ?? "";
+}
+
+function isValidTaxCodeChecksum(taxCode: string) {
+  const oddValues: Record<string, number> = {
+    "0": 1,
+    "1": 0,
+    "2": 5,
+    "3": 7,
+    "4": 9,
+    "5": 13,
+    "6": 15,
+    "7": 17,
+    "8": 19,
+    "9": 21,
+    A: 1,
+    B: 0,
+    C: 5,
+    D: 7,
+    E: 9,
+    F: 13,
+    G: 15,
+    H: 17,
+    I: 19,
+    J: 21,
+    K: 2,
+    L: 4,
+    M: 18,
+    N: 20,
+    O: 11,
+    P: 3,
+    Q: 6,
+    R: 8,
+    S: 12,
+    T: 14,
+    U: 16,
+    V: 10,
+    W: 22,
+    X: 25,
+    Y: 24,
+    Z: 23
+  };
+  const evenValues: Record<string, number> = {
+    "0": 0,
+    "1": 1,
+    "2": 2,
+    "3": 3,
+    "4": 4,
+    "5": 5,
+    "6": 6,
+    "7": 7,
+    "8": 8,
+    "9": 9,
+    A: 0,
+    B: 1,
+    C: 2,
+    D: 3,
+    E: 4,
+    F: 5,
+    G: 6,
+    H: 7,
+    I: 8,
+    J: 9,
+    K: 10,
+    L: 11,
+    M: 12,
+    N: 13,
+    O: 14,
+    P: 15,
+    Q: 16,
+    R: 17,
+    S: 18,
+    T: 19,
+    U: 20,
+    V: 21,
+    W: 22,
+    X: 23,
+    Y: 24,
+    Z: 25
+  };
+  let sum = 0;
+  for (let index = 0; index < 15; index += 1) {
+    const character = taxCode[index];
+    const values = index % 2 === 0 ? oddValues : evenValues;
+    sum += values[character] ?? 0;
+  }
+  return String.fromCharCode("A".charCodeAt(0) + (sum % 26)) === taxCode[15];
+}
+
+function normalizeTaxCodeCandidate(value: string) {
+  const letterPositions = new Set([0, 1, 2, 3, 4, 5, 8, 11, 15]);
+  return value
+    .split("")
+    .map((character, index) => (letterPositions.has(index) ? ocrCharacterToLetter(character) : ocrCharacterToDigit(character)))
+    .join("");
+}
+
+function ocrCharacterToDigit(character: string) {
+  const replacements: Record<string, string> = {
+    A: "4",
+    B: "8",
+    D: "0",
+    E: "3",
+    G: "6",
+    I: "1",
+    L: "1",
+    O: "0",
+    Q: "0",
+    S: "5",
+    T: "1",
+    Z: "2"
+  };
+  return replacements[character] ?? character;
+}
+
+function ocrCharacterToLetter(character: string) {
+  const replacements: Record<string, string> = {
+    "0": "O",
+    "1": "I",
+    "2": "Z",
+    "3": "B",
+    "4": "A",
+    "5": "S",
+    "6": "G",
+    "8": "B"
+  };
+  return replacements[character] ?? character;
 }
 
 function normalizeOcrText(text: string) {

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { fromLanSessionToken, isLanSessionToken, lanFetch } from "@/frontend/mobile/lanBridgeApi";
 
 export type AppointmentStatus = "booked" | "arrived" | "waiting" | "in_chair" | "completed" | "cancelled";
 
@@ -54,17 +55,15 @@ export interface AppointmentInput {
   notes?: string;
 }
 
-export interface GoogleAuthorizationUrl {
-  authorization_url: string;
-  redirect_uri: string;
-  scopes: string[];
-}
-
 export async function getChairConfig(session_token: string) {
   return invoke<ChairConfig>("get_chair_config", { request: { session_token } });
 }
 
 export async function listAppointments(session_token: string, starts_from: string, starts_to: string) {
+  if (isLanSessionToken(session_token)) {
+    const params = new URLSearchParams({ from: starts_from, to: starts_to });
+    return lanFetch<Appointment[]>(`/api/agenda/appointments?${params.toString()}`, fromLanSessionToken(session_token));
+  }
   return invoke<Appointment[]>("list_appointments", { request: { session_token, starts_from, starts_to } });
 }
 
@@ -84,6 +83,13 @@ export async function deleteAgendaBlock(session_token: string, block_id: number)
 }
 
 export async function createAppointment(session_token: string, input: AppointmentInput) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<Appointment>("/api/agenda/appointments", fromLanSessionToken(session_token), {
+      body: JSON.stringify(input),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+  }
   return invoke<Appointment>("create_appointment", { request: { session_token, ...input } });
 }
 
@@ -105,12 +111,4 @@ export async function updateAppointmentStatus(session_token: string, appointment
 
 export async function googleCalendarSyncStatus(session_token: string) {
   return invoke<GoogleCalendarSyncStatus>("google_calendar_sync_status", { request: { session_token } });
-}
-
-export async function googleCalendarAuthorizationUrl(session_token: string, state = "velodent-local") {
-  return invoke<GoogleAuthorizationUrl>("google_calendar_authorization_url", { request: { session_token, state } });
-}
-
-export async function processGoogleCalendarSync(session_token: string, limit = 10) {
-  return invoke<{ processed: number; failed: number }>("process_google_calendar_sync", { request: { session_token, limit } });
 }

@@ -1,4 +1,4 @@
-import { ClipboardList, Laptop, Save, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, UsersRound, Wifi } from "lucide-react";
+import { ArrowLeft, CalendarCheck, ClipboardList, Laptop, Plus, Save, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, UsersRound, Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
@@ -13,15 +13,18 @@ import {
   getStudioSettings,
   isTauriRuntime,
   listClinicalServices,
+  listGoogleCalendarAccounts,
   listAuthorizedGoogleAccounts,
   listDevices,
   listUsers,
   revokeDevice,
-  updateClinicalServicePrice,
+  startGoogleCalendarAccountLink,
+  upsertClinicalService,
   updateStudioSettings,
   type AuthorizedDevice,
   type AuthorizedGoogleAccount,
   type ClinicalService,
+  type GoogleCalendarAccount,
   type PairingCodeInfo,
   type Role,
   type StudioSettings,
@@ -29,6 +32,15 @@ import {
 } from "./settingsApi";
 
 const roleOptions: Role[] = ["admin", "odontoiatra", "aso"];
+
+interface ServiceDraft {
+  code: string;
+  name: string;
+  category: string;
+  basePrice: string;
+  sortOrder: string;
+  active: boolean;
+}
 
 interface SettingsPanelProps {
   currentUser: User | null;
@@ -39,10 +51,12 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [backendAvailable] = useState(isTauriRuntime());
   const [users, setUsers] = useState<User[]>([]);
   const [googleAccounts, setGoogleAccounts] = useState<AuthorizedGoogleAccount[]>([]);
+  const [calendarAccounts, setCalendarAccounts] = useState<GoogleCalendarAccount[]>([]);
   const [devices, setDevices] = useState<AuthorizedDevice[]>([]);
   const [services, setServices] = useState<ClinicalService[]>([]);
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
+  const [settingsPage, setSettingsPage] = useState<"main" | "services">("main");
   const [oneTimeToken, setOneTimeToken] = useState("");
   const [pairingCode, setPairingCode] = useState<PairingCodeInfo | null>(null);
   const [pairingQrDataUrl, setPairingQrDataUrl] = useState("");
@@ -62,6 +76,15 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   });
   const [googleForm, setGoogleForm] = useState({ email: "", role: "aso" as Role });
   const [deviceForm, setDeviceForm] = useState({ label: "", userId: "", allowedLanCidr: "" });
+  const [serviceDrafts, setServiceDrafts] = useState<Record<number, ServiceDraft>>({});
+  const [newServiceDraft, setNewServiceDraft] = useState<ServiceDraft>({
+    code: "",
+    name: "",
+    category: "",
+    basePrice: "0.00",
+    sortOrder: "0",
+    active: true
+  });
 
   async function refresh() {
     if (!backendAvailable) {
@@ -72,9 +95,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       return;
     }
 
-    const [nextUsers, nextGoogleAccounts, nextDevices, nextSettings, nextServices] = await Promise.all([
+    const [nextUsers, nextGoogleAccounts, nextCalendarAccounts, nextDevices, nextSettings, nextServices] = await Promise.all([
       listUsers(currentUser.session_token),
       listAuthorizedGoogleAccounts(currentUser.session_token),
+      listGoogleCalendarAccounts(currentUser.session_token),
       listDevices(currentUser.session_token),
       getStudioSettings(currentUser.session_token),
       listClinicalServices(currentUser.session_token)
@@ -82,8 +106,10 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
 
     setUsers(nextUsers);
     setGoogleAccounts(nextGoogleAccounts);
+    setCalendarAccounts(nextCalendarAccounts);
     setDevices(nextDevices);
     setServices(nextServices);
+    setServiceDrafts(Object.fromEntries(nextServices.map((service) => [service.id, serviceToDraft(service)])));
     setSettings(nextSettings);
     setStudioForm({
       clinicName: nextSettings.clinic_name ?? "",
@@ -199,6 +225,17 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     await refresh();
   }
 
+  async function handleLinkGoogleCalendar() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+
+    await startGoogleCalendarAccountLink(currentUser.session_token);
+    setStatusMessage(t("settingsCalendarAccountLinked"));
+    await refresh();
+  }
+
   async function handleAuthorizeDevice() {
     if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
@@ -238,19 +275,102 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     await refresh();
   }
 
-  async function handleUpdateServicePrice(serviceId: number, basePriceCents: number) {
+  async function handleSaveService(serviceId: number) {
     if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
       return;
     }
-
-    const updated = await updateClinicalServicePrice({
+    const service = services.find((item) => item.id === serviceId);
+    if (!service) {
+      return;
+    }
+    const draft = serviceDrafts[serviceId] ?? serviceToDraft(service);
+    const updated = await upsertClinicalService({
       session_token: currentUser.session_token,
       service_id: serviceId,
-      base_price_cents: basePriceCents
+      code: draft.code,
+      name: draft.name,
+      category: draft.category || undefined,
+      base_price_cents: euroInputToCents(draft.basePrice),
+      sort_order: Number.parseInt(draft.sortOrder, 10) || 0,
+      active: draft.active
     });
     setServices((current) => current.map((service) => (service.id === updated.id ? updated : service)));
+    setServiceDrafts((current) => ({ ...current, [updated.id]: serviceToDraft(updated) }));
     setStatusMessage(t("settingsServiceSaved"));
+  }
+
+  async function handleCreateService() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+    const created = await upsertClinicalService({
+      session_token: currentUser.session_token,
+      code: newServiceDraft.code,
+      name: newServiceDraft.name,
+      category: newServiceDraft.category || undefined,
+      base_price_cents: euroInputToCents(newServiceDraft.basePrice),
+      sort_order: Number.parseInt(newServiceDraft.sortOrder, 10) || 0,
+      active: newServiceDraft.active
+    });
+    setServices((current) => [...current, created].sort((left, right) => left.sort_order - right.sort_order));
+    setServiceDrafts((current) => ({ ...current, [created.id]: serviceToDraft(created) }));
+    setNewServiceDraft({ code: "", name: "", category: "", basePrice: "0.00", sortOrder: "0", active: true });
+    setStatusMessage(t("settingsServiceCreated"));
+  }
+
+  if (settingsPage === "services") {
+    return (
+      <div className="grid gap-4">
+        <SettingsSurface
+          icon={<ClipboardList aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+          title={t("settingsServicesTitle")}
+          eyebrow={t("settingsServicesEyebrow")}
+        >
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <SettingsActionButton onClick={() => setSettingsPage("main")}>
+              <ArrowLeft aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+              {t("settingsBackToSettings")}
+            </SettingsActionButton>
+            {statusMessage ? <span className="text-sm text-alabaster-grey-500">{statusMessage}</span> : null}
+          </div>
+          <div className="rounded-lg border border-powder-blue-500/20 bg-ink-black-950 p-3">
+            <div className="grid items-center gap-2 xl:grid-cols-[90px,130px,1.5fr,1fr,120px,110px,auto]">
+              <Input placeholder={t("settingsServicePosition")} value={newServiceDraft.sortOrder} onChange={(event) => setNewServiceDraft({ ...newServiceDraft, sortOrder: event.target.value })} />
+              <Input placeholder={t("settingsServiceCode")} value={newServiceDraft.code} onChange={(event) => setNewServiceDraft({ ...newServiceDraft, code: event.target.value })} />
+              <Input placeholder={t("settingsServiceName")} value={newServiceDraft.name} onChange={(event) => setNewServiceDraft({ ...newServiceDraft, name: event.target.value })} />
+              <Input placeholder={t("settingsServiceCategory")} value={newServiceDraft.category} onChange={(event) => setNewServiceDraft({ ...newServiceDraft, category: event.target.value })} />
+              <Input min={0} step="0.01" type="number" placeholder={t("settingsServicePrice")} value={newServiceDraft.basePrice} onChange={(event) => setNewServiceDraft({ ...newServiceDraft, basePrice: event.target.value })} />
+              <ServiceActiveSelect value={newServiceDraft.active} onChange={(active) => setNewServiceDraft({ ...newServiceDraft, active })} />
+              <SettingsActionButton onClick={() => void handleCreateService().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+                <Plus aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+                {t("settingsServiceCreate")}
+              </SettingsActionButton>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2">
+            {services.map((service) => {
+              const draft = serviceDrafts[service.id] ?? serviceToDraft(service);
+              return (
+                <div key={service.id} className="grid items-center gap-2 rounded-lg border border-alabaster-grey-500/15 bg-glaucous-950 p-2 xl:grid-cols-[90px,130px,1.5fr,1fr,120px,110px,auto]">
+                  <Input value={draft.sortOrder} onChange={(event) => setServiceDrafts((current) => ({ ...current, [service.id]: { ...draft, sortOrder: event.target.value } }))} />
+                  <Input value={draft.code} onChange={(event) => setServiceDrafts((current) => ({ ...current, [service.id]: { ...draft, code: event.target.value } }))} />
+                  <Input value={draft.name} onChange={(event) => setServiceDrafts((current) => ({ ...current, [service.id]: { ...draft, name: event.target.value } }))} />
+                  <Input value={draft.category} onChange={(event) => setServiceDrafts((current) => ({ ...current, [service.id]: { ...draft, category: event.target.value } }))} />
+                  <Input min={0} step="0.01" type="number" value={draft.basePrice} onChange={(event) => setServiceDrafts((current) => ({ ...current, [service.id]: { ...draft, basePrice: event.target.value } }))} />
+                  <ServiceActiveSelect value={draft.active} onChange={(active) => setServiceDrafts((current) => ({ ...current, [service.id]: { ...draft, active } }))} />
+                  <SettingsActionButton onClick={() => void handleSaveService(service.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+                    <Save aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+                    {t("settingsServiceSave")}
+                  </SettingsActionButton>
+                </div>
+              );
+            })}
+          </div>
+        </SettingsSurface>
+      </div>
+    );
   }
 
   return (
@@ -328,6 +448,30 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
           />
         </SettingsSurface>
       </div>
+
+      <SettingsSurface
+        icon={<CalendarCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+        title={t("settingsGoogleCalendarAccountsTitle")}
+        eyebrow={t("settingsGoogleCalendarAccountsEyebrow")}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-alabaster-grey-500">{t("settingsGoogleCalendarAccountsHelp")}</p>
+          <SettingsActionButton onClick={() => void handleLinkGoogleCalendar().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+            <CalendarCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+            {t("settingsGoogleCalendarAddAccount")}
+          </SettingsActionButton>
+        </div>
+        <DenseTable
+          headers={[t("settingsGoogleEmail"), t("settingsCalendarId"), t("settingsStatus")]}
+          rows={calendarAccounts.map((account) => [
+            account.email ?? "-",
+            account.calendar_id,
+            <Badge key={account.id} variant={account.active ? "success" : "warning"}>
+              {account.active ? t("agendaCalendarConnected") : t("settingsInactive")}
+            </Badge>
+          ])}
+        />
+      </SettingsSurface>
 
       <SettingsSurface
         icon={<Laptop aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
@@ -421,32 +565,19 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       </SettingsSurface>
 
       <SettingsSurface
-        icon={<ClipboardList aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
-        title={t("settingsServicesTitle")}
-        eyebrow={t("settingsServicesEyebrow")}
-      >
-        <DenseTable
-          headers={[t("settingsServiceCode"), t("settingsServiceName"), t("settingsServiceCategory"), t("settingsServicePrice"), t("settingsStatus")]}
-          rows={services.map((service) => [
-            service.code,
-            service.name,
-            service.category,
-            <ServicePriceEditor
-              key={`price-${String(service.id)}`}
-              cents={service.base_price_cents}
-              onSave={(nextCents) => void handleUpdateServicePrice(service.id, nextCents).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}
-            />,
-            service.active ? t("settingsActive") : t("settingsInactive")
-          ])}
-        />
-      </SettingsSurface>
-
-      <SettingsSurface
         icon={<SlidersHorizontal aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
         title={t("settingsFutureTitle")}
         eyebrow={t("settingsFutureEyebrow")}
       >
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
+          <button
+            type="button"
+            className="rounded-md border border-powder-blue-500/30 bg-powder-blue-950/60 p-3 text-left text-sm font-semibold text-powder-blue-100 transition hover:border-powder-blue-400/60 hover:bg-powder-blue-500/20 hover:text-white hover:shadow-[0_0_20px_rgba(47,127,208,0.18)]"
+            onClick={() => setSettingsPage("services")}
+          >
+            <ClipboardList aria-hidden="true" className="mb-3 h-5 w-5 text-powder-blue-500" strokeWidth={1.6} />
+            {t("settingsOpenServices")}
+          </button>
           {[t("settingsSumupPlaceholder"), t("settingsGoogleCalendarPlaceholder"), t("settingsRxDriverPlaceholder")].map((item) => (
             <div key={item} className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-sm text-alabaster-grey-500">
               {item}
@@ -530,22 +661,18 @@ function RoleSelect({ onChange, value }: { onChange: (role: Role) => void; value
   );
 }
 
-function ServicePriceEditor({ cents, onSave }: { cents: number; onSave: (cents: number) => void }) {
+function ServiceActiveSelect({ onChange, value }: { onChange: (active: boolean) => void; value: boolean }) {
   const { t } = useL10n();
-  const [value, setValue] = useState(centsToEuroInput(cents));
-
-  useEffect(() => {
-    setValue(centsToEuroInput(cents));
-  }, [cents]);
 
   return (
-    <div className="flex min-w-[150px] items-center gap-2">
-      <Input className="h-8 w-24" min={0} step="0.01" type="number" value={value} onChange={(event) => setValue(event.target.value)} />
-      <SettingsActionButton size="sm" onClick={() => onSave(euroInputToCents(value))}>
-        <Save aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.6} />
-        {t("settingsServiceSave")}
-      </SettingsActionButton>
-    </div>
+    <select
+      className="h-10 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500 focus:ring-2 focus:ring-powder-blue-500/20"
+      value={value ? "active" : "inactive"}
+      onChange={(event) => onChange(event.target.value === "active")}
+    >
+      <option value="active">{t("settingsActive")}</option>
+      <option value="inactive">{t("settingsInactive")}</option>
+    </select>
   );
 }
 
@@ -580,6 +707,17 @@ function DenseTable({ headers, rows }: { headers: string[]; rows: React.ReactNod
 
 function centsToEuroInput(cents: number) {
   return (cents / 100).toFixed(2);
+}
+
+function serviceToDraft(service: ClinicalService): ServiceDraft {
+  return {
+    code: service.code,
+    name: service.name,
+    category: service.category ?? "",
+    basePrice: centsToEuroInput(service.base_price_cents),
+    sortOrder: String(service.sort_order),
+    active: service.active
+  };
 }
 
 function euroInputToCents(value: string) {
