@@ -7,7 +7,7 @@ import { Button } from "@/frontend/shared/ui/button";
 import type { Patient } from "@/frontend/patients/patientsApi";
 import { MobileShell, type MobileRouteKey } from "./MobileShell";
 import { MobileAgenda } from "./MobileAgenda";
-import { MobileClinical } from "./MobileClinical";
+import { MobileClinical, type SelectedToothRecordInfo } from "./MobileClinical";
 import { MobileDashboard } from "./MobileDashboard";
 import { MobilePatientRegistration } from "./MobilePatientRegistration";
 import { MobilePatientSearch } from "./MobilePatientSearch";
@@ -58,6 +58,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
   const [clinicalMode, setClinicalMode] = useState<"clinical" | "orthodontics">("clinical");
   const [activePatient, setActivePatient] = useState<Patient | null>(null);
   const [activeRoute, setActiveRoute] = useState<MobileRouteKey>("dashboard");
+  const [selectedToothRecordInfo, setSelectedToothRecordInfo] = useState<SelectedToothRecordInfo | null>(null);
   const activeContent = routeContent[activeRoute];
   const title = t(activeContent.titleKey);
   const activePatientName = activePatient ? `${activePatient.first_name} ${activePatient.last_name}` : undefined;
@@ -69,18 +70,30 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
       currentUser={currentUser}
       headerAccessory={
         activeRoute === "clinical" ? (
-          <div className="grid grid-cols-2 gap-2 rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
-            {(["clinical", "orthodontics"] as const).map((item) => (
-              <Button
-                key={item}
-                type="button"
-                variant={clinicalMode === item ? "navActive" : "nav"}
-                className="h-11 justify-center"
-                onClick={() => setClinicalMode(item)}
-              >
-                {item === "clinical" ? t("mobileClinicalMode") : t("mobileOrthodonticsMode")}
-              </Button>
-            ))}
+          <div className="grid gap-2">
+            {selectedToothRecordInfo ? (
+              <div className="rounded-xl border border-powder-blue-500/25 bg-powder-blue-950/70 p-3 text-sm text-white">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
+                  {t("mobileRecordedTooth")}
+                </p>
+                <p className="mt-1 font-semibold">
+                  {String(selectedToothRecordInfo.toothNumber)} - {selectedToothRecordInfo.serviceName}
+                </p>
+              </div>
+            ) : null}
+            <div className="grid grid-cols-2 gap-2 rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
+              {(["clinical", "orthodontics"] as const).map((item) => (
+                <Button
+                  key={item}
+                  type="button"
+                  variant={clinicalMode === item ? "navActive" : "nav"}
+                  className="h-11 justify-center"
+                  onClick={() => setClinicalMode(item)}
+                >
+                  {item === "clinical" ? t("mobileClinicalMode") : t("mobileOrthodonticsMode")}
+                </Button>
+              ))}
+            </div>
           </div>
         ) : undefined
       }
@@ -116,6 +129,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
               activePatientId={activePatient?.id ?? null}
               mode={clinicalMode}
               onMissingPatient={handleMissingPatient}
+              onSelectedToothRecordInfo={setSelectedToothRecordInfo}
               sessionToken={currentUser.session_token ?? ""}
             />
           ) : (

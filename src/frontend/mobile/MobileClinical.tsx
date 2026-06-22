@@ -26,7 +26,7 @@ const lowerTeeth = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 
 const quickActionButtonClasses: Record<QuickAction, string> = {
   caries: "border-emerald-400/45 bg-emerald-400/12 text-emerald-100 hover:bg-emerald-400/20",
   endodontics: "border-violet-400/45 bg-violet-400/12 text-violet-100 hover:bg-violet-400/20",
-  periodontics: "border-sky-400/45 bg-sky-400/12 text-sky-100 hover:bg-sky-400/20",
+  periodontics: "border-powder-blue-500/45 bg-powder-blue-500/12 text-powder-blue-100 hover:bg-powder-blue-500/20",
   crown: "border-amber-400/50 bg-amber-400/14 text-amber-100 hover:bg-amber-400/24",
   extraction: "border-red-500/50 bg-red-500/14 text-red-100 hover:bg-red-500/24",
   mobileProsthesis: "border-amber-300/45 bg-amber-300/10 text-amber-100 hover:bg-amber-300/20"
@@ -35,7 +35,7 @@ const quickActionButtonClasses: Record<QuickAction, string> = {
 const recordedToothClasses: Record<QuickAction, string> = {
   caries: "border-emerald-400/55 bg-emerald-400/18 text-white",
   endodontics: "border-violet-400/55 bg-violet-400/18 text-white",
-  periodontics: "border-sky-400/55 bg-sky-400/18 text-white",
+  periodontics: "border-powder-blue-500/55 bg-powder-blue-500/18 text-white",
   crown: "border-amber-400/60 bg-amber-400/20 text-white",
   extraction: "border-red-500/60 bg-red-500/20 text-white",
   mobileProsthesis: "border-amber-300/55 bg-amber-300/16 text-white"
@@ -53,7 +53,13 @@ interface MobileClinicalProps {
   activePatientId: number | null;
   mode: ClinicalMobileMode;
   onMissingPatient: () => void;
+  onSelectedToothRecordInfo: (info: SelectedToothRecordInfo | null) => void;
   sessionToken: string;
+}
+
+export interface SelectedToothRecordInfo {
+  serviceName: string;
+  toothNumber: number;
 }
 
 interface BridgeArcLayout {
@@ -66,6 +72,7 @@ interface BridgeArcLayout {
 interface RecordedToothRecord {
   action: QuickAction;
   recordId: number;
+  serviceName: string;
 }
 
 interface ProsthesisGroup {
@@ -77,6 +84,7 @@ export function MobileClinical({
   activePatientId,
   mode,
   onMissingPatient,
+  onSelectedToothRecordInfo,
   sessionToken
 }: MobileClinicalProps) {
   const { t } = useL10n();
@@ -102,9 +110,10 @@ export function MobileClinical({
 
   useEffect(() => {
     if (!activePatientId) {
+      onSelectedToothRecordInfo(null);
       onMissingPatient();
     }
-  }, [activePatientId, onMissingPatient]);
+  }, [activePatientId, onMissingPatient, onSelectedToothRecordInfo]);
 
   useEffect(() => {
     if (!sessionToken) {
@@ -183,6 +192,8 @@ export function MobileClinical({
       return;
     }
     setActiveAction(null);
+    const recorded = recordedToothRecords[tooth];
+    onSelectedToothRecordInfo(recorded ? { serviceName: recorded.serviceName, toothNumber: tooth } : null);
     if (selectionMode) {
       setSelectedTeeth((current) => {
         if (current.includes(tooth)) {
@@ -234,7 +245,7 @@ export function MobileClinical({
       const next = { ...current };
       records.forEach((record, index) => {
         const tooth = targetTeeth[index];
-        next[tooth] = { action: activeAction, recordId: record.id };
+        next[tooth] = { action: activeAction, recordId: record.id, serviceName: record.service_name ?? service.name };
       });
       return next;
     });
@@ -246,6 +257,7 @@ export function MobileClinical({
     }
     setSelectionMode(false);
     setActiveAction(null);
+    onSelectedToothRecordInfo(null);
   }
 
   async function handleClearSelection() {
@@ -272,6 +284,7 @@ export function MobileClinical({
     setSelectionMode(false);
     setActiveAction(null);
     setStatusMessage("");
+    onSelectedToothRecordInfo(null);
   }
 
   if (!activePatientId) {
@@ -442,7 +455,7 @@ function QuickActions({
   const actions: { key: QuickAction; label: string }[] = [
     { key: "caries", label: t("mobileCaries") },
     { key: "endodontics", label: t("mobileEndodontics") },
-    { key: "periodontics", label: t("mobilePeriodontics") },
+    { key: "periodontics", label: t("mobileVarious") },
     { key: "crown", label: useBridge ? t("mobileBridge") : t("mobileCrown") },
     { key: "extraction", label: t("mobileExtraction") },
     { key: "mobileProsthesis", label: t("mobileRemovableProsthesis") }
@@ -552,7 +565,7 @@ function quickActionLabel(action: QuickAction, useBridge: boolean, t: ReturnType
     endodontics: t("mobileEndodontics"),
     extraction: t("mobileExtraction"),
     mobileProsthesis: t("mobileRemovableProsthesis"),
-    periodontics: t("mobilePeriodontics")
+    periodontics: t("mobileVarious")
   };
   return labels[action];
 }
@@ -572,7 +585,11 @@ function clinicalRecordsToToothRecords(
     if (!action) {
       return;
     }
-    next[record.tooth_number] = { action, recordId: record.id };
+    next[record.tooth_number] = {
+      action,
+      recordId: record.id,
+      serviceName: record.service_name ?? record.pathology_description ?? ""
+    };
   });
   return next;
 }
@@ -584,7 +601,13 @@ function quickActionFromCategory(category: string): QuickAction | null {
   if (category.includes("endodonzia")) {
     return "endodontics";
   }
-  if (category.includes("parodontale")) {
+  if (
+    category.includes("parodont")
+    || category.includes("diagnosi")
+    || category.includes("igiene")
+    || category.includes("visita")
+    || category.includes("rx")
+  ) {
     return "periodontics";
   }
   if (category.includes("protesi fissa")) {

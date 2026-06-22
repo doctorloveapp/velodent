@@ -33,6 +33,7 @@ type QuickAction = "caries" | "endodontics" | "periodontics" | "crown" | "extrac
 interface RecordedToothRecord {
   action: QuickAction;
   recordId: number;
+  serviceName: string;
 }
 
 interface ProsthesisGroup {
@@ -51,7 +52,7 @@ const quickActionButtonClasses: Record<QuickAction, string> = {
   endodontics: "border-violet-400/45 bg-violet-400/12 text-violet-100 hover:bg-violet-400/20",
   extraction: "border-red-500/50 bg-red-500/14 text-red-100 hover:bg-red-500/24",
   mobileProsthesis: "border-amber-300/45 bg-amber-300/10 text-amber-100 hover:bg-amber-300/20",
-  periodontics: "border-sky-400/45 bg-sky-400/12 text-sky-100 hover:bg-sky-400/20"
+  periodontics: "border-powder-blue-500/45 bg-powder-blue-500/12 text-powder-blue-100 hover:bg-powder-blue-500/20"
 };
 
 const recordedToothClasses: Record<QuickAction, string> = {
@@ -60,7 +61,7 @@ const recordedToothClasses: Record<QuickAction, string> = {
   endodontics: "border-violet-400/55 bg-violet-400/18 text-white",
   extraction: "border-red-500/60 bg-red-500/20 text-white",
   mobileProsthesis: "border-amber-300/55 bg-amber-300/16 text-white",
-  periodontics: "border-sky-400/55 bg-sky-400/18 text-white"
+  periodontics: "border-powder-blue-500/55 bg-powder-blue-500/18 text-white"
 };
 
 const toothStateClasses: Partial<Record<ToothState, string>> = {
@@ -89,6 +90,9 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   const visibleServices = activeAction
     ? activeServices.filter((service) => clinicalServiceMatchesQuickAction(service.category, activeAction))
     : [];
+  const selectedToothRecordInfo = selectedTeeth.length === 1
+    ? recordedToothRecords[selectedTeeth[0]]
+    : null;
 
   async function refreshClinicalData() {
     if (!currentUser?.session_token) {
@@ -239,6 +243,14 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           <p className="mt-2 font-mono text-xs text-alabaster-grey-500">
             {selectedTeeth.length ? `${t("clinicalSelectedTooth")}: ${selectedTeeth.join(", ")}` : t("clinicalSelectTooth")}
           </p>
+          {selectedToothRecordInfo ? (
+            <div className="mt-3 rounded-md border border-powder-blue-500/25 bg-powder-blue-950/60 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
+                {t("mobileRecordedTooth")}
+              </p>
+              <p className="mt-1 text-sm font-semibold text-white">{selectedToothRecordInfo.serviceName}</p>
+            </div>
+          ) : null}
           {selectionMode ? <p className="mt-2 text-xs text-powder-blue-500">{t("mobileSelectionMode")}</p> : null}
           {selectedTeeth.length ? (
             <div className="mt-3 grid grid-cols-2 gap-2">
@@ -450,7 +462,11 @@ function clinicalRecordsToToothRecords(records: ClinicalRecord[], services: Clin
     const category = record.service_id ? serviceCategoryById.get(record.service_id) ?? "" : "";
     const action = quickActionFromCategory(category);
     if (action) {
-      next[record.tooth_number] = { action, recordId: record.id };
+      next[record.tooth_number] = {
+        action,
+        recordId: record.id,
+        serviceName: record.service_name ?? record.pathology_description ?? ""
+      };
     }
   });
   return next;
@@ -463,7 +479,13 @@ function quickActionFromCategory(category: string): QuickAction | null {
   if (category.includes("endodonzia")) {
     return "endodontics";
   }
-  if (category.includes("parodontale")) {
+  if (
+    category.includes("parodont")
+    || category.includes("diagnosi")
+    || category.includes("igiene")
+    || category.includes("visita")
+    || category.includes("rx")
+  ) {
     return "periodontics";
   }
   if (category.includes("protesi fissa")) {
@@ -509,7 +531,7 @@ function quickActionLabel(action: QuickAction, useBridge: boolean, t: (key: L10n
     endodontics: t("mobileEndodontics"),
     extraction: t("mobileExtraction"),
     mobileProsthesis: t("mobileRemovableProsthesis"),
-    periodontics: t("mobilePeriodontics")
+    periodontics: t("mobileVarious")
   };
   return labels[action];
 }

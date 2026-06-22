@@ -738,8 +738,8 @@ pub fn get_pairing_code(
     let actor = require_session(&state, &request.session_token)?;
     let mut pairing_code = state.create_pairing_code(actor.id, server::lan::LAN_SERVER_PORT)?;
     pairing_code.public_url = Some(format!(
-        "http://velodent.local:{}?mobile=1&pairing_pin={}",
-        server::lan::PWA_FRONTEND_PORT,
+        "https://velodent.local:{}?mobile=1&setup=1&pairing_pin={}",
+        server::lan::LAN_SERVER_PORT,
         pairing_code.code
     ));
     Ok(pairing_code)

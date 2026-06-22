@@ -313,39 +313,24 @@ function categoryBlockClass(group: ClinicalServiceGroupKey) {
   if (group === "endodontics") {
     return "border-violet-400/35 bg-violet-400/8";
   }
-  if (group === "periodontics") {
-    return "border-sky-400/35 bg-sky-400/8";
-  }
   if (group === "prosthesis") {
     return "border-amber-400/35 bg-amber-400/8";
   }
   if (group === "surgery") {
     return "border-red-500/35 bg-red-500/8";
   }
-  if (group === "hygiene") {
-    return "border-teal-300/35 bg-teal-300/8";
-  }
   if (group === "orthodontics") {
     return "border-powder-blue-500/35 bg-powder-blue-500/8";
   }
-  return "border-powder-blue-500/25 bg-glaucous-950";
+  return "border-sky-400/35 bg-sky-400/8";
 }
 
 function defaultCategoryForGroup(group: ClinicalServiceGroupKey) {
-  if (group === "diagnosis") {
-    return "diagnosi e piano di trattamento";
-  }
-  if (group === "hygiene") {
-    return "igiene e profilassi";
-  }
   if (group === "conservative") {
     return "conservativa";
   }
   if (group === "endodontics") {
     return "endodonzia";
-  }
-  if (group === "periodontics") {
-    return "chirurgia parodontale";
   }
   if (group === "prosthesis") {
     return "protesi fissa";

@@ -4650,9 +4650,6 @@ fn clinical_service_group_key(value: Option<&str>) -> &'static str {
     if normalized.contains("endodonzia") {
         return "endodontics";
     }
-    if normalized.contains("parodont") {
-        return "periodontics";
-    }
     if normalized.contains("protesi") || normalized.contains("corona") {
         return "prosthesis";
     }
@@ -4662,16 +4659,10 @@ fn clinical_service_group_key(value: Option<&str>) -> &'static str {
     {
         return "surgery";
     }
-    if normalized.contains("igiene") || normalized.contains("ablazione") {
-        return "hygiene";
-    }
     if normalized.contains("ortodonz") {
         return "orthodontics";
     }
-    if normalized.contains("diagnosi") || normalized.contains("visita") || normalized.contains("rx") {
-        return "diagnosis";
-    }
-    "other"
+    "various"
 }
 
 fn ipv4_cidr_contains(cidr: &str, ip: &str) -> bool {
