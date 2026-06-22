@@ -49,6 +49,14 @@ export function MobileDashboard({ onRouteChange }: MobileDashboardProps) {
     return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
   }, []);
 
+  useEffect(() => {
+    if (!installPrompt || window.sessionStorage.getItem("velodent:pwa-install-prompt") !== "1") {
+      return;
+    }
+    window.sessionStorage.removeItem("velodent:pwa-install-prompt");
+    void handleInstall();
+  }, [installPrompt]);
+
   async function handleInstall() {
     if (!installPrompt) {
       return;

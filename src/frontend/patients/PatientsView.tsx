@@ -442,7 +442,7 @@ function PatientData({ label, mono = false, value, wide = false }: { label: stri
   );
 }
 
-function BillingPanel({ currentUser, patient }: { currentUser: User | null; patient: Patient }) {
+export function BillingPanel({ currentUser, patient }: { currentUser: User | null; patient: Patient }) {
   const { t } = useL10n();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -818,7 +818,7 @@ function timelineActionKey(action: string): L10nKey {
   return "patientsTimelineOther";
 }
 
-function RxPanel({ currentUser, patient }: { currentUser: User | null; patient: Patient }) {
+export function RxPanel({ currentUser, patient }: { currentUser: User | null; patient: Patient }) {
   const { t } = useL10n();
   const [assets, setAssets] = useState<RxAsset[]>([]);
   const [previews, setPreviews] = useState<Record<number, string>>({});

@@ -14,7 +14,7 @@ describe("LAN bridge session persistence", () => {
   beforeEach(() => {
     const localStorage = createLocalStorage();
     vi.stubGlobal("window", {
-      location: { hostname: "velodent-demo.trycloudflare.com", port: "" },
+      location: { hostname: "velodent.local", port: "1420" },
       localStorage
     });
     vi.stubGlobal("navigator", { userAgent: "VeloDent Test Device" });
@@ -51,7 +51,7 @@ describe("LAN bridge session persistence", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(pairLanDevice("123456")).resolves.toBe("token-1");
-    expect(fetchMock).toHaveBeenCalledWith("/pair", expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith("http://velodent.local:1422/pair", expect.any(Object));
     expect(storedLanDeviceToken()).toBe("token-1");
   });
 });

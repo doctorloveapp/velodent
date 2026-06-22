@@ -195,12 +195,15 @@ pub mod lan {
                 with_device_user(&headers, remote_ip, app, |state, user| {
                     let request = serde_json::from_str::<AppointmentRequest>(body.trim())
                         .map_err(|_| "invalid appointment body".to_owned())?;
+                    let patient_id = request
+                        .patient_id
+                        .ok_or_else(|| "appointment patient is required".to_owned())?;
                     let appointment = state
                         .database()?
                         .create_appointment(
                             user.id,
                             &AppointmentInput {
-                                patient_id: request.patient_id,
+                                patient_id: Some(patient_id),
                                 chair_number: request.chair_number,
                                 title: &request.title,
                                 starts_at: &request.starts_at,

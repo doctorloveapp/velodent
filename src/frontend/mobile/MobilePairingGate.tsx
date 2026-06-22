@@ -24,9 +24,36 @@ export function MobilePairingGate({ onPaired }: MobilePairingGateProps) {
 
   useEffect(() => {
     let mounted = true;
+    const pairingPin = pairingPinFromUrl();
     const token = storedLanDeviceToken();
     if (!token) {
-      setChecking(false);
+      if (!pairingPin) {
+        setChecking(false);
+        return;
+      }
+      setPin(pairingPin);
+      setStatusMessage(t("mobilePairingConnecting"));
+      void lanHealth()
+        .then(() => pairLanDevice(pairingPin))
+        .then((nextToken) => lanCurrentUser(nextToken))
+        .then((user) => {
+          if (mounted) {
+            window.sessionStorage.setItem("velodent:pwa-install-prompt", "1");
+            window.history.replaceState(null, "", window.location.pathname + "?mobile=1");
+            onPaired(user);
+          }
+        })
+        .catch(() => {
+          clearStoredLanDeviceToken();
+          if (mounted) {
+            setStatusMessage(t("mobilePairingFailed"));
+          }
+        })
+        .finally(() => {
+          if (mounted) {
+            setChecking(false);
+          }
+        });
       return;
     }
     void lanHealth()
@@ -112,4 +139,10 @@ export function MobilePairingGate({ onPaired }: MobilePairingGateProps) {
       </section>
     </main>
   );
+}
+
+function pairingPinFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const value = params.get("pairing_pin") ?? params.get("pin");
+  return value?.replace(/\D/g, "").slice(0, 6) ?? "";
 }

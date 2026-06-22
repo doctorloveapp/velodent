@@ -1,6 +1,7 @@
 import { CalendarClock, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { createAppointment, listAppointments, type Appointment } from "@/frontend/agenda/agendaApi";
+import { searchPatients, type Patient } from "@/frontend/patients/patientsApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
@@ -16,7 +17,11 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
   const [date, setDate] = useState(todayDateInput());
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [patientQuery, setPatientQuery] = useState("");
+  const [patientSuggestionsOpen, setPatientSuggestionsOpen] = useState(false);
   const [form, setForm] = useState({
+    patientId: "",
     chairNumber: "1",
     duration: String(DEFAULT_DURATION_MINUTES),
     time: "09:00",
@@ -34,14 +39,35 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
     setAppointments(await listAppointments(sessionToken, range.from, range.to));
   }
 
+  async function handlePatientSearch(nextQuery: string) {
+    setPatientQuery(nextQuery);
+    setPatientSuggestionsOpen(true);
+    setForm((current) => ({ ...current, patientId: "" }));
+    if (!sessionToken) {
+      return;
+    }
+    setPatients(await searchPatients(sessionToken, nextQuery, 12));
+  }
+
+  function selectPatient(patient: Patient) {
+    setForm((current) => ({ ...current, patientId: String(patient.id) }));
+    setPatientQuery(`${patient.last_name} ${patient.first_name}`);
+    setPatientSuggestionsOpen(false);
+  }
+
   useEffect(() => {
     void refresh().catch(() => setStatusMessage(t("agendaGenericError")));
   }, [range.from, range.to, sessionToken]);
 
   async function handleCreateAppointment() {
+    if (!form.patientId) {
+      setStatusMessage(t("agendaPatientRequired"));
+      return;
+    }
     const startsAt = localDateTimeWithOffset(date, form.time);
     const endsAt = addMinutesLocalDateTime(date, form.time, Number(form.duration) || DEFAULT_DURATION_MINUTES);
     await createAppointment(sessionToken, {
+      patient_id: Number(form.patientId),
       chair_number: Number(form.chairNumber) || 1,
       color_tag: "powder_blue",
       ends_at: endsAt,
@@ -60,13 +86,45 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
         <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("agendaModeDay")}</p>
         <div className="mt-3 grid gap-2">
           <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+          <div className="relative">
+            <Input
+              className="h-12"
+              placeholder={t("agendaPatientRequiredPlaceholder")}
+              type="search"
+              value={patientQuery}
+              onBlur={() => window.setTimeout(() => setPatientSuggestionsOpen(false), 120)}
+              onChange={(event) => void handlePatientSearch(event.target.value).catch(() => setStatusMessage(t("patientsGenericError")))}
+              onFocus={() => setPatientSuggestionsOpen(true)}
+            />
+            {patientSuggestionsOpen && patients.length > 0 ? (
+              <div className="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-md border border-powder-blue-500/30 bg-ink-black-950 shadow-[0_20px_44px_rgba(0,0,0,0.42)]">
+                {patients.map((patient) => (
+                  <button
+                    key={patient.id}
+                    className="block min-h-16 w-full border-b border-alabaster-grey-500/10 px-3 py-3 text-left text-base text-white last:border-b-0 hover:bg-powder-blue-950"
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectPatient(patient)}
+                  >
+                    <span className="font-semibold">{patient.last_name}</span> {patient.first_name}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
           <Input placeholder={t("agendaAppointmentTitle")} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
           <div className="grid grid-cols-3 gap-2">
             <Input type="time" value={form.time} onChange={(event) => setForm({ ...form, time: event.target.value })} />
             <Input min={15} step={15} type="number" value={form.duration} onChange={(event) => setForm({ ...form, duration: event.target.value })} />
             <Input min={1} type="number" value={form.chairNumber} onChange={(event) => setForm({ ...form, chairNumber: event.target.value })} />
           </div>
-          <Button type="button" className="h-14 justify-center text-base" onClick={() => void handleCreateAppointment().catch(() => setStatusMessage(t("agendaGenericError")))}>
+          <Button
+            type="button"
+            className="h-14 justify-center text-base"
+            disabled={!form.patientId}
+            title={!form.patientId ? t("agendaPatientRequiredTooltip") : undefined}
+            onClick={() => void handleCreateAppointment().catch(() => setStatusMessage(t("agendaGenericError")))}
+          >
             <Plus aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
             {t("agendaCreateAppointment")}
           </Button>

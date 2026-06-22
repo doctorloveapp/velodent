@@ -12,6 +12,9 @@ import { CommandPalette } from "./CommandPalette";
 import { PatientsView } from "@/frontend/patients/PatientsView";
 import type { Patient } from "@/frontend/patients/patientsApi";
 import { AgendaView } from "@/frontend/agenda/AgendaView";
+import { ClinicalWorkspace } from "@/frontend/clinical/ClinicalWorkspace";
+import { PatientModuleWorkspace } from "@/frontend/patients/PatientModuleWorkspace";
+import { TariffarioView } from "@/frontend/tariffario/TariffarioView";
 
 const navItems = [
   { key: "agenda", icon: CalendarDays, labelKey: "navAgenda" },
@@ -19,6 +22,7 @@ const navItems = [
   { key: "clinical", icon: ClipboardList, labelKey: "navClinical" },
   { key: "rx", icon: Images, labelKey: "navRx" },
   { key: "billing", icon: CircleDollarSign, labelKey: "navBilling" },
+  { key: "tariffario", icon: ClipboardList, labelKey: "navTariffario" },
   { key: "settings", icon: Settings, labelKey: "navSettings" }
 ] as const;
 
@@ -178,8 +182,28 @@ export function AppShell({ currentUser }: AppShellProps) {
                   selectedPatient={selectedPatient}
                   onPatientSelected={setSelectedPatient}
                 />
+              ) : activeKey === "clinical" ? (
+                <ClinicalWorkspace
+                  currentUser={currentUser}
+                  selectedPatient={selectedPatient}
+                  onPatientSelected={setSelectedPatient}
+                />
+              ) : activeKey === "rx" ? (
+                <PatientModuleWorkspace
+                  currentUser={currentUser}
+                  module="rx"
+                  selectedPatient={selectedPatient}
+                  onPatientSelected={setSelectedPatient}
+                />
+              ) : activeKey === "billing" ? (
+                <PatientModuleWorkspace
+                  currentUser={currentUser}
+                  module="billing"
+                  selectedPatient={selectedPatient}
+                  onPatientSelected={setSelectedPatient}
+                />
               ) : (
-                <DashboardWorkspace selectedPatient={selectedPatient} />
+                <TariffarioView currentUser={currentUser} />
               )}
             </motion.div>
           </AnimatePresence>
@@ -195,56 +219,5 @@ export function AppShell({ currentUser }: AppShellProps) {
         }}
       />
     </div>
-  );
-}
-
-function DashboardWorkspace({ selectedPatient }: { selectedPatient: Patient | null }) {
-  const { t } = useL10n();
-
-  return (
-    <section className="grid gap-4">
-      <div>
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
-          {t("workspaceEyebrow")}
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold text-white">{t("workspaceTitle")}</h1>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-alabaster-grey-500">
-          {t("workspaceSubtitle")}
-        </p>
-      </div>
-
-      {selectedPatient ? (
-        <div className="rounded-xl border border-powder-blue-500/25 bg-powder-blue-950 p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
-            {t("selectedPatientEyebrow")}
-          </p>
-          <p className="mt-2 text-lg font-semibold text-white">
-            {selectedPatient.last_name} {selectedPatient.first_name}
-          </p>
-          <p className="mt-1 font-mono text-xs text-alabaster-grey-500">{selectedPatient.tax_code}</p>
-        </div>
-      ) : null}
-
-      <div className="grid grid-cols-3 gap-4">
-        <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
-            {t("metricAgendaLabel")}
-          </p>
-          <p className="mt-3 text-2xl font-semibold text-white">{t("metricAgendaValue")}</p>
-        </div>
-        <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
-            {t("metricSyncLabel")}
-          </p>
-          <p className="mt-3 text-2xl font-semibold text-white">{t("metricSyncValue")}</p>
-        </div>
-        <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
-            {t("metricClinicalLabel")}
-          </p>
-          <p className="mt-3 text-2xl font-semibold text-white">{t("metricClinicalValue")}</p>
-        </div>
-      </div>
-    </section>
   );
 }

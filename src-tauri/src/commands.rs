@@ -725,20 +725,16 @@ pub fn list_devices(
 
 #[tauri::command]
 pub fn get_pairing_code(
-    app: AppHandle,
     state: State<'_, AppState>,
     request: PairingCodeRequest,
 ) -> Result<PairingCodeInfo, String> {
     let actor = require_session(&state, &request.session_token)?;
     let mut pairing_code = state.create_pairing_code(actor.id, server::lan::LAN_SERVER_PORT)?;
-    match state.ensure_mobile_tunnel(&app) {
-        Ok(tunnel) => {
-            pairing_code.public_url = Some(format!("{}?mobile=1", tunnel.public_url));
-        }
-        Err(error) => {
-            pairing_code.tunnel_error = Some(error);
-        }
-    }
+    pairing_code.public_url = Some(format!(
+        "http://velodent.local:{}?mobile=1&pairing_pin={}",
+        server::lan::PWA_FRONTEND_PORT,
+        pairing_code.code
+    ));
     Ok(pairing_code)
 }
 
@@ -840,6 +836,7 @@ pub fn list_google_calendar_accounts(
 
 #[tauri::command]
 pub async fn start_google_calendar_account_link(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: GoogleAuthorizationUrlRequest,
 ) -> Result<GoogleCalendarAccount, String> {
@@ -875,10 +872,12 @@ pub async fn start_google_calendar_account_link(
         .await
         .map_err(|error| error.to_string())?;
     let token_json = serde_json::to_string(&token).map_err(|error| error.to_string())?;
-    state
+    let account = state
         .database()?
         .store_google_calendar_account_token(actor.id, Some(&user_info.email), "primary", &token_json)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    agenda::trigger_google_calendar_sync(&app, actor.id);
+    Ok(account)
 }
 
 #[tauri::command]
@@ -956,14 +955,17 @@ pub fn create_agenda_block(
 
 #[tauri::command]
 pub fn delete_agenda_block(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: DeleteAgendaBlockRequest,
 ) -> Result<AgendaBlock, String> {
     let actor = require_admin_session(&state, &request.session_token)?;
-    state
+    let block = state
         .database()?
         .delete_agenda_block(actor.id, request.block_id)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    agenda::trigger_google_calendar_sync(&app, actor.id);
+    Ok(block)
 }
 
 #[tauri::command]
@@ -989,12 +991,15 @@ pub fn create_appointment(
     request: CreateAppointmentRequest,
 ) -> Result<Appointment, String> {
     let actor = require_session(&state, &request.session_token)?;
+    let patient_id = request
+        .patient_id
+        .ok_or_else(|| "appointment patient is required".to_owned())?;
     let appointment = state
         .database()?
         .create_appointment(
             actor.id,
             &AppointmentInput {
-                patient_id: request.patient_id,
+                patient_id: Some(patient_id),
                 chair_number: request.chair_number,
                 title: request.title.trim(),
                 starts_at: request.starts_at.trim(),

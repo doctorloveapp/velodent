@@ -41,6 +41,9 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [syncStatus, setSyncStatus] = useState<GoogleCalendarSyncStatus | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
+  const [patientQuery, setPatientQuery] = useState("");
+  const [patientSuggestionsOpen, setPatientSuggestionsOpen] = useState(false);
+  const [showBlockForm, setShowBlockForm] = useState(false);
   const [form, setForm] = useState({
     patientId: "",
     title: t("agendaDefaultAppointmentTitle"),
@@ -81,6 +84,22 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     setPatients(patientRows);
   }
 
+  async function handlePatientSearch(nextQuery: string) {
+    setPatientQuery(nextQuery);
+    setPatientSuggestionsOpen(true);
+    setForm((current) => ({ ...current, patientId: "" }));
+    if (!currentUser?.session_token) {
+      return;
+    }
+    setPatients(await searchPatients(currentUser.session_token, nextQuery, 12));
+  }
+
+  function selectPatient(patient: Patient) {
+    setForm((current) => ({ ...current, patientId: String(patient.id) }));
+    setPatientQuery(`${patient.last_name} ${patient.first_name}`);
+    setPatientSuggestionsOpen(false);
+  }
+
   useEffect(() => {
     if (!currentUser?.session_token) {
       return;
@@ -111,6 +130,10 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
 
   async function handleCreateAppointment() {
     if (!currentUser?.session_token) {
+      return;
+    }
+    if (!form.patientId) {
+      setStatusMessage(t("agendaPatientRequired"));
       return;
     }
 
@@ -204,18 +227,31 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
 
       <div className="grid gap-3 border-y border-alabaster-grey-500/15 py-3 xl:grid-cols-[1fr_auto]">
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
-          <select
-            className="h-10 rounded-md border border-alabaster-grey-500/20 bg-ink-black-900 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
-            value={form.patientId}
-            onChange={(event) => setForm({ ...form, patientId: event.target.value })}
-          >
-            <option value="">{t("agendaPatientOptional")}</option>
-            {patients.map((patient) => (
-              <option key={patient.id} value={patient.id}>
-                {patient.last_name} {patient.first_name}
-              </option>
-            ))}
-          </select>
+          <div className="relative">
+            <Input
+              placeholder={t("agendaPatientRequiredPlaceholder")}
+              type="search"
+              value={patientQuery}
+              onBlur={() => window.setTimeout(() => setPatientSuggestionsOpen(false), 120)}
+              onChange={(event) => void handlePatientSearch(event.target.value).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
+              onFocus={() => setPatientSuggestionsOpen(true)}
+            />
+            {patientSuggestionsOpen && patients.length > 0 ? (
+              <div className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-powder-blue-500/30 bg-ink-black-950 shadow-[0_20px_44px_rgba(0,0,0,0.42)]">
+                {patients.map((patient) => (
+                  <button
+                    key={patient.id}
+                    className="block min-h-12 w-full border-b border-alabaster-grey-500/10 px-3 py-2 text-left text-sm text-white last:border-b-0 hover:bg-powder-blue-950"
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectPatient(patient)}
+                  >
+                    <span className="font-semibold">{patient.last_name}</span> {patient.first_name}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
           <Input placeholder={t("agendaAppointmentTitle")} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
           <Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} />
           <Input type="time" value={form.time} onChange={(event) => setForm({ ...form, time: event.target.value })} />
@@ -232,33 +268,48 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
             ))}
           </select>
         </div>
-        <Button type="button" onClick={() => void handleCreateAppointment()}>
+        <Button
+          disabled={!form.patientId}
+          title={!form.patientId ? t("agendaPatientRequiredTooltip") : undefined}
+          type="button"
+          onClick={() => void handleCreateAppointment()}
+        >
           <CalendarClock aria-hidden="true" className="h-4 w-4" />
           {t("agendaCreateAppointment")}
         </Button>
       </div>
 
       {currentUser.role === "admin" ? (
-        <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-3 xl:grid-cols-[1fr_auto]">
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
-            <Input placeholder={t("agendaBlockTitle")} value={blockForm.title} onChange={(event) => setBlockForm({ ...blockForm, title: event.target.value })} />
-            <Input type="date" value={blockForm.date} onChange={(event) => setBlockForm({ ...blockForm, date: event.target.value })} />
-            <Input type="time" disabled={blockForm.allDay} value={blockForm.startTime} onChange={(event) => setBlockForm({ ...blockForm, startTime: event.target.value })} />
-            <Input type="time" disabled={blockForm.allDay} value={blockForm.endTime} onChange={(event) => setBlockForm({ ...blockForm, endTime: event.target.value })} />
-            <label className="flex h-10 items-center gap-2 rounded-md border border-alabaster-grey-500/20 bg-ink-black-900 px-3 text-sm text-alabaster-grey-500">
-              <input
-                checked={blockForm.allDay}
-                className="h-4 w-4 accent-powder-blue-500"
-                type="checkbox"
-                onChange={(event) => setBlockForm({ ...blockForm, allDay: event.target.checked })}
-              />
-              {t("agendaBlockAllDay")}
-            </label>
+        <div className="grid gap-3">
+          <div>
+            <Button type="button" variant="secondary" onClick={() => setShowBlockForm((current) => !current)}>
+              <LockKeyhole aria-hidden="true" className="h-4 w-4" />
+              {t("agendaClosureToggle")}
+            </Button>
           </div>
-          <Button type="button" variant="secondary" onClick={() => void handleCreateBlock().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}>
-            <LockKeyhole aria-hidden="true" className="h-4 w-4" />
-            {t("agendaCreateBlock")}
-          </Button>
+          {showBlockForm ? (
+            <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-3 xl:grid-cols-[1fr_auto]">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+                <Input placeholder={t("agendaBlockTitle")} value={blockForm.title} onChange={(event) => setBlockForm({ ...blockForm, title: event.target.value })} />
+                <Input type="date" value={blockForm.date} onChange={(event) => setBlockForm({ ...blockForm, date: event.target.value })} />
+                <Input type="time" disabled={blockForm.allDay} value={blockForm.startTime} onChange={(event) => setBlockForm({ ...blockForm, startTime: event.target.value })} />
+                <Input type="time" disabled={blockForm.allDay} value={blockForm.endTime} onChange={(event) => setBlockForm({ ...blockForm, endTime: event.target.value })} />
+                <label className="flex h-10 items-center gap-2 rounded-md border border-alabaster-grey-500/20 bg-ink-black-900 px-3 text-sm text-alabaster-grey-500">
+                  <input
+                    checked={blockForm.allDay}
+                    className="h-4 w-4 accent-powder-blue-500"
+                    type="checkbox"
+                    onChange={(event) => setBlockForm({ ...blockForm, allDay: event.target.checked })}
+                  />
+                  {t("agendaBlockAllDay")}
+                </label>
+              </div>
+              <Button type="button" variant="secondary" onClick={() => void handleCreateBlock().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}>
+                <LockKeyhole aria-hidden="true" className="h-4 w-4" />
+                {t("agendaCreateBlock")}
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

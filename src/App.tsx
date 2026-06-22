@@ -11,7 +11,6 @@ import {
   lanHealth,
   storedLanDeviceToken
 } from "@/frontend/mobile/lanBridgeApi";
-import { DEFAULT_FIRST_ADMIN_GOOGLE_EMAIL } from "@/frontend/settings/authConfig";
 import {
   bootstrapStatus,
   activateLicense,
@@ -19,7 +18,6 @@ import {
   isTauriRuntime,
   licenseStatus,
   login,
-  startGoogleLogin,
   type LicenseStatus,
   type User
 } from "@/frontend/settings/settingsApi";
@@ -48,8 +46,7 @@ function AuthGate() {
   const [statusMessage, setStatusMessage] = useState("");
   const [adminForm, setAdminForm] = useState({
     username: "admin",
-    password: "",
-    googleEmail: DEFAULT_FIRST_ADMIN_GOOGLE_EMAIL
+    password: ""
   });
   const [loginForm, setLoginForm] = useState({ username: "admin", password: "" });
 
@@ -115,8 +112,7 @@ function AuthGate() {
   async function handleCreateFirstAdmin() {
     const user = await createFirstAdmin({
       username: adminForm.username,
-      password: adminForm.password,
-      google_email: adminForm.googleEmail || undefined
+      password: adminForm.password
     });
     setCurrentUser(user);
     setNeedsFirstAdmin(false);
@@ -124,11 +120,6 @@ function AuthGate() {
 
   async function handleLogin() {
     setCurrentUser(await login(loginForm));
-  }
-
-  async function handleStartGoogleLogin() {
-    setStatusMessage(t("authGateGoogleBrowserOpening"));
-    setCurrentUser(await startGoogleLogin());
   }
 
   if (currentUser?.session_token) {
@@ -217,7 +208,6 @@ function AuthGate() {
         <p className="text-sm leading-6 text-alabaster-grey-500">{t("authGateFirstAdminHelp")}</p>
         <Input placeholder={t("settingsUsername")} value={adminForm.username} onChange={(event) => setAdminForm({ ...adminForm, username: event.target.value })} />
         <Input placeholder={t("settingsPassword")} type="password" value={adminForm.password} onChange={(event) => setAdminForm({ ...adminForm, password: event.target.value })} />
-        <Input placeholder={t("settingsGoogleEmail")} value={adminForm.googleEmail} onChange={(event) => setAdminForm({ ...adminForm, googleEmail: event.target.value })} />
         <Button type="submit">
           {t("settingsCreateFirstAdmin")}
         </Button>
@@ -242,10 +232,7 @@ function AuthGate() {
         <Button type="submit">
           {t("settingsLoginAction")}
         </Button>
-        <GoogleLoginControls
-          statusMessage={statusMessage}
-          onStart={() => void handleStartGoogleLogin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
-        />
+        {statusMessage ? <p className="text-xs leading-5 text-alabaster-grey-500">{statusMessage}</p> : null}
       </form>
     </AuthSurface>
   );
@@ -280,25 +267,5 @@ function AuthSurface({ children, eyebrow, icon, title }: { children: ReactNode; 
         </p>
       </section>
     </main>
-  );
-}
-
-function GoogleLoginControls({
-  onStart,
-  statusMessage
-}: {
-  onStart: () => void;
-  statusMessage: string;
-}) {
-  const { t } = useL10n();
-
-  return (
-    <div className="grid gap-3 border-t border-alabaster-grey-500/15 pt-4">
-      <Button type="button" variant="secondary" className="h-11 justify-center border-powder-blue-500/40 bg-powder-blue-950 text-white hover:bg-powder-blue-900" onClick={onStart}>
-        {t("authGateGoogleLogin")}
-      </Button>
-      <p className="text-xs leading-5 text-alabaster-grey-500">{t("authGateGoogleBrowserHelp")}</p>
-      {statusMessage ? <p className="text-xs leading-5 text-alabaster-grey-500">{statusMessage}</p> : null}
-    </div>
   );
 }
