@@ -60,6 +60,10 @@ export function MobilePairingGate({ onPaired }: MobilePairingGateProps) {
       .then(() => lanCurrentUser(token))
       .then((user) => {
         if (mounted) {
+          if (pairingPin) {
+            window.sessionStorage.setItem("velodent:pwa-install-prompt", "1");
+            window.history.replaceState(null, "", window.location.pathname + "?mobile=1");
+          }
           onPaired(user);
         }
       })
@@ -85,6 +89,7 @@ export function MobilePairingGate({ onPaired }: MobilePairingGateProps) {
     await lanHealth();
     const token = await pairLanDevice(pin);
     const user = await lanCurrentUser(token);
+    window.sessionStorage.setItem("velodent:pwa-install-prompt", "1");
     onPaired(user);
   }
 

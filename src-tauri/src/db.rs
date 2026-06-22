@@ -1091,7 +1091,7 @@ impl Database {
                     device_token_hash = ?3,
                     allowed_lan_cidr = ?4,
                     revoked_at = NULL,
-                    expires_at = datetime('now', '+30 days'),
+                    expires_at = NULL,
                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                 WHERE device_uid = ?5
                 "#,
@@ -1118,7 +1118,7 @@ impl Database {
                     allowed_lan_cidr,
                     expires_at
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', '+30 days'))
+                VALUES (?1, ?2, ?3, ?4, ?5, NULL)
                 "#,
                 params![
                     user_id,
@@ -1537,6 +1537,23 @@ impl Database {
         Ok(services)
     }
 
+    pub fn list_clinical_services_catalog(&self, actor_user_id: i64) -> DbResult<Vec<ClinicalService>> {
+        self.assert_admin(actor_user_id)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, code, name, category, base_price_cents, sort_order, active
+            FROM clinical_services_catalog
+            ORDER BY sort_order ASC, category ASC, name ASC, id ASC
+            "#,
+        )?;
+
+        let services = statement
+            .query_map([], clinical_service_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(services)
+    }
+
     pub fn update_clinical_service_price(
         &self,
         actor_user_id: i64,
@@ -1691,27 +1708,31 @@ impl Database {
         self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
         let result = (|| -> DbResult<(ClinicalService, ClinicalService)> {
             let service = self
-                .get_clinical_service(service_id)?
+                .get_clinical_service_any(service_id)?
                 .ok_or(DbError::NotFound)?;
             let target = self
-                .get_clinical_service(target_service_id)?
+                .get_clinical_service_any(target_service_id)?
                 .ok_or(DbError::NotFound)?;
-            if category_key(service.category.as_deref()) != category_key(target.category.as_deref()) {
-                return Err(DbError::Sql("services must belong to the same category".to_owned()));
+            if clinical_service_group_key(service.category.as_deref()) != clinical_service_group_key(target.category.as_deref()) {
+                return Err(DbError::Sql("services must belong to the same clinical group".to_owned()));
             }
-            let category = category_key(service.category.as_deref());
+            let group = clinical_service_group_key(service.category.as_deref());
             let mut ordered_ids = {
                 let mut statement = self.conn.prepare(
                     r#"
-                    SELECT id
+                    SELECT id, category
                     FROM clinical_services_catalog
-                    WHERE active = 1 AND lower(trim(coalesce(category, ''))) = ?1
                     ORDER BY sort_order ASC, name ASC, id ASC
                     "#,
                 )?;
                 let ids = statement
-                    .query_map([category], |row| row.get::<_, i64>(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)))?
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .filter_map(|(id, category)| {
+                        (clinical_service_group_key(category.as_deref()) == group).then_some(id)
+                    })
+                    .collect::<Vec<_>>();
                 ids
             };
             let service_index = ordered_ids
@@ -1746,10 +1767,10 @@ impl Database {
                 .to_string(),
             )?;
             let updated_service = self
-                .get_clinical_service(service.id)?
+                .get_clinical_service_any(service.id)?
                 .ok_or(DbError::NotFound)?;
             let updated_target = self
-                .get_clinical_service(target.id)?
+                .get_clinical_service_any(target.id)?
                 .ok_or(DbError::NotFound)?;
             Ok((updated_service, updated_target))
         })();
@@ -4621,12 +4642,36 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn category_key(value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default()
+fn clinical_service_group_key(value: Option<&str>) -> &'static str {
+    let normalized = value.unwrap_or_default().trim().to_ascii_lowercase();
+    if normalized.contains("conservativa") {
+        return "conservative";
+    }
+    if normalized.contains("endodonzia") {
+        return "endodontics";
+    }
+    if normalized.contains("parodont") {
+        return "periodontics";
+    }
+    if normalized.contains("protesi") || normalized.contains("corona") {
+        return "prosthesis";
+    }
+    if normalized.contains("chirurgia")
+        || normalized.contains("estrazione")
+        || normalized.contains("implant")
+    {
+        return "surgery";
+    }
+    if normalized.contains("igiene") || normalized.contains("ablazione") {
+        return "hygiene";
+    }
+    if normalized.contains("ortodonz") {
+        return "orthodontics";
+    }
+    if normalized.contains("diagnosi") || normalized.contains("visita") || normalized.contains("rx") {
+        return "diagnosis";
+    }
+    "other"
 }
 
 fn ipv4_cidr_contains(cidr: &str, ip: &str) -> bool {
@@ -5768,6 +5813,16 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn service_ids_for_group(db: &Database, actor_user_id: i64, category: Option<&str>) -> Vec<i64> {
+        let group = clinical_service_group_key(category);
+        db.list_clinical_services_catalog(actor_user_id)
+            .expect("catalog services")
+            .into_iter()
+            .filter(|service| clinical_service_group_key(service.category.as_deref()) == group)
+            .map(|service| service.id)
+            .collect()
+    }
+
     #[test]
     fn migrations_are_idempotent_and_patient_repository_round_trips() {
         let path = test_database_path();
@@ -6527,17 +6582,26 @@ mod tests {
                 admin.id,
                 "TEST-ORD-3",
                 "Voce altra categoria",
-                Some("altro"),
+                Some("conservativa"),
                 9000,
                 25,
             )
             .expect("create other category service");
 
+        let group_before = service_ids_for_group(&db, admin.id, updated.category.as_deref());
+        let before_service_index = group_before
+            .iter()
+            .position(|id| *id == updated.id)
+            .expect("service index before reorder");
+        let before_target_index = group_before
+            .iter()
+            .position(|id| *id == second.id)
+            .expect("target index before reorder");
         let (first_after_swap, second_after_swap) = db
             .reorder_clinical_service(admin.id, updated.id, second.id)
             .expect("swap service positions");
-        assert_eq!(first_after_swap.sort_order, 10);
-        assert_eq!(second_after_swap.sort_order, 20);
+        assert_eq!(first_after_swap.category.as_deref(), Some("test"));
+        assert_eq!(second_after_swap.category.as_deref(), Some("test"));
 
         let service_from_db = db
             .get_clinical_service(updated.id)
@@ -6547,11 +6611,62 @@ mod tests {
             .get_clinical_service(second.id)
             .expect("read swapped target")
             .expect("swapped target exists");
-        assert_eq!(service_from_db.sort_order, 10);
-        assert_eq!(target_from_db.sort_order, 20);
+        assert_ne!(service_from_db.sort_order, target_from_db.sort_order);
+        let group_after = service_ids_for_group(&db, admin.id, updated.category.as_deref());
+        assert_eq!(group_after[before_service_index], second.id);
+        assert_eq!(group_after[before_target_index], updated.id);
         assert!(db
             .reorder_clinical_service(admin.id, updated.id, other_category.id)
             .is_err());
+
+        let surgery = db
+            .create_clinical_service(
+                admin.id,
+                "TEST-SURG",
+                "Chirurgia test",
+                Some("chirurgia"),
+                11000,
+                1,
+            )
+            .expect("create surgery");
+        let oral_surgery = db
+            .create_clinical_service(
+                admin.id,
+                "TEST-ORAL-SURG",
+                "Chirurgia orale test",
+                Some("chirurgia orale"),
+                12000,
+                2,
+            )
+            .expect("create oral surgery");
+        let (surgery_after_swap, oral_surgery_after_swap) = db
+            .reorder_clinical_service(admin.id, surgery.id, oral_surgery.id)
+            .expect("swap related surgery categories");
+        assert_eq!(surgery_after_swap.category.as_deref(), Some("chirurgia"));
+        assert_eq!(oral_surgery_after_swap.category.as_deref(), Some("chirurgia orale"));
+        assert_ne!(surgery_after_swap.sort_order, oral_surgery_after_swap.sort_order);
+
+        db.update_clinical_service(
+            admin.id,
+            oral_surgery.id,
+            "TEST-ORAL-SURG",
+            "Chirurgia orale test",
+            Some("chirurgia orale"),
+            12000,
+            oral_surgery_after_swap.sort_order,
+            false,
+        )
+        .expect("deactivate service");
+        assert!(db
+            .list_clinical_services(admin.id)
+            .expect("active services")
+            .into_iter()
+            .all(|service| service.id != oral_surgery.id));
+        assert!(db
+            .list_clinical_services_catalog(admin.id)
+            .expect("admin catalog")
+            .into_iter()
+            .any(|service| service.id == oral_surgery.id && !service.active));
     }
 
     #[test]

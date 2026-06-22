@@ -13,6 +13,7 @@ import {
 } from "@/frontend/clinical/clinicalApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
+import { clinicalServiceMatchesQuickAction } from "@/frontend/clinical/serviceCategories";
 import { calculateBridgePreview } from "./bridge";
 
 type ClinicalMobileMode = "clinical" | "orthodontics";
@@ -21,15 +22,6 @@ type QuickAction = "caries" | "endodontics" | "periodontics" | "crown" | "extrac
 
 const upperTeeth = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28];
 const lowerTeeth = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
-
-const quickActionCategories: Record<QuickAction, string> = {
-  caries: "conservativa",
-  endodontics: "endodonzia",
-  periodontics: "chirurgia parodontale",
-  crown: "protesi fissa",
-  extraction: "chirurgia orale",
-  mobileProsthesis: "protesi mobile"
-};
 
 const quickActionButtonClasses: Record<QuickAction, string> = {
   caries: "border-emerald-400/45 bg-emerald-400/12 text-emerald-100 hover:bg-emerald-400/20",
@@ -408,7 +400,7 @@ export function MobileClinical({
 
       {activeAction ? (
         <MobileServiceOverlay
-          services={services.filter((service) => service.category?.toLowerCase() === quickActionCategories[activeAction])}
+          services={services.filter((service) => clinicalServiceMatchesQuickAction(service.category, activeAction))}
           title={quickActionLabel(activeAction, selectedTeeth.length >= 2, t)}
           onClose={() => setActiveAction(null)}
           onSelect={(service) => void handleServiceSelect(service).catch(() => setStatusMessage(t("mobileClinicalServiceError")))}

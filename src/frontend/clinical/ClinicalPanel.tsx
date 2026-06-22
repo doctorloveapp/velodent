@@ -8,6 +8,7 @@ import { useL10n, type L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import type { Patient } from "@/frontend/patients/patientsApi";
 import type { User } from "@/frontend/settings/settingsApi";
 import { calculateBridgePreview } from "@/frontend/mobile/bridge";
+import { clinicalServiceMatchesQuickAction } from "@/frontend/clinical/serviceCategories";
 import {
   createClinicalRecord,
   deleteClinicalRecord,
@@ -43,15 +44,6 @@ interface ProsthesisGroup {
 
 const upperTeeth = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28];
 const lowerTeeth = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
-
-const quickActionCategories: Record<QuickAction, string> = {
-  caries: "conservativa",
-  crown: "protesi fissa",
-  endodontics: "endodonzia",
-  extraction: "chirurgia orale",
-  mobileProsthesis: "protesi mobile",
-  periodontics: "chirurgia parodontale"
-};
 
 const quickActionButtonClasses: Record<QuickAction, string> = {
   caries: "border-emerald-400/45 bg-emerald-400/12 text-emerald-100 hover:bg-emerald-400/20",
@@ -95,7 +87,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
 
   const activeServices = useMemo(() => services.filter((service) => service.active), [services]);
   const visibleServices = activeAction
-    ? activeServices.filter((service) => service.category?.toLowerCase() === quickActionCategories[activeAction])
+    ? activeServices.filter((service) => clinicalServiceMatchesQuickAction(service.category, activeAction))
     : [];
 
   async function refreshClinicalData() {

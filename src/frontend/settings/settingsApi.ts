@@ -210,6 +210,10 @@ export async function listClinicalServices(session_token: string) {
   return invoke<ClinicalService[]>("list_clinical_services", { request: { session_token } });
 }
 
+export async function listClinicalServicesCatalog(session_token: string) {
+  return invoke<ClinicalService[]>("list_clinical_services_catalog", { request: { session_token } });
+}
+
 export async function updateClinicalServicePrice(request: {
   session_token: string;
   service_id: number;

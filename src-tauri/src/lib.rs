@@ -76,6 +76,7 @@ pub fn run() {
             commands::open_patient_record,
             commands::patient_timeline,
             commands::list_clinical_services,
+            commands::list_clinical_services_catalog,
             commands::update_clinical_service_price,
             commands::upsert_clinical_service,
             commands::reorder_clinical_service,

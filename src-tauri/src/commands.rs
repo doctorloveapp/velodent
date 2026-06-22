@@ -1153,6 +1153,18 @@ pub fn list_clinical_services(
 }
 
 #[tauri::command]
+pub fn list_clinical_services_catalog(
+    state: State<'_, AppState>,
+    request: ActorRequest,
+) -> Result<Vec<ClinicalService>, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .list_clinical_services_catalog(actor.id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn update_clinical_service_price(
     state: State<'_, AppState>,
     request: UpdateClinicalServicePriceRequest,
