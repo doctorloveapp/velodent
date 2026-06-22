@@ -26,7 +26,7 @@ interface LanUser {
 
 export function lanBridgeBaseUrl() {
   const host = window.location.hostname || "127.0.0.1";
-  return `https://${host}:1422`;
+  return `http://${host}:1422`;
 }
 
 export function isLanSessionToken(sessionToken: string) {

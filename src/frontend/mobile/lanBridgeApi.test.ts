@@ -51,7 +51,7 @@ describe("LAN bridge session persistence", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(pairLanDevice("123456")).resolves.toBe("token-1");
-    expect(fetchMock).toHaveBeenCalledWith("https://velodent.local:1422/pair", expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith("http://velodent.local:1422/pair", expect.any(Object));
     expect(storedLanDeviceToken()).toBe("token-1");
   });
 });

@@ -70,17 +70,16 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
       currentUser={currentUser}
       headerAccessory={
         activeRoute === "clinical" ? (
-          <div className="grid gap-2">
-            {selectedToothRecordInfo ? (
-              <div className="rounded-xl border border-powder-blue-500/25 bg-powder-blue-950/70 p-3 text-sm text-white">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
-                  {t("mobileRecordedTooth")}
-                </p>
-                <p className="mt-1 font-semibold">
-                  {String(selectedToothRecordInfo.toothNumber)} - {selectedToothRecordInfo.serviceName}
-                </p>
-              </div>
-            ) : null}
+          selectedToothRecordInfo ? (
+            <div className="rounded-xl border border-powder-blue-500/25 bg-powder-blue-950/70 p-3 text-sm text-white">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
+                {t("mobileRecordedTooth")}
+              </p>
+              <p className="mt-1 truncate font-semibold">
+                {String(selectedToothRecordInfo.toothNumber)} - {selectedToothRecordInfo.serviceName}
+              </p>
+            </div>
+          ) : (
             <div className="grid grid-cols-2 gap-2 rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
               {(["clinical", "orthodontics"] as const).map((item) => (
                 <Button
@@ -94,7 +93,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
                 </Button>
               ))}
             </div>
-          </div>
+          )
         ) : undefined
       }
       patientName={activeRoute === "clinical" ? activePatientName : undefined}
