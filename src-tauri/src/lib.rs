@@ -100,6 +100,8 @@ pub fn run() {
             commands::delete_clinical_record,
             commands::calculate_bridge_units,
             commands::import_rx_file,
+            commands::pick_rx_file_and_import,
+            commands::pick_rx_folder_and_import,
             commands::mock_acquire_rx,
             commands::list_rx_assets,
             commands::rx_asset_data_url

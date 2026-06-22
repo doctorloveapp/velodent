@@ -105,7 +105,7 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
                   <p className="mt-1 truncate text-xs text-alabaster-grey-500">{appointment.title}</p>
                 </button>
               )) : (
-                <p className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-sm text-alabaster-grey-500">{t("agendaBlocksEmpty")}</p>
+                <p className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-sm text-alabaster-grey-500">{t("agendaAppointmentsEmpty")}</p>
               )}
             </div>
           </section>
@@ -150,12 +150,16 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
 }
 
 function todayDateInput() {
-  return new Date().toISOString().slice(0, 10);
+  return toDateInput(new Date());
 }
 
 function shiftDate(dateInput: string, days: number) {
   const date = new Date(`${dateInput}T00:00:00`);
   date.setDate(date.getDate() + days);
+  return toDateInput(date);
+}
+
+function toDateInput(date: Date) {
   return `${String(date.getFullYear())}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 

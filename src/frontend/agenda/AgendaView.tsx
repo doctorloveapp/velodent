@@ -44,6 +44,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   const [patientQuery, setPatientQuery] = useState("");
   const [patientSuggestionsOpen, setPatientSuggestionsOpen] = useState(false);
   const [showBlockForm, setShowBlockForm] = useState(false);
+  const [timeTouched, setTimeTouched] = useState(false);
   const [form, setForm] = useState({
     patientId: "",
     title: t("agendaDefaultAppointmentTitle"),
@@ -110,6 +111,19 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     });
   }, [currentUser, range.startsFrom, range.startsTo, t]);
 
+  useEffect(() => {
+    if (timeTouched) {
+      return;
+    }
+    const nextTime = nextFreeAppointmentTime(
+      form.date,
+      Number(form.chairNumber) || 1,
+      appointments,
+      Number(form.duration) || DEFAULT_DURATION_MINUTES
+    );
+    setForm((current) => current.time === nextTime ? current : { ...current, time: nextTime });
+  }, [appointments, form.chairNumber, form.date, form.duration, timeTouched]);
+
   if (!isTauriRuntime()) {
     return (
       <section className="grid gap-4">
@@ -150,6 +164,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     });
     setStatusMessage(t("agendaAppointmentCreated"));
     setForm({ ...form, title: t("agendaDefaultAppointmentTitle") });
+    setTimeTouched(false);
     await refreshAgenda();
   }
 
@@ -253,13 +268,25 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
             ) : null}
           </div>
           <Input placeholder={t("agendaAppointmentTitle")} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
-          <Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} />
-          <Input type="time" value={form.time} onChange={(event) => setForm({ ...form, time: event.target.value })} />
-          <Input type="number" min={15} step={15} value={form.duration} onChange={(event) => setForm({ ...form, duration: event.target.value })} />
+          <Input type="date" value={form.date} onChange={(event) => {
+            setTimeTouched(false);
+            setForm({ ...form, date: event.target.value });
+          }} />
+          <Input type="time" value={form.time} onChange={(event) => {
+            setTimeTouched(true);
+            setForm({ ...form, time: event.target.value });
+          }} />
+          <Input type="number" min={15} step={15} value={form.duration} onChange={(event) => {
+            setTimeTouched(false);
+            setForm({ ...form, duration: event.target.value });
+          }} />
           <select
             className="h-10 rounded-md border border-alabaster-grey-500/20 bg-ink-black-900 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
             value={form.chairNumber}
-            onChange={(event) => setForm({ ...form, chairNumber: event.target.value })}
+            onChange={(event) => {
+              setTimeTouched(false);
+              setForm({ ...form, chairNumber: event.target.value });
+            }}
           >
             {chairNumbers.map((chair) => (
               <option key={chair} value={chair}>
@@ -327,7 +354,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
                   <p className="mt-1 font-mono text-xs text-alabaster-grey-500">{formatBlockTime(block)}</p>
                 </div>
                 {currentUser.role === "admin" ? (
-                  <Button type="button" variant="secondary" size="icon" aria-label={t("agendaDeleteBlock")} onClick={() => void handleDeleteBlock(block.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}>
+                  <Button type="button" variant="secondary" size="icon" className="h-9 w-9 justify-center p-0" aria-label={t("agendaDeleteBlock")} onClick={() => void handleDeleteBlock(block.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}>
                     <Trash2 aria-hidden="true" className="h-4 w-4" />
                   </Button>
                 ) : null}
@@ -347,17 +374,20 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
             <ChevronRight aria-hidden="true" className="h-4 w-4" />
           </Button>
         </div>
-        <div className="inline-flex rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-1">
-          {(["day", "week"] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              className={`h-8 rounded px-3 text-xs font-semibold transition-colors ${mode === option ? "bg-powder-blue-500 text-white" : "text-alabaster-grey-500 hover:text-white"}`}
-              onClick={() => setMode(option)}
-            >
-              {t(option === "day" ? "agendaModeDay" : "agendaModeWeek")}
-            </button>
-          ))}
+        <div className="grid justify-items-end gap-2">
+          {mode === "week" ? <WeekAvailabilitySummary appointments={appointments} days={visibleDays} t={t} /> : null}
+          <div className="inline-flex rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-1">
+            {(["day", "week"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={`h-8 rounded px-3 text-xs font-semibold transition-colors ${mode === option ? "bg-powder-blue-500 text-white" : "text-alabaster-grey-500 hover:text-white"}`}
+                onClick={() => setMode(option)}
+              >
+                {t(option === "day" ? "agendaModeDay" : "agendaModeWeek")}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -490,8 +520,31 @@ function PageTitle({ eyebrow, title }: { eyebrow: string; title: string }) {
   );
 }
 
+function WeekAvailabilitySummary({ appointments, days, t }: { appointments: Appointment[]; days: string[]; t: (key: L10nKey) => string }) {
+  return (
+    <div aria-label={t("agendaModeWeek")} className="grid grid-cols-7 gap-1 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 px-2 py-2">
+      {days.map((day) => (
+        <div key={day} className="grid min-w-9 justify-items-center gap-1">
+          <span className="text-[9px] font-semibold uppercase text-alabaster-grey-500">{formatDayLabel(day).slice(0, 3)}</span>
+          <div className="grid grid-cols-3 gap-0.5">
+            {HOURS.map((hour) => {
+              const hasAppointments = appointmentsForSlot(appointments, day, hour).length > 0;
+              return (
+                <span
+                  key={`${day}-${String(hour)}`}
+                  className={`h-1.5 w-1.5 rounded-full ${hasAppointments ? "bg-powder-blue-500 shadow-[0_0_8px_rgba(56,142,216,0.55)]" : "border border-alabaster-grey-500/20 bg-transparent"}`}
+                />
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function todayDateInput() {
-  return new Date().toISOString().slice(0, 10);
+  return toDateInput(new Date());
 }
 
 function agendaRange(anchorDate: string, mode: "day" | "week") {
@@ -499,8 +552,8 @@ function agendaRange(anchorDate: string, mode: "day" | "week") {
   const endDate = shiftDate(startDate, mode === "week" ? 7 : 1);
   return {
     startDate,
-    startsFrom: `${startDate}T00:00:00+02:00`,
-    startsTo: `${endDate}T00:00:00+02:00`
+    startsFrom: `${startDate}T00:00:00${localOffset(startDate, "00:00")}`,
+    startsTo: `${endDate}T00:00:00${localOffset(endDate, "00:00")}`
   };
 }
 
@@ -552,6 +605,26 @@ function appointmentsForDay(appointments: Appointment[], day: string) {
 
 function appointmentsForSlot(appointments: Appointment[], day: string, hour: number) {
   return appointmentsForDay(appointments, day).filter((appointment) => Number(appointment.starts_at.slice(11, 13)) === hour);
+}
+
+function nextFreeAppointmentTime(dateInput: string, chairNumber: number, appointments: Appointment[], durationMinutes: number) {
+  for (let hour = 9; hour < 18; hour += 1) {
+    for (const minute of [0, 30]) {
+      const candidate = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      if (!appointmentOverlaps(dateInput, candidate, chairNumber, appointments, durationMinutes)) {
+        return candidate;
+      }
+    }
+  }
+  return "09:00";
+}
+
+function appointmentOverlaps(dateInput: string, timeInput: string, chairNumber: number, appointments: Appointment[], durationMinutes: number) {
+  const start = Date.parse(localDateTimeWithOffset(dateInput, timeInput));
+  const end = Date.parse(addMinutesLocalDateTime(dateInput, timeInput, durationMinutes));
+  return appointmentsForDay(appointments, dateInput)
+    .filter((appointment) => appointment.chair_number === chairNumber && appointment.status !== "cancelled")
+    .some((appointment) => Date.parse(appointment.starts_at) < end && Date.parse(appointment.ends_at) > start);
 }
 
 function blocksForSlot(blocks: AgendaBlock[], day: string, hour: number) {

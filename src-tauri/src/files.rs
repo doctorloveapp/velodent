@@ -128,6 +128,49 @@ pub fn read_patient_file(relative_path: &str) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|error| error.to_string())
 }
 
+pub fn export_patient_file_to_downloads_and_open(
+    relative_path: &str,
+    filename: &str,
+) -> Result<PathBuf, String> {
+    let source = absolute_patient_file_path(relative_path)?;
+    let userprofile = env::var("USERPROFILE")
+        .map(PathBuf::from)
+        .map_err(|_| "%USERPROFILE% is not available".to_owned())?;
+    let downloads = userprofile.join("Downloads");
+    fs::create_dir_all(&downloads).map_err(|error| error.to_string())?;
+    let destination = downloads.join(sanitize_download_filename(filename));
+    fs::copy(&source, &destination).map_err(|error| error.to_string())?;
+    opener::open(&destination).map_err(|error| error.to_string())?;
+    Ok(destination)
+}
+
+fn absolute_patient_file_path(relative_path: &str) -> Result<PathBuf, String> {
+    let relative = relative_path.replace('\\', "/");
+    if relative.contains("..") || relative.starts_with('/') || relative.starts_with('\\') {
+        return Err("invalid clinical file path".to_owned());
+    }
+
+    Ok(patients_root()?
+        .parent()
+        .ok_or_else(|| "invalid VeloDent data directory".to_owned())?
+        .join(relative))
+}
+
+fn sanitize_download_filename(filename: &str) -> String {
+    let path = Path::new(filename);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("velodent-document");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| value.chars().all(|character| character.is_ascii_alphanumeric()))
+        .unwrap_or_else(|| "pdf".to_owned());
+    format!("{}.{}", sanitize_filename_component(stem).replace('_', "-"), extension)
+}
+
 pub fn sanitize_filename_component(value: &str) -> String {
     let mut sanitized = String::new();
     let mut previous_separator = false;
@@ -209,7 +252,7 @@ fn unix_nanos() -> Result<u128, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_filename_component, store_patient_rx_file};
+    use super::{sanitize_download_filename, sanitize_filename_component, store_patient_rx_file};
     use std::{
         env, fs,
         sync::Mutex,
@@ -225,6 +268,15 @@ mod tests {
             "rx_paziente_16_prova_finale"
         );
         assert_eq!(sanitize_filename_component("  À??  "), "rx");
+    }
+
+    #[test]
+    fn preserves_pdf_extension_for_download_exports() {
+        assert_eq!(
+            sanitize_download_filename("Preventivo Paziente 1.PDF"),
+            "preventivo-paziente-1.pdf"
+        );
+        assert_eq!(sanitize_download_filename("??"), "rx.pdf");
     }
 
     #[test]

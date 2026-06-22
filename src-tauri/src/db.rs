@@ -2608,7 +2608,7 @@ impl Database {
         let record = self
             .get_clinical_record(record_id)?
             .ok_or(DbError::NotFound)?;
-        if !matches!(record.status.as_str(), "diagnosed" | "in_quote") {
+        if !matches!(record.status.as_str(), "diagnosed" | "in_quote" | "performed") {
             return Err(DbError::InvalidClinicalStatus(record.status));
         }
 
@@ -6133,6 +6133,31 @@ mod tests {
             .expect("tooth status exists");
         assert_eq!(neutral_tooth.state, "healthy");
 
+        let performed_record = db
+            .create_clinical_record(
+                admin.id,
+                &NewClinicalRecord {
+                    patient_id: patient.id,
+                    service_id: Some(service.id),
+                    tooth_number: Some(16),
+                    tooth_surface: Some("occlusale"),
+                    pathology_description: Some("Otturazione completata"),
+                    status: "performed",
+                    ready_for_quote: false,
+                    notes: None,
+                },
+            )
+            .expect("create performed clinical record");
+        db.delete_clinical_record(admin.id, performed_record.id)
+            .expect("delete performed clinical record");
+        let after_performed_delete = db
+            .get_tooth_statuses(admin.id, patient.id)
+            .expect("tooth statuses after performed delete")
+            .into_iter()
+            .find(|status| status.tooth_number == 16)
+            .expect("tooth status exists");
+        assert_eq!(after_performed_delete.state, "healthy");
+
         let audit_count: i64 = db
             .conn
             .query_row(
@@ -6150,7 +6175,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("clinical delete audit count");
-        assert_eq!(delete_audit_count, 1);
+        assert_eq!(delete_audit_count, 2);
     }
 
     #[test]

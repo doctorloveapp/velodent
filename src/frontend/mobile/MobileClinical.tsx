@@ -1,6 +1,6 @@
 import { Check, Plus, Trash2 } from "lucide-react";
 import { motion } from "framer-motion";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   createClinicalRecord,
   deleteClinicalRecord,
@@ -96,6 +96,7 @@ export function MobileClinical({
   const [selectionMode, setSelectionMode] = useState(false);
   const [activeAction, setActiveAction] = useState<QuickAction | null>(null);
   const [bridgeLayouts, setBridgeLayouts] = useState<Partial<Record<string, BridgeArcLayout>>>({});
+  const [clinicalRecords, setClinicalRecords] = useState<ClinicalRecord[]>([]);
   const [recordedToothRecords, setRecordedToothRecords] = useState<Partial<Record<number, RecordedToothRecord>>>({});
   const [toothStates, setToothStates] = useState<Partial<Record<number, ToothState>>>({});
   const [statusMessage, setStatusMessage] = useState("");
@@ -107,6 +108,13 @@ export function MobileClinical({
     prosthesisGroups.filter((group) => group.teeth.length === 1).map((group) => group.teeth[0])
   );
   const bridgeKey = bridgeGroups.map((group) => group.key).join("|");
+  const selectedRecordIds = useMemo(
+    () => clinicalRecords
+      .filter((record) => record.tooth_number !== null && selectedTeeth.includes(record.tooth_number))
+      .filter((record) => record.status === "diagnosed" || record.status === "in_quote" || record.status === "performed")
+      .reduce<number[]>((ids, record) => ids.includes(record.id) ? ids : [...ids, record.id], []),
+    [clinicalRecords, selectedTeeth]
+  );
 
   useEffect(() => {
     if (!activePatientId) {
@@ -126,6 +134,7 @@ export function MobileClinical({
 
   useEffect(() => {
     if (!activePatientId || !sessionToken || services.length === 0) {
+      setClinicalRecords([]);
       setRecordedToothRecords({});
       setToothStates({});
       return;
@@ -136,12 +145,14 @@ export function MobileClinical({
       getToothStatuses(sessionToken, activePatientId)
     ])
       .then(([records, statuses]) => {
+        setClinicalRecords(records);
         setRecordedToothRecords(clinicalRecordsToToothRecords(records, services));
         setToothStates(
           Object.fromEntries(statuses.map((status) => [status.tooth_number, status.state]))
         );
       })
       .catch(() => {
+        setClinicalRecords([]);
         setRecordedToothRecords({});
         setToothStates({});
       });
@@ -249,6 +260,7 @@ export function MobileClinical({
       });
       return next;
     });
+    setClinicalRecords((current) => [...records, ...current]);
     setStatusMessage(t("mobileClinicalServiceRegistered"));
     if (activeAction === "crown") {
       setSelectedTeeth(targetTeeth);
@@ -261,11 +273,8 @@ export function MobileClinical({
   }
 
   async function handleClearSelection() {
-    if (selectedTeeth.length > 0) {
-      const recordIds = selectedTeeth
-        .map((tooth) => recordedToothRecords[tooth]?.recordId)
-        .filter((recordId): recordId is number => typeof recordId === "number");
-      await Promise.all(recordIds.map((recordId) => deleteClinicalRecord(sessionToken, recordId)));
+    if (selectedRecordIds.length > 0) {
+      await Promise.all(selectedRecordIds.map((recordId) => deleteClinicalRecord(sessionToken, recordId)));
       setRecordedToothRecords((current) => {
         const selectedSet = new Set(selectedTeeth);
         return Object.fromEntries(
@@ -279,6 +288,7 @@ export function MobileClinical({
         });
         return next;
       });
+      setClinicalRecords((current) => current.filter((record) => !selectedRecordIds.includes(record.id)));
     }
     setSelectedTeeth([]);
     setSelectionMode(false);
@@ -403,7 +413,7 @@ export function MobileClinical({
         <QuickActions
           activeAction={activeAction}
           activePatientId={activePatientId}
-          canClear={selectedTeeth.some((tooth) => Boolean(recordedToothRecords[tooth]))}
+          canClear={selectedRecordIds.length > 0}
           useBridge={selectedTeeth.length >= 2}
           onAction={handleQuickAction}
           onClear={() => void handleClearSelection().catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
@@ -581,7 +591,7 @@ function clinicalRecordsToToothRecords(
       return;
     }
     const category = record.service_id ? serviceCategoryById.get(record.service_id) ?? "" : "";
-    const action = quickActionFromCategory(category);
+    const action = quickActionFromCategory(category) ?? "periodontics";
     if (!action) {
       return;
     }

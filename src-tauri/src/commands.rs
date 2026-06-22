@@ -26,9 +26,10 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    fs,
     io::{Read, Write},
     net::TcpListener,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, State};
@@ -271,6 +272,14 @@ pub struct ImportRxFileRequest {
     session_token: String,
     patient_id: i64,
     source_path: String,
+    rx_type: Option<String>,
+    tooth_number: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PickRxImportRequest {
+    session_token: String,
+    patient_id: i64,
     rx_type: Option<String>,
     tooth_number: Option<i64>,
 }
@@ -1359,7 +1368,7 @@ pub fn generate_quote_pdf(
         &format!("preventivo-{}", quote.id),
         &bytes,
     )?;
-    database
+    let document = database
         .register_generated_document(
             actor.id,
             quote.patient_id,
@@ -1370,7 +1379,12 @@ pub fn generate_quote_pdf(
             stored.size_bytes,
             &serde_json::json!({ "quote_id": quote.id }).to_string(),
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    files::export_patient_file_to_downloads_and_open(
+        &stored.relative_path,
+        &stored.original_filename,
+    )?;
+    Ok(document)
 }
 
 #[tauri::command]
@@ -1400,7 +1414,7 @@ pub fn generate_invoice_pdf(
         ),
         &bytes,
     )?;
-    database
+    let document = database
         .register_generated_document(
             actor.id,
             invoice.patient_id,
@@ -1411,7 +1425,12 @@ pub fn generate_invoice_pdf(
             stored.size_bytes,
             &serde_json::json!({ "invoice_id": invoice.id }).to_string(),
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    files::export_patient_file_to_downloads_and_open(
+        &stored.relative_path,
+        &stored.original_filename,
+    )?;
+    Ok(document)
 }
 
 #[tauri::command]
@@ -1586,41 +1605,170 @@ pub fn import_rx_file(
     request: ImportRxFileRequest,
 ) -> Result<RxAsset, String> {
     let actor = require_session(&state, &request.session_token)?;
-    {
-        let database = state.database()?;
-        database
-            .validate_rx_import(
-                actor.id,
-                request.patient_id,
-                request.rx_type.as_deref().unwrap_or("endoral"),
-                request.tooth_number,
-            )
-            .map_err(|error| error.to_string())?;
+    import_rx_path(
+        &state,
+        actor.id,
+        request.patient_id,
+        &request.source_path,
+        request.rx_type.as_deref(),
+        request.tooth_number,
+    )
+}
+
+#[tauri::command]
+pub fn pick_rx_file_and_import(
+    state: State<'_, AppState>,
+    request: PickRxImportRequest,
+) -> Result<RxAsset, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("RX/DICOM", &["jpg", "jpeg", "png", "dcm", "dicom"])
+        .pick_file()
+    else {
+        return Err("rx file selection cancelled".to_owned());
+    };
+    import_rx_path(
+        &state,
+        actor.id,
+        request.patient_id,
+        path.to_string_lossy().as_ref(),
+        request.rx_type.as_deref(),
+        request.tooth_number,
+    )
+}
+
+#[tauri::command]
+pub fn pick_rx_folder_and_import(
+    state: State<'_, AppState>,
+    request: PickRxImportRequest,
+) -> Result<Vec<RxAsset>, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let Some(folder) = rfd::FileDialog::new().pick_folder() else {
+        return Err("rx folder selection cancelled".to_owned());
+    };
+    let candidates = collect_supported_rx_files(&folder, 500)?;
+    if candidates.is_empty() {
+        return Err("no supported RX or DICOM files found".to_owned());
     }
-    let dicom_metadata = if is_dicom_path(&request.source_path) {
-        dicom_meta::extract_dicom_metadata(Path::new(&request.source_path))?
+    let mut imported = Vec::new();
+    for path in candidates {
+        imported.push(import_rx_path(
+            &state,
+            actor.id,
+            request.patient_id,
+            path.to_string_lossy().as_ref(),
+            request.rx_type.as_deref(),
+            request.tooth_number,
+        )?);
+    }
+    Ok(imported)
+}
+
+fn import_rx_path(
+    state: &AppState,
+    actor_id: i64,
+    patient_id: i64,
+    source_path: &str,
+    rx_type: Option<&str>,
+    tooth_number: Option<i64>,
+) -> Result<RxAsset, String> {
+    let source = PathBuf::from(source_path);
+    let inferred_rx_type = infer_rx_type(&source, rx_type);
+    let mut dicom_metadata = if is_dicom_file_path(&source) {
+        dicom_meta::extract_dicom_metadata(&source)?
     } else {
         dicom_meta::DicomMetadata::empty()
     };
-    let stored = files::store_patient_rx_file(request.patient_id, &request.source_path)?;
+    let resolved_tooth = tooth_number.or(dicom_metadata.tooth_number);
+
+    {
+        let database = state.database()?;
+        database
+            .validate_rx_import(actor_id, patient_id, &inferred_rx_type, resolved_tooth)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let stored = files::store_patient_rx_file(patient_id, source_path)?;
+    if dicom_metadata.tooth_number.is_none() {
+        dicom_metadata.tooth_number = resolved_tooth;
+    }
+
     state
         .database()?
         .register_rx_asset(
-            actor.id,
+            actor_id,
             &NewRxAsset {
-                patient_id: request.patient_id,
+                patient_id,
                 relative_path: &stored.relative_path,
                 mime_type: &stored.mime_type,
                 sha256_hex: &stored.sha256_hex,
                 size_bytes: stored.size_bytes,
                 original_filename: &stored.original_filename,
-                rx_type: request.rx_type.as_deref().unwrap_or("endoral"),
-                tooth_number: request.tooth_number.or(dicom_metadata.tooth_number),
+                rx_type: &inferred_rx_type,
+                tooth_number: resolved_tooth,
                 dicom_metadata_json: &dicom_metadata.metadata_json,
                 acquired_at: dicom_metadata.acquisition_datetime.as_deref(),
             },
         )
         .map_err(|error| error.to_string())
+}
+
+fn collect_supported_rx_files(root: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+
+    while let Some(folder) = stack.pop() {
+        let entries = fs::read_dir(&folder).map_err(|error| error.to_string())?;
+        for entry in entries {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if is_supported_rx_path(&path) {
+                files.push(path);
+                if files.len() >= limit {
+                    files.sort();
+                    return Ok(files);
+                }
+            }
+        }
+    }
+
+    files.sort();
+    Ok(files)
+}
+
+fn is_supported_rx_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png" | "dcm" | "dicom"))
+        .unwrap_or(false)
+}
+
+fn is_dicom_file_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "dcm" | "dicom"))
+        .unwrap_or(false)
+}
+
+fn infer_rx_type(path: &Path, requested: Option<&str>) -> String {
+    if let Some(rx_type) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+        return rx_type.to_owned();
+    }
+
+    let name = path.to_string_lossy().to_ascii_lowercase();
+    if name.contains("cbct") || name.contains("cone") || name.contains("tac") || name.contains("ct") {
+        return "cbct".to_owned();
+    }
+    if name.contains("pano") || name.contains("opg") || name.contains("ortop") || name.contains("panoram") {
+        return "panoramic".to_owned();
+    }
+    if name.contains("foto") || name.contains("photo") || name.contains("camera") {
+        return "photo".to_owned();
+    }
+    "endoral".to_owned()
 }
 
 #[tauri::command]
@@ -1805,14 +1953,6 @@ fn patient_pdf_party(patient: &Patient) -> PdfParty {
         title: "Paziente".to_owned(),
         lines,
     }
-}
-
-fn is_dicom_path(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "dcm" | "dicom"))
-        .unwrap_or(false)
 }
 
 fn wait_for_google_oauth_code(

@@ -207,7 +207,7 @@ function AuthGate() {
       >
         <p className="text-sm leading-6 text-alabaster-grey-500">{t("authGateFirstAdminHelp")}</p>
         <Input placeholder={t("settingsUsername")} value={adminForm.username} onChange={(event) => setAdminForm({ ...adminForm, username: event.target.value })} />
-        <Input placeholder={t("settingsPassword")} type="password" value={adminForm.password} onChange={(event) => setAdminForm({ ...adminForm, password: event.target.value })} />
+        <Input autoFocus placeholder={t("settingsPassword")} type="password" value={adminForm.password} onChange={(event) => setAdminForm({ ...adminForm, password: event.target.value })} />
         <Button type="submit">
           {t("settingsCreateFirstAdmin")}
         </Button>
@@ -228,7 +228,7 @@ function AuthGate() {
         }}
       >
         <Input placeholder={t("settingsUsername")} value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} />
-        <Input placeholder={t("settingsPassword")} type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} />
+        <Input autoFocus placeholder={t("settingsPassword")} type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} />
         <Button type="submit">
           {t("settingsLoginAction")}
         </Button>

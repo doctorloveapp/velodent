@@ -32,6 +32,8 @@ import {
   listRxAssets,
   openPatientRecord,
   patientTimeline,
+  pickRxFileAndImport,
+  pickRxFolderAndImport,
   readTsCns,
   rxAssetDataUrl,
   searchPatients,
@@ -562,8 +564,18 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
     if (!currentUser?.session_token) {
       return;
     }
-    const result = await startSumupPayment(currentUser.session_token, invoice.id, "sumup_link");
-    setStatusMessage(result.checkout.checkout_url ?? t("billingSumupStarted"));
+    try {
+      const result = await startSumupPayment(currentUser.session_token, invoice.id, "sumup_link");
+      if (result.checkout.checkout_url) {
+        window.open(result.checkout.checkout_url, "_blank", "noopener,noreferrer");
+        setStatusMessage(t("billingSumupOpened"));
+      } else {
+        setStatusMessage(t("billingSumupStarted"));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatusMessage(message.toLowerCase().includes("sumup") ? t("billingSumupMissingConfig") : message);
+    }
     await refreshBilling();
   }
 
@@ -868,6 +880,38 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
     await refreshAssets();
   }
 
+  async function handlePickImport() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+
+    const imported = await pickRxFileAndImport({
+      session_token: currentUser.session_token,
+      patient_id: patient.id,
+      rx_type: rxType,
+      tooth_number: toothNumber.trim() ? Number(toothNumber) : undefined
+    });
+    setStatusMessage(`${t("rxImportCompleted")}: ${imported.relative_path}`);
+    await refreshAssets();
+  }
+
+  async function handleFolderImport() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+
+    const imported = await pickRxFolderAndImport({
+      session_token: currentUser.session_token,
+      patient_id: patient.id,
+      rx_type: rxType,
+      tooth_number: toothNumber.trim() ? Number(toothNumber) : undefined
+    });
+    setStatusMessage(`${t("rxImportFolderCompleted")}: ${String(imported.length)}`);
+    await refreshAssets();
+  }
+
   async function openViewer(asset: RxAsset) {
     if (!currentUser?.session_token) {
       setStatusMessage(t("patientsLoginRequired"));
@@ -894,7 +938,7 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
 
   return (
     <div className="grid gap-4">
-      <div className="grid gap-2 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 xl:grid-cols-[minmax(0,1fr)_160px_120px_auto]">
+      <div className="grid gap-2 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 xl:grid-cols-[minmax(0,1fr)_160px_120px_auto_auto_auto]">
         <Input
           placeholder={t("rxSourcePathPlaceholder")}
           value={sourcePath}
@@ -916,8 +960,15 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
           value={toothNumber}
           onChange={(event) => setToothNumber(event.target.value)}
         />
-        <Button type="button" onClick={() => void handleImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
+        <Button type="button" onClick={() => void handlePickImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
           {t("rxImportAction")}
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => void handleFolderImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
+          <FolderOpen aria-hidden="true" className="h-4 w-4" />
+          {t("rxImportFolderAction")}
+        </Button>
+        <Button disabled={!sourcePath.trim()} type="button" variant="secondary" onClick={() => void handleImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
+          {t("rxImportManualPathAction")}
         </Button>
       </div>
       {statusMessage ? <p className="text-xs leading-5 text-alabaster-grey-500">{statusMessage}</p> : null}

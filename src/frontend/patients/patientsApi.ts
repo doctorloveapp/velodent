@@ -133,6 +133,24 @@ export async function importRxFile(request: {
   return invoke<RxAsset>("import_rx_file", { request });
 }
 
+export async function pickRxFileAndImport(request: {
+  session_token: string;
+  patient_id: number;
+  rx_type?: string;
+  tooth_number?: number;
+}) {
+  return invoke<RxAsset>("pick_rx_file_and_import", { request });
+}
+
+export async function pickRxFolderAndImport(request: {
+  session_token: string;
+  patient_id: number;
+  rx_type?: string;
+  tooth_number?: number;
+}) {
+  return invoke<RxAsset[]>("pick_rx_folder_and_import", { request });
+}
+
 export async function listRxAssets(session_token: string, patient_id: number) {
   return invoke<RxAsset[]>("list_rx_assets", { request: { session_token, patient_id } });
 }

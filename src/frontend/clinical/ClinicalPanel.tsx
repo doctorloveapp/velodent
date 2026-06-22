@@ -76,6 +76,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   const { t } = useL10n();
   const [services, setServices] = useState<ClinicalService[]>([]);
   const [records, setRecords] = useState<ClinicalRecord[]>([]);
+  const [allRecords, setAllRecords] = useState<ClinicalRecord[]>([]);
   const [toothStates, setToothStates] = useState<Partial<Record<number, ToothState>>>({});
   const [recordedToothRecords, setRecordedToothRecords] = useState<Partial<Record<number, RecordedToothRecord>>>({});
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
@@ -93,15 +94,23 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   const selectedToothRecordInfo = selectedTeeth.length === 1
     ? recordedToothRecords[selectedTeeth[0]]
     : null;
+  const selectedRecordIds = useMemo(
+    () => allRecords
+      .filter((record) => record.tooth_number !== null && selectedTeeth.includes(record.tooth_number))
+      .filter((record) => record.status === "diagnosed" || record.status === "in_quote" || record.status === "performed")
+      .reduce<number[]>((ids, record) => ids.includes(record.id) ? ids : [...ids, record.id], []),
+    [allRecords, selectedTeeth]
+  );
 
   async function refreshClinicalData() {
     if (!currentUser?.session_token) {
       return;
     }
 
-    const [nextServices, nextStatuses, nextRecords] = await Promise.all([
+    const [nextServices, nextStatuses, nextAllRecords, nextRecords] = await Promise.all([
       listClinicalServices(currentUser.session_token),
       getToothStatuses(currentUser.session_token, patient.id),
+      listClinicalRecords(currentUser.session_token, patient.id, {}),
       listClinicalRecords(currentUser.session_token, patient.id, {
         date_from: filters.dateFrom || undefined,
         date_to: filters.dateTo || undefined,
@@ -112,8 +121,9 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
 
     setServices(nextServices);
     setRecords(nextRecords);
+    setAllRecords(nextAllRecords);
     setToothStates(Object.fromEntries(nextStatuses.map((status) => [status.tooth_number, status.state])));
-    setRecordedToothRecords(clinicalRecordsToToothRecords(nextRecords, nextServices));
+    setRecordedToothRecords(clinicalRecordsToToothRecords(nextAllRecords, nextServices));
   }
 
   useEffect(() => {
@@ -180,10 +190,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   }
 
   async function handleClearSelection() {
-    const recordIds = selectedTeeth
-      .map((tooth) => recordedToothRecords[tooth]?.recordId)
-      .filter((recordId): recordId is number => typeof recordId === "number");
-    await Promise.all(recordIds.map((recordId) => deleteClinicalRecord(sessionToken, recordId)));
+    await Promise.all(selectedRecordIds.map((recordId) => deleteClinicalRecord(sessionToken, recordId)));
     setSelectedTeeth([]);
     setSelectionMode(false);
     setActiveAction(null);
@@ -269,7 +276,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                   {quickActionLabel(action, selectedTeeth.length >= 2, t)}
                 </Button>
               ))}
-              {selectedTeeth.some((tooth) => Boolean(recordedToothRecords[tooth])) ? (
+              {selectedRecordIds.length > 0 ? (
                 <Button
                   type="button"
                   variant="secondary"
@@ -460,7 +467,7 @@ function clinicalRecordsToToothRecords(records: ClinicalRecord[], services: Clin
       return;
     }
     const category = record.service_id ? serviceCategoryById.get(record.service_id) ?? "" : "";
-    const action = quickActionFromCategory(category);
+    const action = quickActionFromCategory(category) ?? "periodontics";
     if (action) {
       next[record.tooth_number] = {
         action,

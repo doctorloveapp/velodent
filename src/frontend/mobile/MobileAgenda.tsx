@@ -20,6 +20,7 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientQuery, setPatientQuery] = useState("");
   const [patientSuggestionsOpen, setPatientSuggestionsOpen] = useState(false);
+  const [timeTouched, setTimeTouched] = useState(false);
   const [form, setForm] = useState({
     patientId: "",
     chairNumber: "1",
@@ -59,6 +60,14 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
     void refresh().catch(() => setStatusMessage(t("agendaGenericError")));
   }, [range.from, range.to, sessionToken]);
 
+  useEffect(() => {
+    if (timeTouched) {
+      return;
+    }
+    const nextTime = nextFreeAppointmentTime(date, Number(form.chairNumber) || 1, appointments, Number(form.duration) || DEFAULT_DURATION_MINUTES);
+    setForm((current) => current.time === nextTime ? current : { ...current, time: nextTime });
+  }, [appointments, date, form.chairNumber, form.duration, timeTouched]);
+
   async function handleCreateAppointment() {
     if (!form.patientId) {
       setStatusMessage(t("agendaPatientRequired"));
@@ -76,6 +85,7 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
       title: form.title.trim() || t("agendaDefaultAppointmentTitle")
     });
     setForm((current) => ({ ...current, title: t("agendaDefaultAppointmentTitle") }));
+    setTimeTouched(false);
     setStatusMessage(t("agendaAppointmentCreated"));
     await refresh();
   }
@@ -85,7 +95,10 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
       <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("agendaModeDay")}</p>
         <div className="mt-3 grid gap-2">
-          <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+          <Input type="date" value={date} onChange={(event) => {
+            setTimeTouched(false);
+            setDate(event.target.value);
+          }} />
           <div className="relative">
             <Input
               className="h-12"
@@ -114,9 +127,18 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
           </div>
           <Input placeholder={t("agendaAppointmentTitle")} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
           <div className="grid grid-cols-3 gap-2">
-            <Input type="time" value={form.time} onChange={(event) => setForm({ ...form, time: event.target.value })} />
-            <Input min={15} step={15} type="number" value={form.duration} onChange={(event) => setForm({ ...form, duration: event.target.value })} />
-            <Input min={1} type="number" value={form.chairNumber} onChange={(event) => setForm({ ...form, chairNumber: event.target.value })} />
+            <Input type="time" value={form.time} onChange={(event) => {
+              setTimeTouched(true);
+              setForm({ ...form, time: event.target.value });
+            }} />
+            <Input min={15} step={15} type="number" value={form.duration} onChange={(event) => {
+              setTimeTouched(false);
+              setForm({ ...form, duration: event.target.value });
+            }} />
+            <Input min={1} type="number" value={form.chairNumber} onChange={(event) => {
+              setTimeTouched(false);
+              setForm({ ...form, chairNumber: event.target.value });
+            }} />
           </div>
           <Button
             type="button"
@@ -150,7 +172,7 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
           ))
         ) : (
           <p className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4 text-sm text-alabaster-grey-500">
-            {t("agendaBlocksEmpty")}
+            {t("agendaAppointmentsEmpty")}
           </p>
         )}
       </div>
@@ -160,7 +182,7 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
 }
 
 function todayDateInput() {
-  return new Date().toISOString().slice(0, 10);
+  return toDateInput(new Date());
 }
 
 function shiftDate(dateInput: string, days: number) {
@@ -176,9 +198,37 @@ function localDateTimeWithOffset(dateInput: string, timeInput: string) {
 function addMinutesLocalDateTime(dateInput: string, timeInput: string, minutes: number) {
   const date = new Date(`${dateInput}T${timeInput}:00`);
   date.setMinutes(date.getMinutes() + minutes);
-  const nextDate = `${String(date.getFullYear())}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const nextDate = toDateInput(date);
   const nextTime = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
   return `${nextDate}T${nextTime}:00${localOffset(nextDate, nextTime)}`;
+}
+
+function toDateInput(date: Date) {
+  return `${String(date.getFullYear())}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function appointmentsForDay(appointments: Appointment[], day: string) {
+  return appointments.filter((appointment) => appointment.starts_at.slice(0, 10) === day);
+}
+
+function nextFreeAppointmentTime(dateInput: string, chairNumber: number, appointments: Appointment[], durationMinutes: number) {
+  for (let hour = 9; hour < 18; hour += 1) {
+    for (const minute of [0, 30]) {
+      const candidate = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      if (!appointmentOverlaps(dateInput, candidate, chairNumber, appointments, durationMinutes)) {
+        return candidate;
+      }
+    }
+  }
+  return "09:00";
+}
+
+function appointmentOverlaps(dateInput: string, timeInput: string, chairNumber: number, appointments: Appointment[], durationMinutes: number) {
+  const start = Date.parse(localDateTimeWithOffset(dateInput, timeInput));
+  const end = Date.parse(addMinutesLocalDateTime(dateInput, timeInput, durationMinutes));
+  return appointmentsForDay(appointments, dateInput)
+    .filter((appointment) => appointment.chair_number === chairNumber && appointment.status !== "cancelled")
+    .some((appointment) => Date.parse(appointment.starts_at) < end && Date.parse(appointment.ends_at) > start);
 }
 
 function localOffset(dateInput: string, timeInput: string) {
