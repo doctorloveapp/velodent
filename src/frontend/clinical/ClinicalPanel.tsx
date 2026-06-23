@@ -413,7 +413,7 @@ function OdontogramRow({
                   ? "border-powder-blue-500 bg-powder-blue-950 text-white"
                   : toothState
                     ? toothStateClasses[toothState] ?? "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500"
-                    : "border-alabaster-grey-500/20 bg-glaucous-950 text-white hover:border-powder-blue-500/50"
+                    : "border-alabaster-grey-500/20 bg-glaucous-950 text-alabaster-grey-500 hover:border-powder-blue-500/50 hover:text-powder-blue-100"
             ].join(" ")}
             type="button"
             whileTap={{ scale: 0.96 }}
