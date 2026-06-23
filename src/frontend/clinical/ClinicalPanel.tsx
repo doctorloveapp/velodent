@@ -20,6 +20,7 @@ import {
   type ClinicalRecord,
   type ClinicalRecordStatus,
   type ClinicalService,
+  type ToothStatus,
   type ToothState
 } from "./clinicalApi";
 
@@ -62,6 +63,15 @@ const recordedToothClasses: Record<QuickAction, string> = {
   extraction: "border-red-500/60 bg-red-500/20 text-white",
   mobileProsthesis: "border-amber-300/55 bg-amber-300/16 text-white",
   periodontics: "border-powder-blue-500/55 bg-powder-blue-500/18 text-white"
+};
+
+const recordedToothGlyphClasses: Record<QuickAction, string> = {
+  caries: "text-emerald-200",
+  crown: "text-amber-200",
+  endodontics: "text-violet-200",
+  extraction: "text-red-200",
+  mobileProsthesis: "text-amber-100",
+  periodontics: "text-powder-blue-100"
 };
 
 const toothStateClasses: Partial<Record<ToothState, string>> = {
@@ -122,8 +132,9 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
     setServices(nextServices);
     setRecords(nextRecords);
     setAllRecords(nextAllRecords);
-    setToothStates(Object.fromEntries(nextStatuses.map((status) => [status.tooth_number, status.state])));
-    setRecordedToothRecords(clinicalRecordsToToothRecords(nextAllRecords, nextServices));
+    const nextRecordedToothRecords = clinicalRecordsToToothRecords(nextAllRecords, nextServices);
+    setRecordedToothRecords(nextRecordedToothRecords);
+    setToothStates(normalizeToothStates(nextStatuses, nextRecordedToothRecords));
   }
 
   useEffect(() => {
@@ -414,7 +425,11 @@ function OdontogramRow({
                 <Check aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={2} />
               </span>
             ) : null}
-            <ToothGlyph toothNumber={toothNumber} state={toothState ?? "healthy"} />
+            <ToothGlyph
+              className={recordedAction ? recordedToothGlyphClasses[recordedAction] : undefined}
+              toothNumber={toothNumber}
+              state={recordedAction ? "healthy" : toothState ?? "healthy"}
+            />
             <span className="font-mono text-[11px] font-semibold">{toothNumber}</span>
           </motion.button>
         );
@@ -477,16 +492,29 @@ function clinicalRecordsToToothRecords(records: ClinicalRecord[], services: Clin
       return;
     }
     const category = record.service_id ? serviceCategoryById.get(record.service_id) ?? "" : "";
-    const action = quickActionFromCategory(category) ?? "periodontics";
-    if (action) {
-      next[record.tooth_number] = {
-        action,
-        recordId: record.id,
-        serviceName: record.service_name ?? record.pathology_description ?? ""
-      };
+    const action = quickActionFromCategory(category);
+    if (!action) {
+      return;
     }
+    next[record.tooth_number] = {
+      action,
+      recordId: record.id,
+      serviceName: record.service_name ?? record.pathology_description ?? ""
+    };
   });
   return next;
+}
+
+function normalizeToothStates(
+  statuses: ToothStatus[],
+  recordedRecords: Partial<Record<number, RecordedToothRecord>>
+): Partial<Record<number, ToothState>> {
+  return Object.fromEntries(
+    statuses.map((status) => [
+      status.tooth_number,
+      recordedRecords[status.tooth_number] || status.state === "missing" ? status.state : "healthy"
+    ])
+  );
 }
 
 function quickActionFromCategory(category: string): QuickAction | null {
@@ -563,13 +591,14 @@ function recordStatusKey(status: ClinicalRecordStatus): L10nKey {
   return "clinicalStatusDiagnosed";
 }
 
-function ToothGlyph({ state, toothNumber }: { state: ToothState; toothNumber: number }) {
+function ToothGlyph({ className = "", state, toothNumber }: { className?: string; state: ToothState; toothNumber: number }) {
   const position = toothNumber % 10;
   const missingClass = state === "missing" ? "opacity-10" : "";
+  const classes = [className, missingClass].filter(Boolean).join(" ");
 
   if (position <= 2) {
     return (
-      <svg aria-hidden="true" className={`h-8 w-6 ${missingClass}`} fill="none" viewBox="0 0 24 30">
+      <svg aria-hidden="true" className={`h-8 w-6 ${classes}`} fill="none" viewBox="0 0 24 30">
         <path d="M8 3.8c1.2-.8 2.6-.8 4-.2 1.4-.6 2.8-.6 4 .2 1.8 1.2 2.3 4.2 1.2 7.1-.8 2.1-1.2 4.4-1.4 7.2-.3 4.5-1.4 7.5-3.8 7.5s-3.5-3-3.8-7.5c-.2-2.8-.6-5.1-1.4-7.2-1.1-2.9-.6-5.9 1.2-7.1Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
         <path d="M9 10.2h6" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
       </svg>
@@ -578,7 +607,7 @@ function ToothGlyph({ state, toothNumber }: { state: ToothState; toothNumber: nu
 
   if (position === 3) {
     return (
-      <svg aria-hidden="true" className={`h-8 w-6 ${missingClass}`} fill="none" viewBox="0 0 24 30">
+      <svg aria-hidden="true" className={`h-8 w-6 ${classes}`} fill="none" viewBox="0 0 24 30">
         <path d="M7.2 3.5c1.5-1 3.2-.3 4.8-.3s3.3-.7 4.8.3c2 1.4 2.2 4.8.9 7.9-.9 2.1-1.7 4.9-2.3 8.4-.6 3.8-1.5 6.1-3.4 6.1s-2.8-2.3-3.4-6.1c-.6-3.5-1.4-6.3-2.3-8.4-1.3-3.1-1.1-6.5.9-7.9Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
         <path d="M12 12.5v9" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
       </svg>
@@ -587,7 +616,7 @@ function ToothGlyph({ state, toothNumber }: { state: ToothState; toothNumber: nu
 
   if (position <= 5) {
     return (
-      <svg aria-hidden="true" className={`h-8 w-7 ${missingClass}`} fill="none" viewBox="0 0 26 30">
+      <svg aria-hidden="true" className={`h-8 w-7 ${classes}`} fill="none" viewBox="0 0 26 30">
         <path d="M6.5 3.4c1.8-.9 3.9.1 6.5.1s4.7-1 6.5-.1c2.6 1.3 3.2 4.8 2.1 8.4-.7 2.3-1.9 4.1-2.5 7.2-.5 2.8-.9 6-3 6.4-1.7.3-2-3.8-3.1-3.8s-1.4 4.1-3.1 3.8c-2.1-.4-2.5-3.6-3-6.4-.6-3.1-1.8-4.9-2.5-7.2-1.1-3.6-.5-7.1 2.1-8.4Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
         <path d="M9.2 10.2h7.6M10 14.4h6" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
       </svg>
@@ -595,7 +624,7 @@ function ToothGlyph({ state, toothNumber }: { state: ToothState; toothNumber: nu
   }
 
   return (
-    <svg aria-hidden="true" className={`h-8 w-8 ${missingClass}`} fill="none" viewBox="0 0 30 30">
+    <svg aria-hidden="true" className={`h-8 w-8 ${classes}`} fill="none" viewBox="0 0 30 30">
       <path d="M6.3 3.5c2.1-1 4.1.2 6.1.2 1.1 0 1.7-.5 2.6-.5s1.5.5 2.6.5c2 0 4-1.2 6.1-.2 2.9 1.4 3.6 5.1 2.3 9-.8 2.5-2.2 4.1-2.9 7.2-.6 2.8-1 5.8-3.3 6.1-1.7.2-2.1-3.8-3.2-3.8s-1.4 3.8-3.2 3.8-2.1-3.8-3.2-3.8-1.5 4-3.2 3.8c-2.3-.3-2.7-3.3-3.3-6.1-.7-3.1-2.1-4.7-2.9-7.2-1.3-3.9-.6-7.6 2.3-9Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
       <path d="M9 10.8h12M10.2 15h9.6M15 8.4v8.8" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
     </svg>

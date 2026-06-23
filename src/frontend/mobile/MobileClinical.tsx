@@ -9,6 +9,7 @@ import {
   listClinicalServices,
   type ClinicalRecord,
   type ClinicalService,
+  type ToothStatus,
   type ToothState
 } from "@/frontend/clinical/clinicalApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
@@ -145,11 +146,10 @@ export function MobileClinical({
       getToothStatuses(sessionToken, activePatientId)
     ])
       .then(([records, statuses]) => {
+        const nextRecordedToothRecords = clinicalRecordsToToothRecords(records, services);
         setClinicalRecords(records);
-        setRecordedToothRecords(clinicalRecordsToToothRecords(records, services));
-        setToothStates(
-          Object.fromEntries(statuses.map((status) => [status.tooth_number, status.state]))
-        );
+        setRecordedToothRecords(nextRecordedToothRecords);
+        setToothStates(normalizeToothStates(statuses, nextRecordedToothRecords));
       })
       .catch(() => {
         setClinicalRecords([]);
@@ -168,9 +168,10 @@ export function MobileClinical({
         getToothStatuses(sessionToken, activePatientId)
       ])
         .then(([records, statuses]) => {
+          const nextRecordedToothRecords = clinicalRecordsToToothRecords(records, services);
           setClinicalRecords(records);
-          setRecordedToothRecords(clinicalRecordsToToothRecords(records, services));
-          setToothStates(Object.fromEntries(statuses.map((status) => [status.tooth_number, status.state])));
+          setRecordedToothRecords(nextRecordedToothRecords);
+          setToothStates(normalizeToothStates(statuses, nextRecordedToothRecords));
         })
         .catch(() => undefined);
     }, 1500);
@@ -610,7 +611,7 @@ function clinicalRecordsToToothRecords(
       return;
     }
     const category = record.service_id ? serviceCategoryById.get(record.service_id) ?? "" : "";
-    const action = quickActionFromCategory(category) ?? "periodontics";
+    const action = quickActionFromCategory(category);
     if (!action) {
       return;
     }
@@ -621,6 +622,18 @@ function clinicalRecordsToToothRecords(
     };
   });
   return next;
+}
+
+function normalizeToothStates(
+  statuses: ToothStatus[],
+  recordedRecords: Partial<Record<number, RecordedToothRecord>>
+): Partial<Record<number, ToothState>> {
+  return Object.fromEntries(
+    statuses.map((status) => [
+      status.tooth_number,
+      recordedRecords[status.tooth_number] || status.state === "missing" ? status.state : "healthy"
+    ])
+  );
 }
 
 function quickActionFromCategory(category: string): QuickAction | null {

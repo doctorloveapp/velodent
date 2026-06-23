@@ -2808,46 +2808,68 @@ impl Database {
         let result = (|| {
             self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
 
-            let locked_quote_count: i64 = self.conn.query_row(
+            let quote_links = {
+                let mut statement = self.conn.prepare(
+                    r#"
+                    SELECT DISTINCT ql.quote_id, q.status
+                    FROM quote_lines ql
+                    JOIN quotes q ON q.id = ql.quote_id
+                    WHERE ql.clinical_record_id = ?1
+                    "#,
+                )?;
+                let rows = statement
+                    .query_map([record_id], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                rows
+            };
+            let draft_quote_ids: Vec<i64> = quote_links
+                .iter()
+                .filter_map(|(quote_id, status)| (status == "draft").then_some(*quote_id))
+                .collect();
+            let locked_quote_ids: Vec<i64> = quote_links
+                .iter()
+                .filter_map(|(quote_id, status)| (status != "draft").then_some(*quote_id))
+                .collect();
+
+            for quote_id in &draft_quote_ids {
+                self.conn.execute(
+                    "DELETE FROM quote_lines WHERE clinical_record_id = ?1 AND quote_id = ?2",
+                    params![record_id, quote_id],
+                )?;
+            }
+            for quote_id in &locked_quote_ids {
+                self.conn.execute(
+                    r#"
+                    UPDATE quote_lines
+                    SET clinical_record_id = NULL
+                    WHERE clinical_record_id = ?1 AND quote_id = ?2
+                    "#,
+                    params![record_id, quote_id],
+                )?;
+            }
+
+            self.conn
+                .execute("DELETE FROM clinical_records WHERE id = ?1", [record_id])?;
+
+            for quote_id in draft_quote_ids {
+                self.recalculate_quote_totals(quote_id)?;
+            }
+
+            let remaining_count: i64 = self.conn.query_row(
                 r#"
                 SELECT COUNT(*)
-                FROM quote_lines ql
-                JOIN quotes q ON q.id = ql.quote_id
-                WHERE ql.clinical_record_id = ?1
-                  AND q.status <> 'draft'
+                FROM quote_lines
+                WHERE clinical_record_id = ?1
                 "#,
                 [record_id],
                 |row| row.get(0),
             )?;
-            if locked_quote_count > 0 {
+            if remaining_count > 0 {
                 return Err(DbError::InvalidFinancialState(
-                    "clinical record is linked to a locked quote".to_owned(),
+                    "clinical record still linked to quote lines".to_owned(),
                 ));
-            }
-
-            let quote_ids = {
-                let mut statement = self.conn.prepare(
-                    r#"
-                    SELECT DISTINCT quote_id
-                    FROM quote_lines
-                    WHERE clinical_record_id = ?1
-                    "#,
-                )?;
-                let ids = statement
-                    .query_map([record_id], |row| row.get::<_, i64>(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                ids
-            };
-
-            self.conn.execute(
-                "DELETE FROM quote_lines WHERE clinical_record_id = ?1",
-                [record_id],
-            )?;
-            self.conn
-                .execute("DELETE FROM clinical_records WHERE id = ?1", [record_id])?;
-
-            for quote_id in quote_ids {
-                self.recalculate_quote_totals(quote_id)?;
             }
 
             if let Some(tooth_number) = record.tooth_number {
@@ -2882,7 +2904,7 @@ impl Database {
                 record.patient_id,
                 "clinical.record_deleted",
                 &format!(
-                    r#"{{"record_id":{record_id},"tooth_number":{},"service_id":{}}}"#,
+                    r#"{{"record_id":{record_id},"tooth_number":{},"service_id":{},"detached_locked_quote_lines":{}}}"#,
                     record
                         .tooth_number
                         .map(|value| value.to_string())
@@ -2890,7 +2912,8 @@ impl Database {
                     record
                         .service_id
                         .map(|value| value.to_string())
-                        .unwrap_or_else(|| "null".to_owned())
+                        .unwrap_or_else(|| "null".to_owned()),
+                    locked_quote_ids.len()
                 ),
             )?;
 
@@ -6633,6 +6656,95 @@ mod tests {
             .expect("tooth statuses after delete")
             .into_iter()
             .find(|status| status.tooth_number == 16)
+            .expect("tooth status exists");
+        assert_eq!(neutral_tooth.state, "healthy");
+    }
+
+    #[test]
+    fn deleting_clinical_record_linked_to_accepted_quote_detaches_financial_line() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Luca",
+                    last_name: "Quote",
+                    tax_code: "BNCLGU85T41H501W",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let service = db
+            .list_clinical_services(admin.id)
+            .expect("services")
+            .into_iter()
+            .find(|service| service.code == "OTT-001")
+            .expect("base service");
+        let record = db
+            .create_clinical_record(
+                admin.id,
+                &NewClinicalRecord {
+                    patient_id: patient.id,
+                    service_id: Some(service.id),
+                    tooth_number: Some(36),
+                    tooth_surface: None,
+                    pathology_description: Some("Carie"),
+                    status: "diagnosed",
+                    ready_for_quote: true,
+                    notes: None,
+                },
+            )
+            .expect("create clinical record");
+        let quote = db
+            .create_quote_from_ready_records(admin.id, patient.id, "Preventivo accettato")
+            .expect("quote from diagnosis");
+        let accepted = db
+            .update_quote_status(admin.id, quote.id, "accepted")
+            .expect("accept quote");
+
+        db.delete_clinical_record(admin.id, record.id)
+            .expect("delete clinical record linked to accepted quote");
+
+        let updated_quote = db
+            .get_quote_for_document(admin.id, accepted.id)
+            .expect("quote after clinical delete");
+        assert_eq!(updated_quote.lines.len(), 1);
+        assert_eq!(updated_quote.gross_total_cents, service.base_price_cents);
+        assert_eq!(updated_quote.net_total_cents, service.base_price_cents);
+        let linked_record_id: Option<i64> = db
+            .conn
+            .query_row(
+                "SELECT clinical_record_id FROM quote_lines WHERE quote_id = ?1 LIMIT 1",
+                [accepted.id],
+                |row| row.get(0),
+            )
+            .expect("quote line clinical link");
+        assert!(linked_record_id.is_none());
+        let records_after_delete = db
+            .list_clinical_records(
+                admin.id,
+                patient.id,
+                &ClinicalRecordFilters {
+                    date_from: None,
+                    date_to: None,
+                    tooth_number: Some(36),
+                    operator_user_id: None,
+                },
+            )
+            .expect("clinical diary after delete");
+        assert!(records_after_delete.is_empty());
+        let neutral_tooth = db
+            .get_tooth_statuses(admin.id, patient.id)
+            .expect("tooth statuses after delete")
+            .into_iter()
+            .find(|status| status.tooth_number == 36)
             .expect("tooth status exists");
         assert_eq!(neutral_tooth.state, "healthy");
     }
