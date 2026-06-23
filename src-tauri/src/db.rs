@@ -500,6 +500,7 @@ pub struct Invoice {
     pub id: i64,
     pub patient_id: i64,
     pub quote_id: Option<i64>,
+    pub invoice_kind: String,
     pub invoice_number: i64,
     pub invoice_year: i64,
     pub issued_at: String,
@@ -2137,6 +2138,13 @@ impl Database {
 
         let result = (|| {
             self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            let deposit_total = self.quote_deposit_total_without_tx(quote.id)?;
+            let final_total = quote.net_total_cents - deposit_total;
+            if final_total <= 0 {
+                return Err(DbError::InvalidFinancialState(
+                    "quote is already fully covered by deposit invoices".to_owned(),
+                ));
+            }
             let invoice_year: i64 = self.conn.query_row(
                 "SELECT CAST(strftime('%Y', 'now') AS INTEGER)",
                 [],
@@ -2156,23 +2164,24 @@ impl Database {
                 INSERT INTO invoices (
                     patient_id,
                     quote_id,
+                    invoice_kind,
                     invoice_number,
                     invoice_year,
                     issued_at,
                     total_cents
                 )
-                VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?5)
+                VALUES (?1, ?2, 'final', ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?5)
                 "#,
                 params![
                     quote.patient_id,
                     quote.id,
                     next_number,
                     invoice_year,
-                    quote.net_total_cents
+                    final_total
                 ],
             )?;
             let invoice_id = self.conn.last_insert_rowid();
-            for line in &quote.lines {
+            if deposit_total > 0 {
                 self.conn.execute(
                     r#"
                     INSERT INTO invoice_lines (
@@ -2183,17 +2192,38 @@ impl Database {
                         unit_price_cents,
                         total_cents
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    VALUES (?1, NULL, ?2, 1, ?3, ?3)
                     "#,
                     params![
                         invoice_id,
-                        line.id,
-                        line.description,
-                        line.quantity,
-                        line.unit_price_cents,
-                        line.total_cents
+                        format!("Saldo preventivo #{} al netto acconti", quote.id),
+                        final_total
                     ],
                 )?;
+            } else {
+                for line in &quote.lines {
+                    self.conn.execute(
+                        r#"
+                        INSERT INTO invoice_lines (
+                            invoice_id,
+                            quote_line_id,
+                            description,
+                            quantity,
+                            unit_price_cents,
+                            total_cents
+                        )
+                        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                        "#,
+                        params![
+                            invoice_id,
+                            line.id,
+                            line.description,
+                            line.quantity,
+                            line.unit_price_cents,
+                            line.total_cents
+                        ],
+                    )?;
+                }
             }
             self.insert_patient_audit(
                 actor_user_id,
@@ -2205,7 +2235,8 @@ impl Database {
                     "invoice_id": invoice_id,
                     "invoice_number": next_number,
                     "invoice_year": invoice_year,
-                    "total_cents": quote.net_total_cents,
+                    "total_cents": final_total,
+                    "deposit_total_cents": deposit_total,
                 })
                 .to_string(),
             )?;
@@ -2220,6 +2251,150 @@ impl Database {
                 Err(error)
             }
         }
+    }
+
+    pub fn create_deposit_invoice(
+        &self,
+        actor_user_id: i64,
+        quote_id: i64,
+        amount_cents: i64,
+        method: &str,
+    ) -> DbResult<Invoice> {
+        self.assert_active_user(actor_user_id)?;
+        if amount_cents <= 0 {
+            return Err(DbError::InvalidFinancialState(
+                "deposit amount must be positive".to_owned(),
+            ));
+        }
+        let method = normalize_payment_method(method)?;
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        if quote.status != "accepted" {
+            return Err(DbError::InvalidFinancialState(
+                "quote must be accepted before deposit invoicing".to_owned(),
+            ));
+        }
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            let remaining = self.quote_remaining_cents_without_tx(quote.id, quote.net_total_cents)?;
+            if amount_cents > remaining {
+                return Err(DbError::InvalidFinancialState(
+                    "deposit exceeds quote remaining balance".to_owned(),
+                ));
+            }
+            let invoice_year: i64 = self.conn.query_row(
+                "SELECT CAST(strftime('%Y', 'now') AS INTEGER)",
+                [],
+                |row| row.get(0),
+            )?;
+            let next_number: i64 = self.conn.query_row(
+                r#"
+                SELECT COALESCE(MAX(invoice_number), 0) + 1
+                FROM invoices
+                WHERE invoice_year = ?1
+                "#,
+                [invoice_year],
+                |row| row.get(0),
+            )?;
+            self.conn.execute(
+                r#"
+                INSERT INTO invoices (
+                    patient_id,
+                    quote_id,
+                    invoice_kind,
+                    invoice_number,
+                    invoice_year,
+                    issued_at,
+                    total_cents
+                )
+                VALUES (?1, ?2, 'deposit', ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?5)
+                "#,
+                params![
+                    quote.patient_id,
+                    quote.id,
+                    next_number,
+                    invoice_year,
+                    amount_cents
+                ],
+            )?;
+            let invoice_id = self.conn.last_insert_rowid();
+            self.conn.execute(
+                r#"
+                INSERT INTO invoice_lines (
+                    invoice_id,
+                    quote_line_id,
+                    description,
+                    quantity,
+                    unit_price_cents,
+                    total_cents
+                )
+                VALUES (?1, NULL, ?2, 1, ?3, ?3)
+                "#,
+                params![
+                    invoice_id,
+                    format!("Acconto preventivo #{}", quote.id),
+                    amount_cents
+                ],
+            )?;
+            self.conn.execute(
+                r#"
+                INSERT INTO payments (
+                    invoice_id,
+                    method,
+                    amount_cents,
+                    status,
+                    paid_at
+                )
+                VALUES (?1, ?2, ?3, 'success', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                "#,
+                params![invoice_id, method, amount_cents],
+            )?;
+            let payment_id = self.conn.last_insert_rowid();
+            self.insert_patient_audit(
+                actor_user_id,
+                quote.patient_id,
+                "FINANCIAL_TRANSACTION",
+                &serde_json::json!({
+                    "operation": "deposit_invoice_issued",
+                    "quote_id": quote_id,
+                    "invoice_id": invoice_id,
+                    "payment_id": payment_id,
+                    "invoice_number": next_number,
+                    "invoice_year": invoice_year,
+                    "amount_cents": amount_cents,
+                    "method": method,
+                })
+                .to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(invoice_id)
+        })();
+
+        match result {
+            Ok(invoice_id) => self.get_invoice(invoice_id)?.ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    fn quote_deposit_total_without_tx(&self, quote_id: i64) -> DbResult<i64> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT COALESCE(SUM(total_cents), 0)
+                FROM invoices
+                WHERE quote_id = ?1 AND invoice_kind = 'deposit'
+                "#,
+                [quote_id],
+                |row| row.get(0),
+            )
+            .map_err(DbError::from)
+    }
+
+    fn quote_remaining_cents_without_tx(&self, quote_id: i64, quote_total_cents: i64) -> DbResult<i64> {
+        Ok(quote_total_cents - self.quote_deposit_total_without_tx(quote_id)?)
     }
 
     pub fn register_payment(
@@ -2368,6 +2543,24 @@ impl Database {
     ) -> DbResult<Vec<ToothStatus>> {
         self.assert_active_user(actor_user_id)?;
         self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        self.conn.execute(
+            r#"
+            UPDATE clinical_tooth_statuses
+            SET
+                state = 'healthy',
+                updated_by_user_id = ?2,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE patient_id = ?1
+              AND state <> 'healthy'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM clinical_records
+                  WHERE clinical_records.patient_id = clinical_tooth_statuses.patient_id
+                    AND clinical_records.tooth_number = clinical_tooth_statuses.tooth_number
+              )
+            "#,
+            params![patient_id, actor_user_id],
+        )?;
         let mut statement = self.conn.prepare(
             r#"
             SELECT patient_id, tooth_number, state, updated_by_user_id, updated_at
@@ -4024,7 +4217,7 @@ impl Database {
     fn invoice_for_quote(&self, quote_id: i64) -> DbResult<Option<i64>> {
         self.conn
             .query_row(
-                "SELECT id FROM invoices WHERE quote_id = ?1",
+                "SELECT id FROM invoices WHERE quote_id = ?1 AND invoice_kind = 'final'",
                 [quote_id],
                 |row| row.get(0),
             )
@@ -4041,6 +4234,7 @@ impl Database {
                     invoices.id,
                     invoices.patient_id,
                     invoices.quote_id,
+                    invoices.invoice_kind,
                     invoices.invoice_number,
                     invoices.invoice_year,
                     invoices.issued_at,
@@ -4064,15 +4258,16 @@ impl Database {
                         row.get::<_, i64>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, Option<i64>>(2)?,
-                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(3)?,
                         row.get::<_, i64>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
                         row.get::<_, i64>(7)?,
                         row.get::<_, i64>(8)?,
-                        row.get::<_, String>(9)?,
+                        row.get::<_, i64>(9)?,
                         row.get::<_, String>(10)?,
                         row.get::<_, String>(11)?,
+                        row.get::<_, String>(12)?,
                     ))
                 },
             )
@@ -4082,6 +4277,7 @@ impl Database {
             id,
             patient_id,
             quote_id,
+            invoice_kind,
             invoice_number,
             invoice_year,
             issued_at,
@@ -4101,6 +4297,7 @@ impl Database {
             id,
             patient_id,
             quote_id,
+            invoice_kind,
             invoice_number,
             invoice_year,
             issued_at,
@@ -4917,6 +5114,12 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         "dicom_metadata_json",
         "TEXT NOT NULL DEFAULT '{}'",
     )?;
+    ensure_column(
+        conn,
+        "invoices",
+        "invoice_kind",
+        "TEXT NOT NULL DEFAULT 'final' CHECK(invoice_kind IN ('final', 'deposit'))",
+    )?;
     migrate_tooth_status_constraint(conn)?;
     conn.execute(
         r#"
@@ -5672,6 +5875,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     patient_id INTEGER NOT NULL,
     quote_id INTEGER,
+    invoice_kind TEXT NOT NULL DEFAULT 'final' CHECK(invoice_kind IN ('final', 'deposit')),
     invoice_number INTEGER NOT NULL,
     invoice_year INTEGER NOT NULL,
     issued_at TEXT NOT NULL,
@@ -6529,6 +6733,39 @@ mod tests {
             .expect("second invoice");
         assert_eq!(second_invoice.invoice_year, invoice.invoice_year);
         assert_eq!(second_invoice.invoice_number, 2);
+
+        db.create_clinical_record(
+            admin.id,
+            &NewClinicalRecord {
+                patient_id: patient.id,
+                service_id: Some(service.id),
+                tooth_number: Some(18),
+                tooth_surface: None,
+                pathology_description: Some("Carie"),
+                status: "diagnosed",
+                ready_for_quote: true,
+                notes: None,
+            },
+        )
+        .expect("third clinical record");
+        let deposit_quote = db
+            .create_quote_from_ready_records(admin.id, patient.id, "Preventivo con acconto")
+            .expect("deposit quote");
+        let deposit_quote = db
+            .update_quote_status(admin.id, deposit_quote.id, "accepted")
+            .expect("accept deposit quote");
+        let deposit_invoice = db
+            .create_deposit_invoice(admin.id, deposit_quote.id, 5_000, "cash")
+            .expect("deposit invoice");
+        assert_eq!(deposit_invoice.invoice_kind, "deposit");
+        assert_eq!(deposit_invoice.total_cents, 5_000);
+        assert_eq!(deposit_invoice.paid_cents, 5_000);
+        assert_eq!(deposit_invoice.payment_status, "paid");
+        let final_invoice = db
+            .create_invoice_from_quote(admin.id, deposit_quote.id)
+            .expect("final invoice after deposit");
+        assert_eq!(final_invoice.invoice_kind, "final");
+        assert_eq!(final_invoice.total_cents, deposit_quote.net_total_cents - 5_000);
 
         db.register_payment(
             admin.id,

@@ -158,6 +158,25 @@ export function MobileClinical({
       });
   }, [activePatientId, services, sessionToken]);
 
+  useEffect(() => {
+    if (!activePatientId || !sessionToken || services.length === 0) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      Promise.all([
+        listClinicalRecords(sessionToken, activePatientId, {}),
+        getToothStatuses(sessionToken, activePatientId)
+      ])
+        .then(([records, statuses]) => {
+          setClinicalRecords(records);
+          setRecordedToothRecords(clinicalRecordsToToothRecords(records, services));
+          setToothStates(Object.fromEntries(statuses.map((status) => [status.tooth_number, status.state])));
+        })
+        .catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(interval);
+  }, [activePatientId, services, sessionToken]);
+
   useLayoutEffect(() => {
     if (bridgeGroups.length === 0 || !archRef.current) {
       setBridgeLayouts({});

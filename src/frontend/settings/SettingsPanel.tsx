@@ -6,7 +6,6 @@ import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import {
-  authorizeDevice,
   createUser,
   getPairingCode,
   getStudioSettings,
@@ -39,7 +38,6 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [devices, setDevices] = useState<AuthorizedDevice[]>([]);
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
-  const [oneTimeToken, setOneTimeToken] = useState("");
   const [pairingCode, setPairingCode] = useState<PairingCodeInfo | null>(null);
   const [pairingQrDataUrl, setPairingQrDataUrl] = useState("");
 
@@ -55,7 +53,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     password: "",
     role: "aso" as Role
   });
-  const [deviceForm, setDeviceForm] = useState({ label: "", userId: "", allowedLanCidr: "" });
+  const activeDevices = devices.filter((device) => !device.revoked_at);
 
   async function refresh() {
     if (!backendAvailable) {
@@ -126,6 +124,18 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     };
   }, [pairingCode?.public_url]);
 
+  useEffect(() => {
+    if (!pairingCode || !currentUser?.session_token) {
+      return;
+    }
+
+    const sessionToken = currentUser.session_token;
+    const interval = window.setInterval(() => {
+      void listDevices(sessionToken).then(setDevices).catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(interval);
+  }, [currentUser?.session_token, pairingCode]);
+
   if (!backendAvailable) {
     return (
       <SettingsSurface
@@ -182,24 +192,6 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
 
     await startGoogleCalendarAccountLink(currentUser.session_token);
     setStatusMessage(t("settingsCalendarAccountLinked"));
-    await refresh();
-  }
-
-  async function handleAuthorizeDevice() {
-    if (!currentUser?.session_token) {
-      setStatusMessage(t("settingsLoginRequired"));
-      return;
-    }
-
-    const authorization = await authorizeDevice({
-      session_token: currentUser.session_token,
-      user_id: deviceForm.userId ? Number(deviceForm.userId) : undefined,
-      label: deviceForm.label,
-      allowed_lan_cidr: deviceForm.allowedLanCidr || undefined
-    });
-    setOneTimeToken(authorization.token_once);
-    setDeviceForm({ label: "", userId: "", allowedLanCidr: "" });
-    setStatusMessage(t("settingsDeviceAuthorized"));
     await refresh();
   }
 
@@ -309,21 +301,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
         title={t("settingsDevicesTitle")}
         eyebrow={t("settingsDevicesEyebrow")}
       >
-        <DenseForm>
-          <Input placeholder={t("settingsDeviceLabel")} value={deviceForm.label} onChange={(event) => setDeviceForm({ ...deviceForm, label: event.target.value })} />
-          <Input placeholder={t("settingsDeviceUserId")} value={deviceForm.userId} onChange={(event) => setDeviceForm({ ...deviceForm, userId: event.target.value })} />
-          <Input placeholder={t("settingsLanCidr")} value={deviceForm.allowedLanCidr} onChange={(event) => setDeviceForm({ ...deviceForm, allowedLanCidr: event.target.value })} />
-          <SettingsActionButton onClick={() => void handleAuthorizeDevice()}>
-            <Laptop aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
-            {t("settingsAuthorizeDevice")}
-          </SettingsActionButton>
-        </DenseForm>
-        {oneTimeToken ? (
-          <div className="mt-3 rounded-md border border-powder-blue-500/30 bg-powder-blue-950 p-3 font-mono text-xs text-white">
-            {t("settingsOneTimeToken")}: {oneTimeToken}
-          </div>
-        ) : null}
-        <div className="mt-3 rounded-xl border border-powder-blue-500/25 bg-ink-black-950 p-4">
+        <div className="rounded-xl border border-powder-blue-500/25 bg-ink-black-950 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
@@ -378,33 +356,17 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
         </div>
         <DenseTable
           headers={[t("settingsDeviceLabel"), t("settingsUserId"), t("settingsLanCidr"), t("settingsStatus"), t("settingsAction")]}
-          rows={devices.map((device) => [
+          rows={activeDevices.map((device) => [
             device.label,
             device.user_id ? String(device.user_id) : "-",
             device.allowed_lan_cidr ?? "-",
-            device.revoked_at ? t("settingsRevoked") : t("settingsActive"),
-            device.revoked_at ? "-" : (
-              <SettingsActionButton key={device.id} tone="danger" size="sm" onClick={() => void handleRevokeDevice(device.id)}>
-                <Trash2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.6} />
-                {t("settingsRevoke")}
-              </SettingsActionButton>
-            )
+            t("settingsActive"),
+            <SettingsActionButton key={device.id} tone="danger" size="sm" onClick={() => void handleRevokeDevice(device.id)}>
+              <Trash2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.6} />
+              {t("settingsRevoke")}
+            </SettingsActionButton>
           ])}
         />
-      </SettingsSurface>
-
-      <SettingsSurface
-        icon={<SlidersHorizontal aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
-        title={t("settingsFutureTitle")}
-        eyebrow={t("settingsFutureEyebrow")}
-      >
-        <div className="grid gap-3 md:grid-cols-4">
-          {[t("settingsSumupPlaceholder"), t("settingsGoogleCalendarPlaceholder"), t("settingsRxDriverPlaceholder")].map((item) => (
-            <div key={item} className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-sm text-alabaster-grey-500">
-              {item}
-            </div>
-          ))}
-        </div>
       </SettingsSurface>
     </div>
   );

@@ -85,6 +85,7 @@ pub fn run() {
             commands::add_quote_line,
             commands::update_quote_discount,
             commands::update_quote_status,
+            commands::create_deposit_invoice,
             commands::create_invoice_from_quote,
             commands::list_invoices,
             commands::register_payment,

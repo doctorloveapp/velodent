@@ -24,6 +24,15 @@ interface LanUser {
   active: boolean;
 }
 
+export class LanRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`LAN request failed: ${String(status)}`);
+    this.status = status;
+  }
+}
+
 export function lanBridgeBaseUrl() {
   const host = window.location.hostname || "127.0.0.1";
   return `http://${host}:1422`;
@@ -103,7 +112,7 @@ export async function lanFetch<T>(path: string, sessionOrDeviceToken: string, in
     headers
   });
   if (!response.ok) {
-    throw new Error(`LAN request failed: ${String(response.status)}`);
+    throw new LanRequestError(response.status);
   }
   return (await response.json()) as T;
 }

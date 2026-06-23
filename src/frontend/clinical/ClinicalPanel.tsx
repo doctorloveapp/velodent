@@ -145,6 +145,16 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
     });
   }, [currentUser?.id, currentUser?.session_token, patient.id, auditedPatientId]);
 
+  useEffect(() => {
+    if (!currentUser?.session_token) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void refreshClinicalData().catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(interval);
+  }, [currentUser?.session_token, patient.id, filters.dateFrom, filters.dateTo, filters.operatorUserId, filters.toothNumber]);
+
   if (!currentUser?.session_token) {
     return <p className="text-sm text-alabaster-grey-500">{t("clinicalLoginRequired")}</p>;
   }

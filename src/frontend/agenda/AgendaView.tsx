@@ -375,7 +375,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
           </Button>
         </div>
         <div className="grid justify-items-end gap-2">
-          {mode === "week" ? <WeekAvailabilitySummary appointments={appointments} days={visibleDays} t={t} /> : null}
+          {mode === "week" ? <WeekAvailabilitySummary appointments={appointments} blocks={agendaBlocks} days={visibleDays} t={t} /> : null}
           <div className="inline-flex rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-1">
             {(["day", "week"] as const).map((option) => (
               <button
@@ -520,7 +520,7 @@ function PageTitle({ eyebrow, title }: { eyebrow: string; title: string }) {
   );
 }
 
-function WeekAvailabilitySummary({ appointments, days, t }: { appointments: Appointment[]; days: string[]; t: (key: L10nKey) => string }) {
+function WeekAvailabilitySummary({ appointments, blocks, days, t }: { appointments: Appointment[]; blocks: AgendaBlock[]; days: string[]; t: (key: L10nKey) => string }) {
   return (
     <div aria-label={t("agendaModeWeek")} className="grid grid-cols-7 gap-1 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 px-2 py-2">
       {days.map((day) => (
@@ -529,10 +529,11 @@ function WeekAvailabilitySummary({ appointments, days, t }: { appointments: Appo
           <div className="grid grid-cols-3 gap-0.5">
             {HOURS.map((hour) => {
               const hasAppointments = appointmentsForSlot(appointments, day, hour).length > 0;
+              const hasClosure = blocksForSlot(blocks, day, hour).length > 0;
               return (
                 <span
                   key={`${day}-${String(hour)}`}
-                  className={`h-1.5 w-1.5 rounded-full ${hasAppointments ? "bg-powder-blue-500 shadow-[0_0_8px_rgba(56,142,216,0.55)]" : "border border-alabaster-grey-500/20 bg-transparent"}`}
+                  className={`h-1.5 w-1.5 rounded-full ${hasClosure ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.55)]" : hasAppointments ? "bg-powder-blue-500 shadow-[0_0_8px_rgba(56,142,216,0.55)]" : "border border-alabaster-grey-500/20 bg-transparent"}`}
                 />
               );
             })}

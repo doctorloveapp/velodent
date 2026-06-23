@@ -5,10 +5,9 @@ import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { useL10n, type L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
-import { listClinicalServices, type ClinicalService } from "@/frontend/settings/settingsApi";
 import { ClinicalPanel } from "@/frontend/clinical/ClinicalPanel";
 import {
-  addQuoteLine,
+  createDepositInvoice,
   createInvoiceFromQuote,
   createQuoteFromDiagnosis,
   formatCents,
@@ -448,12 +447,11 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
   const { t } = useL10n();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [services, setServices] = useState<ClinicalService[]>([]);
   const [selectedQuoteId, setSelectedQuoteId] = useState("");
-  const [serviceId, setServiceId] = useState("");
-  const [quantity, setQuantity] = useState("1");
   const [discount, setDiscount] = useState("0.00");
   const [paymentAmount, setPaymentAmount] = useState("");
+  const [depositAmount, setDepositAmount] = useState("");
+  const [depositMethod, setDepositMethod] = useState<"cash" | "bank_transfer">("cash");
   const [statusMessage, setStatusMessage] = useState("");
 
   async function refreshBilling() {
@@ -461,14 +459,12 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
       setStatusMessage(t("patientsLoginRequired"));
       return;
     }
-    const [nextQuotes, nextInvoices, nextServices] = await Promise.all([
+    const [nextQuotes, nextInvoices] = await Promise.all([
       listQuotes(currentUser.session_token, patient.id),
-      listInvoices(currentUser.session_token, patient.id),
-      listClinicalServices(currentUser.session_token)
+      listInvoices(currentUser.session_token, patient.id)
     ]);
     setQuotes(nextQuotes);
     setInvoices(nextInvoices);
-    setServices(nextServices);
     if (!selectedQuoteId && nextQuotes[0]) {
       setSelectedQuoteId(String(nextQuotes[0].id));
       setDiscount((nextQuotes[0].discount_cents / 100).toFixed(2));
@@ -482,6 +478,11 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
   }, [patient.id, currentUser?.session_token]);
 
   const selectedQuote = quotes.find((quote) => String(quote.id) === selectedQuoteId) ?? quotes.at(0) ?? null;
+  const depositInvoices = selectedQuote
+    ? invoices.filter((invoice) => invoice.quote_id === selectedQuote.id && invoice.invoice_kind === "deposit")
+    : [];
+  const depositTotalCents = depositInvoices.reduce((total, invoice) => total + invoice.total_cents, 0);
+  const selectedQuoteBalanceCents = selectedQuote ? Math.max(0, selectedQuote.net_total_cents - depositTotalCents) : 0;
 
   async function handleCreateQuote() {
     if (!currentUser?.session_token) {
@@ -491,16 +492,6 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
     const quote = await createQuoteFromDiagnosis(currentUser.session_token, patient.id, t("billingQuoteDefaultTitle"));
     setSelectedQuoteId(String(quote.id));
     setStatusMessage(t("billingQuoteCreated"));
-    await refreshBilling();
-  }
-
-  async function handleAddLine() {
-    if (!currentUser?.session_token || !selectedQuote || !serviceId) {
-      return;
-    }
-    const quote = await addQuoteLine(currentUser.session_token, selectedQuote.id, Number(serviceId), Number(quantity) || 1);
-    setSelectedQuoteId(String(quote.id));
-    setStatusMessage(t("billingQuoteLineAdded"));
     await refreshBilling();
   }
 
@@ -530,6 +521,21 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
     }
     await createInvoiceFromQuote(currentUser.session_token, selectedQuote.id);
     setStatusMessage(t("billingInvoiceIssued"));
+    await refreshBilling();
+  }
+
+  async function handleDepositInvoice() {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    await createDepositInvoice(
+      currentUser.session_token,
+      selectedQuote.id,
+      euroInputToCents(depositAmount),
+      depositMethod
+    );
+    setDepositAmount("");
+    setStatusMessage(t("billingDepositIssued"));
     await refreshBilling();
   }
 
@@ -621,30 +627,54 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                   formatCents(line.total_cents)
                 ])}
               />
-              <div className="grid min-w-0 gap-2 md:grid-cols-[minmax(0,1fr)_100px_auto]">
-                <select
-                  className="h-10 min-w-0 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
-                  disabled={selectedQuote.status !== "draft"}
-                  value={serviceId}
-                  onChange={(event) => setServiceId(event.target.value)}
-                >
-                  <option value="">{t("billingSelectService")}</option>
-                  {services.map((service) => (
-                    <option key={service.id} value={service.id}>
-                      {service.code} - {service.name}
-                    </option>
-                  ))}
-                </select>
-                <Input disabled={selectedQuote.status !== "draft"} min={1} type="number" value={quantity} onChange={(event) => setQuantity(event.target.value)} />
-                <Button disabled={selectedQuote.status !== "draft"} type="button" variant="secondary" onClick={() => void handleAddLine().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
-                  {t("billingAddLine")}
-                </Button>
+              <div className="grid gap-3 rounded-md border border-powder-blue-500/20 bg-glaucous-950 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-sm font-semibold text-white">{t("billingDepositsTitle")}</h4>
+                  <Badge variant="default">{t("billingBalanceDue")}: {formatCents(selectedQuoteBalanceCents)}</Badge>
+                </div>
+                {depositInvoices.length ? (
+                  <div className="grid gap-2">
+                    {depositInvoices.map((invoice) => (
+                      <div key={invoice.id} className="flex items-center justify-between gap-3 rounded-md border border-alabaster-grey-500/15 bg-ink-black-950 px-3 py-2 text-sm">
+                        <span className="font-mono text-alabaster-grey-500">{invoice.issued_at.slice(0, 10)}</span>
+                        <span className="font-semibold text-white">{formatCents(invoice.total_cents)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-alabaster-grey-500">{t("billingDepositsEmpty")}</p>
+                )}
+                <div className="grid gap-2 md:grid-cols-[120px_160px_auto]">
+                  <Input
+                    disabled={selectedQuote.status !== "accepted" || selectedQuoteBalanceCents <= 0}
+                    min={0}
+                    placeholder={t("billingDepositAmount")}
+                    step="0.01"
+                    type="number"
+                    value={depositAmount}
+                    onChange={(event) => setDepositAmount(event.target.value)}
+                  />
+                  <select
+                    className="h-10 min-w-0 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
+                    disabled={selectedQuote.status !== "accepted" || selectedQuoteBalanceCents <= 0}
+                    value={depositMethod}
+                    onChange={(event) => setDepositMethod(event.target.value as "cash" | "bank_transfer")}
+                  >
+                    <option value="cash">{t("billingCash")}</option>
+                    <option value="bank_transfer">{t("billingBankTransfer")}</option>
+                  </select>
+                  <Button disabled={selectedQuote.status !== "accepted" || !depositAmount.trim() || selectedQuoteBalanceCents <= 0} type="button" variant="secondary" onClick={() => void handleDepositInvoice().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingCreateDeposit")}
+                  </Button>
+                </div>
               </div>
               <div className="grid min-w-0 gap-3 border-t border-alabaster-grey-500/15 pt-3 2xl:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
                 <div className="grid gap-1 text-sm text-alabaster-grey-500">
                   <span>{t("billingGross")}: {formatCents(selectedQuote.gross_total_cents)}</span>
                   <span>{t("billingDiscount")}: {formatCents(selectedQuote.discount_cents)}</span>
                   <span className="font-semibold text-white">{t("billingNet")}: {formatCents(selectedQuote.net_total_cents)}</span>
+                  <span>{t("billingDepositsTitle")}: {formatCents(depositTotalCents)}</span>
+                  <span className="font-semibold text-powder-blue-100">{t("billingBalanceDue")}: {formatCents(selectedQuoteBalanceCents)}</span>
                 </div>
                 <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 2xl:justify-end">
                   <Input className="w-28 shrink-0" disabled={selectedQuote.status !== "draft"} type="number" min={0} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} />
@@ -679,10 +709,13 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
             invoices.map((invoice) => (
               <div key={invoice.id} className="grid gap-3 rounded-md border border-alabaster-grey-500/15 bg-glaucous-950 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-mono text-sm text-white">{invoice.invoice_number}/{invoice.invoice_year}</span>
-                  <Badge variant={invoice.payment_status === "paid" ? "success" : invoice.payment_status === "partial" ? "warning" : "default"}>
-                    {t(invoiceStatusKey(invoice.payment_status))}
-                  </Badge>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-sm text-white">{invoice.invoice_number}/{invoice.invoice_year}</span>
+                    <Badge variant={invoice.invoice_kind === "deposit" ? "warning" : "default"}>
+                      {t(invoice.invoice_kind === "deposit" ? "billingInvoiceDeposit" : "billingInvoiceFinal")}
+                    </Badge>
+                  </div>
+                  <Badge variant={invoice.payment_status === "paid" ? "success" : invoice.payment_status === "partial" ? "warning" : "default"}>{t(invoiceStatusKey(invoice.payment_status))}</Badge>
                 </div>
                 <div className="grid gap-1 text-sm text-alabaster-grey-500">
                   <span>{t("billingIssuedAt")}: {invoice.issued_at}</span>
@@ -690,16 +723,20 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                   <span>{t("billingPaid")}: {formatCents(invoice.paid_cents)}</span>
                 </div>
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <Input className="w-28 shrink-0" type="number" min={0} step="0.01" placeholder={t("billingPaymentAmount")} value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} />
-                  <Button type="button" variant="secondary" size="sm" onClick={() => void handlePayment(invoice, "cash").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
-                    {t("billingCash")}
-                  </Button>
-                  <Button type="button" variant="secondary" size="sm" onClick={() => void handlePayment(invoice, "bank_transfer").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
-                    {t("billingBankTransfer")}
-                  </Button>
-                  <Button type="button" variant="secondary" size="sm" onClick={() => void handleSumup(invoice).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
-                    {t("billingSumup")}
-                  </Button>
+                  {invoice.payment_status !== "paid" ? (
+                    <>
+                      <Input className="w-28 shrink-0" type="number" min={0} step="0.01" placeholder={t("billingPaymentAmount")} value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} />
+                      <Button type="button" variant="secondary" size="sm" onClick={() => void handlePayment(invoice, "cash").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                        {t("billingCash")}
+                      </Button>
+                      <Button type="button" variant="secondary" size="sm" onClick={() => void handlePayment(invoice, "bank_transfer").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                        {t("billingBankTransfer")}
+                      </Button>
+                      <Button type="button" variant="secondary" size="sm" onClick={() => void handleSumup(invoice).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                        {t("billingSumup")}
+                      </Button>
+                    </>
+                  ) : null}
                   <Button type="button" variant="secondary" size="sm" onClick={() => void handleInvoicePdf(invoice).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
                     {t("billingPdf")}
                   </Button>

@@ -439,6 +439,14 @@ pub struct RegisterPaymentRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CreateDepositInvoiceRequest {
+    session_token: String,
+    quote_id: i64,
+    amount_cents: i64,
+    method: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct StartSumupPaymentRequest {
     session_token: String,
     invoice_id: i64,
@@ -1310,6 +1318,18 @@ pub fn create_invoice_from_quote(
     state
         .database()?
         .create_invoice_from_quote(actor.id, request.quote_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn create_deposit_invoice(
+    state: State<'_, AppState>,
+    request: CreateDepositInvoiceRequest,
+) -> Result<Invoice, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .create_deposit_invoice(actor.id, request.quote_id, request.amount_cents, request.method.trim())
         .map_err(|error| error.to_string())
 }
 

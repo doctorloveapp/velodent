@@ -6,6 +6,7 @@ import { Input } from "@/frontend/shared/ui/input";
 import type { User } from "@/frontend/settings/settingsApi";
 import {
   clearStoredLanDeviceToken,
+  LanRequestError,
   lanCurrentUser,
   lanHealth,
   pairLanDevice,
@@ -67,8 +68,10 @@ export function MobilePairingGate({ onPaired }: MobilePairingGateProps) {
           onPaired(user);
         }
       })
-      .catch(() => {
-        clearStoredLanDeviceToken();
+      .catch((error: unknown) => {
+        if (error instanceof LanRequestError && (error.status === 401 || error.status === 403)) {
+          clearStoredLanDeviceToken();
+        }
         if (mounted) {
           setStatusMessage(t("mobilePairingStoredTokenInvalid"));
         }
@@ -132,7 +135,6 @@ export function MobilePairingGate({ onPaired }: MobilePairingGateProps) {
             className="h-14 justify-center text-base"
             disabled={checking || pin.length !== 6}
             onClick={() => void handlePair().catch(() => {
-              clearStoredLanDeviceToken();
               setStatusMessage(t("mobilePairingFailed"));
             })}
           >

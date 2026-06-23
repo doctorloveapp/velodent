@@ -90,7 +90,7 @@ export function MobileShell({
           </div>
 
           <div className="flex items-center gap-2">
-            <Badge variant="default" className="h-9 gap-1 px-2 font-mono text-[10px]">
+            <Badge variant="default" className="h-9 gap-1 px-2 font-mono text-[10px]" title={t("syncReadyHelp")}>
               <Wifi aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
               <span className="hidden min-[380px]:inline">{t("mobileLanReady")}</span>
               <span className="min-[380px]:hidden">{t("mobileSyncReady")}</span>

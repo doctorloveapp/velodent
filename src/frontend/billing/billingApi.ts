@@ -46,6 +46,7 @@ export interface Invoice {
   id: number;
   patient_id: number;
   quote_id: number | null;
+  invoice_kind: "final" | "deposit";
   invoice_number: number;
   invoice_year: number;
   issued_at: string;
@@ -119,6 +120,15 @@ export async function createInvoiceFromQuote(session_token: string, quote_id: nu
   return invoke<Invoice>("create_invoice_from_quote", { request: { session_token, quote_id } });
 }
 
+export async function createDepositInvoice(
+  session_token: string,
+  quote_id: number,
+  amount_cents: number,
+  method: "cash" | "bank_transfer"
+) {
+  return invoke<Invoice>("create_deposit_invoice", { request: { session_token, quote_id, amount_cents, method } });
+}
+
 export async function generateInvoicePdf(session_token: string, invoice_id: number) {
   return invoke<GeneratedDocument>("generate_invoice_pdf", { request: { session_token, invoice_id } });
 }
@@ -151,4 +161,3 @@ export function euroInputToCents(value: string) {
   }
   return Math.round(parsed * 100);
 }
-

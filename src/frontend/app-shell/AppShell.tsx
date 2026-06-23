@@ -144,7 +144,7 @@ export function AppShell({ currentUser }: AppShellProps) {
             </kbd>
           </div>
 
-          <Badge variant="default" className="font-mono">
+          <Badge variant="default" className="font-mono" title={t("syncReadyHelp")}>
             <Wifi aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
             {t("syncReady")}
           </Badge>
