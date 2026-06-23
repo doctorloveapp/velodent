@@ -490,6 +490,8 @@
   "clinicalQuoteReady": "In preventivo",
   "clinicalQuoteMark": "Marca",
   "clinicalQuoteNotEligible": "Non eleggibile",
+  "clinicalQuoteAlreadyInQuote": "Gia' in preventivo",
+  "clinicalQuotePerformed": "Eseguita",
   "clinicalStatusDiagnosed": "Diagnosticata",
   "clinicalStatusInQuote": "In preventivo",
   "clinicalStatusPerformed": "Eseguita"

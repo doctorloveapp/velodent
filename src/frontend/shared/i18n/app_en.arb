@@ -490,6 +490,8 @@
   "clinicalQuoteReady": "In quote",
   "clinicalQuoteMark": "Mark",
   "clinicalQuoteNotEligible": "Not eligible",
+  "clinicalQuoteAlreadyInQuote": "Already in quote",
+  "clinicalQuotePerformed": "Performed",
   "clinicalStatusDiagnosed": "Diagnosed",
   "clinicalStatusInQuote": "In quote",
   "clinicalStatusPerformed": "Performed"

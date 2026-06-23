@@ -490,6 +490,8 @@ export const translations = {
     clinicalQuoteReady: "In preventivo",
     clinicalQuoteMark: "Marca",
     clinicalQuoteNotEligible: "Non eleggibile",
+    clinicalQuoteAlreadyInQuote: "Gia' in preventivo",
+    clinicalQuotePerformed: "Eseguita",
     clinicalStatusDiagnosed: "Diagnosticata",
     clinicalStatusInQuote: "In preventivo",
     clinicalStatusPerformed: "Eseguita"
@@ -985,6 +987,8 @@ export const translations = {
     clinicalQuoteReady: "In quote",
     clinicalQuoteMark: "Mark",
     clinicalQuoteNotEligible: "Not eligible",
+    clinicalQuoteAlreadyInQuote: "Already in quote",
+    clinicalQuotePerformed: "Performed",
     clinicalStatusDiagnosed: "Diagnosed",
     clinicalStatusInQuote: "In quote",
     clinicalStatusPerformed: "Performed"

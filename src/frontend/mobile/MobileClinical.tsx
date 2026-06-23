@@ -14,7 +14,7 @@ import {
 } from "@/frontend/clinical/clinicalApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
-import { clinicalServiceMatchesQuickAction } from "@/frontend/clinical/serviceCategories";
+import { clinicalServiceGroupKey, clinicalServiceMatchesQuickAction } from "@/frontend/clinical/serviceCategories";
 import { calculateBridgePreview } from "./bridge";
 
 type ClinicalMobileMode = "clinical" | "orthodontics";
@@ -636,30 +636,26 @@ function normalizeToothStates(
   );
 }
 
-function quickActionFromCategory(category: string): QuickAction | null {
-  if (category.includes("conservativa")) {
+function quickActionFromCategory(category: string | null): QuickAction | null {
+  const value = category?.trim().toLowerCase() ?? "";
+  const group = clinicalServiceGroupKey(category);
+  if (group === "conservative") {
     return "caries";
   }
-  if (category.includes("endodonzia")) {
+  if (group === "endodontics") {
     return "endodontics";
   }
-  if (
-    category.includes("parodont")
-    || category.includes("diagnosi")
-    || category.includes("igiene")
-    || category.includes("visita")
-    || category.includes("rx")
-  ) {
-    return "periodontics";
+  if (group === "prosthesis" && value.includes("protesi mobile")) {
+    return "mobileProsthesis";
   }
-  if (category.includes("protesi fissa")) {
+  if (group === "prosthesis") {
     return "crown";
   }
-  if (category.includes("chirurgia orale")) {
+  if (group === "surgery") {
     return "extraction";
   }
-  if (category.includes("protesi mobile")) {
-    return "mobileProsthesis";
+  if (group === "various") {
+    return "periodontics";
   }
   return null;
 }

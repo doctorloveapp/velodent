@@ -8,7 +8,7 @@ import { useL10n, type L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import type { Patient } from "@/frontend/patients/patientsApi";
 import type { User } from "@/frontend/settings/settingsApi";
 import { calculateBridgePreview } from "@/frontend/mobile/bridge";
-import { clinicalServiceMatchesQuickAction } from "@/frontend/clinical/serviceCategories";
+import { clinicalServiceGroupKey, clinicalServiceMatchesQuickAction } from "@/frontend/clinical/serviceCategories";
 import {
   createClinicalRecord,
   deleteClinicalRecord,
@@ -472,7 +472,7 @@ function ClinicalDiary({ onToggleQuote, records }: { onToggleQuote: (record: Cli
                       {record.ready_for_quote ? t("clinicalQuoteReady") : t("clinicalQuoteMark")}
                     </Button>
                   ) : (
-                    <Badge variant="default">{t("clinicalQuoteNotEligible")}</Badge>
+                    <Badge variant="default">{t(quoteEligibilityStatusKey(record.status))}</Badge>
                   )}
                 </td>
               </tr>
@@ -517,32 +517,38 @@ function normalizeToothStates(
   );
 }
 
-function quickActionFromCategory(category: string): QuickAction | null {
-  if (category.includes("conservativa")) {
+function quickActionFromCategory(category: string | null): QuickAction | null {
+  const value = category?.trim().toLowerCase() ?? "";
+  const group = clinicalServiceGroupKey(category);
+  if (group === "conservative") {
     return "caries";
   }
-  if (category.includes("endodonzia")) {
+  if (group === "endodontics") {
     return "endodontics";
   }
-  if (
-    category.includes("parodont")
-    || category.includes("diagnosi")
-    || category.includes("igiene")
-    || category.includes("visita")
-    || category.includes("rx")
-  ) {
-    return "periodontics";
-  }
-  if (category.includes("protesi fissa")) {
-    return "crown";
-  }
-  if (category.includes("chirurgia orale")) {
-    return "extraction";
-  }
-  if (category.includes("protesi mobile")) {
+  if (group === "prosthesis" && value.includes("protesi mobile")) {
     return "mobileProsthesis";
   }
+  if (group === "prosthesis") {
+    return "crown";
+  }
+  if (group === "surgery") {
+    return "extraction";
+  }
+  if (group === "various") {
+    return "periodontics";
+  }
   return null;
+}
+
+function quoteEligibilityStatusKey(status: ClinicalRecordStatus): L10nKey {
+  if (status === "in_quote") {
+    return "clinicalQuoteAlreadyInQuote";
+  }
+  if (status === "performed") {
+    return "clinicalQuotePerformed";
+  }
+  return "clinicalQuoteNotEligible";
 }
 
 function buildProsthesisGroups(records: Partial<Record<number, RecordedToothRecord>>, visibleTeeth: number[]): ProsthesisGroup[] {
