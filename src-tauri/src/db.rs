@@ -3098,6 +3098,42 @@ impl Database {
         Ok(asset)
     }
 
+    pub fn delete_rx_asset(&self, actor_user_id: i64, rx_asset_id: i64) -> DbResult<RxAsset> {
+        self.assert_active_user(actor_user_id)?;
+        let asset = self.get_rx_asset(rx_asset_id)?.ok_or(DbError::NotFound)?;
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            let affected = self.conn.execute(
+                "DELETE FROM file_assets WHERE id = ?1",
+                [asset.file_asset_id],
+            )?;
+            if affected == 0 {
+                return Err(DbError::NotFound);
+            }
+            self.insert_patient_audit(
+                actor_user_id,
+                asset.patient_id,
+                "FILE_DELETE",
+                &serde_json::json!({
+                    "rx_asset_id": asset.id,
+                    "file_asset_id": asset.file_asset_id,
+                    "sub_type": asset.sub_type,
+                })
+                .to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => Ok(asset),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     pub fn chair_config(&self, actor_user_id: i64) -> DbResult<ChairConfig> {
         self.assert_active_user(actor_user_id)?;
         Ok(ChairConfig {
@@ -3695,6 +3731,47 @@ impl Database {
             return Ok(affected > 0);
         }
 
+        let matching_local_id: Option<i64> = self
+            .conn
+            .query_row(
+                r#"
+                SELECT appointments.id
+                FROM appointments
+                LEFT JOIN patients ON patients.id = appointments.patient_id
+                WHERE
+                    appointments.google_calendar_event_id IS NULL
+                    AND appointments.starts_at = ?1
+                    AND appointments.ends_at = ?2
+                    AND appointments.status != 'cancelled'
+                    AND (
+                        appointments.title = ?3
+                        OR (
+                            patients.id IS NOT NULL
+                            AND patients.last_name || ' ' || patients.first_name || ' - ' || appointments.title = ?3
+                        )
+                    )
+                ORDER BY appointments.updated_at DESC
+                LIMIT 1
+                "#,
+                params![starts_at.trim(), ends_at.trim(), normalized_title],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(appointment_id) = matching_local_id {
+            let affected = self.conn.execute(
+                r#"
+                UPDATE appointments
+                SET
+                    google_calendar_event_id = ?1,
+                    last_google_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?2
+                "#,
+                params![event_id, appointment_id],
+            )?;
+            return Ok(affected > 0);
+        }
+
         self.conn.execute(
             r#"
             INSERT INTO appointments (
@@ -3881,9 +3958,16 @@ impl Database {
                 attempts = attempts + 1,
                 last_error = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?1
+            WHERE
+                id = ?1
+                OR (
+                    integration_type = 'google_calendar'
+                    AND entity_type = 'appointment'
+                    AND entity_id = ?2
+                    AND status IN ('queued', 'failed')
+                )
             "#,
-            [job_id],
+            params![job_id, appointment_id],
         )?;
         Ok(())
     }
@@ -3913,9 +3997,16 @@ impl Database {
                 attempts = attempts + 1,
                 last_error = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?1
+            WHERE
+                id = ?1
+                OR (
+                    integration_type = 'google_calendar'
+                    AND entity_type = 'agenda_block'
+                    AND entity_id = ?2
+                    AND status IN ('queued', 'failed')
+                )
             "#,
-            [job_id],
+            params![job_id, block_id],
         )?;
         Ok(())
     }
@@ -6737,6 +6828,26 @@ mod tests {
             .expect("sync jobs count");
         assert_eq!(queued_jobs, 3);
 
+        let first_job_id: i64 = db
+            .conn
+            .query_row(
+                "SELECT id FROM sync_jobs WHERE integration_type = 'google_calendar' AND entity_type = 'appointment' AND entity_id = ?1 ORDER BY id ASC LIMIT 1",
+                [second_chair.id],
+                |row| row.get(0),
+            )
+            .expect("first sync job id");
+        db.complete_google_calendar_sync_job(first_job_id, second_chair.id, "google-event-1")
+            .expect("complete sync jobs for same appointment");
+        let remaining_queued_for_moved: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_jobs WHERE integration_type = 'google_calendar' AND entity_type = 'appointment' AND entity_id = ?1 AND status IN ('queued', 'failed')",
+                [second_chair.id],
+                |row| row.get(0),
+            )
+            .expect("remaining queued sync jobs count");
+        assert_eq!(remaining_queued_for_moved, 0);
+
         let audit_count: i64 = db
             .conn
             .query_row(
@@ -6874,6 +6985,71 @@ mod tests {
             .expect("pending retry jobs");
         assert_eq!(retryable.len(), 1);
         assert_eq!(retryable[0].job_id, job_id);
+    }
+
+    #[test]
+    fn google_calendar_remote_event_attaches_to_matching_local_appointment() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Marta",
+                    last_name: "Agenda",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let appointment = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Visita di controllo",
+                    starts_at: "2026-06-20T09:00:00+02:00",
+                    ends_at: "2026-06-20T09:30:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: None,
+                },
+            )
+            .expect("create appointment");
+
+        let changed = db
+            .upsert_google_calendar_remote_appointment(
+                admin.id,
+                "google-event-matching-local",
+                "Agenda Marta - Visita di controllo",
+                "2026-06-20T09:00:00+02:00",
+                "2026-06-20T09:30:00+02:00",
+                "2099-01-01T00:00:00.000Z",
+            )
+            .expect("attach remote event");
+        assert!(changed);
+
+        let appointments_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM appointments", [], |row| row.get(0))
+            .expect("appointment count");
+        assert_eq!(appointments_count, 1);
+        let linked_event_id: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT google_calendar_event_id FROM appointments WHERE id = ?1",
+                [appointment.id],
+                |row| row.get(0),
+            )
+            .expect("linked event id");
+        assert_eq!(linked_event_id.as_deref(), Some("google-event-matching-local"));
     }
 
     #[test]

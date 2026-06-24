@@ -71,7 +71,12 @@ export function PatientModuleWorkspace({ currentUser, module, onPatientSelected,
             {patients.map((patient) => (
               <button
                 key={patient.id}
-                className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-left transition hover:border-powder-blue-500/55"
+                className={[
+                  "rounded-md border p-3 text-left transition",
+                  selectedPatient?.id === patient.id
+                    ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_24px_rgba(251,191,36,0.16)]"
+                    : "border-alabaster-grey-500/20 bg-ink-black-950 hover:border-powder-blue-500/55"
+                ].join(" ")}
                 type="button"
                 onClick={() => void openPatient(patient.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
               >

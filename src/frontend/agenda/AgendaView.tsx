@@ -54,6 +54,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   const [patientSuggestionsOpen, setPatientSuggestionsOpen] = useState(false);
   const [showBlockForm, setShowBlockForm] = useState(false);
   const [timeTouched, setTimeTouched] = useState(false);
+  const [appointmentSaving, setAppointmentSaving] = useState(false);
   const [form, setForm] = useState({
     patientId: "",
     title: t("agendaDefaultAppointmentTitle"),
@@ -159,26 +160,34 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     if (!currentUser?.session_token) {
       return;
     }
+    if (appointmentSaving) {
+      return;
+    }
     if (!form.patientId) {
       setStatusMessage(t("agendaPatientRequired"));
       return;
     }
 
-    const startsAt = localDateTimeWithOffset(form.date, form.time);
-    const endsAt = addMinutesLocalDateTime(form.date, form.time, Number(form.duration) || DEFAULT_DURATION_MINUTES);
-    await createAppointment(currentUser.session_token, {
-      patient_id: form.patientId ? Number(form.patientId) : undefined,
-      chair_number: Number(form.chairNumber) || 1,
-      title: form.title.trim(),
-      starts_at: startsAt,
-      ends_at: endsAt,
-      status: "booked",
-      color_tag: "powder_blue"
-    });
-    setStatusMessage(t("agendaAppointmentCreated"));
-    setForm({ ...form, title: t("agendaDefaultAppointmentTitle") });
-    setTimeTouched(false);
-    await refreshAgenda();
+    setAppointmentSaving(true);
+    try {
+      const startsAt = localDateTimeWithOffset(form.date, form.time);
+      const endsAt = addMinutesLocalDateTime(form.date, form.time, Number(form.duration) || DEFAULT_DURATION_MINUTES);
+      await createAppointment(currentUser.session_token, {
+        patient_id: form.patientId ? Number(form.patientId) : undefined,
+        chair_number: Number(form.chairNumber) || 1,
+        title: form.title.trim(),
+        starts_at: startsAt,
+        ends_at: endsAt,
+        status: "booked",
+        color_tag: "powder_blue"
+      });
+      setStatusMessage(t("agendaAppointmentCreated"));
+      setForm({ ...form, title: t("agendaDefaultAppointmentTitle") });
+      setTimeTouched(false);
+      await refreshAgenda();
+    } finally {
+      setAppointmentSaving(false);
+    }
   }
 
   async function handleCreateBlock() {
@@ -234,9 +243,22 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     if (!currentUser?.session_token) {
       return;
     }
-    await updateAppointmentStatus(currentUser.session_token, appointment.id, status);
+    setAppointments((current) => current.map((item) => item.id === appointment.id ? { ...item, status } : item));
+    const updated = await updateAppointmentStatus(currentUser.session_token, appointment.id, status);
+    setAppointments((current) => current.map((item) => item.id === updated.id ? updated : item));
     setStatusMessage(t("agendaStatusUpdated"));
     await refreshAgenda();
+  }
+
+  function selectAppointmentSlot(targetDate: string, chairNumber: number, time: string) {
+    setAnchorDate(targetDate);
+    setTimeTouched(true);
+    setForm((current) => ({
+      ...current,
+      chairNumber: String(chairNumber),
+      date: targetDate,
+      time
+    }));
   }
 
   return (
@@ -309,7 +331,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
           </select>
         </div>
         <Button
-          disabled={!form.patientId}
+          disabled={!form.patientId || appointmentSaving}
           title={!form.patientId ? t("agendaPatientRequiredTooltip") : undefined}
           type="button"
           onClick={() => void handleCreateAppointment()}
@@ -429,6 +451,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
                     chairNumbers={chairNumbers}
                     day={day}
                     slot={slot}
+                    onSlotSelect={selectAppointmentSlot}
                     onDrop={(targetDate, chairNumber, targetTime, data) => void handleDrop(targetDate, chairNumber, targetTime, data).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}
                     onStatusChange={(appointment, status) => void handleStatusChange(appointment, status).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}
                     t={t}
@@ -450,6 +473,7 @@ function AgendaTimeSlotRow({
   day,
   slot,
   onDrop,
+  onSlotSelect,
   onStatusChange,
   t
 }: {
@@ -459,6 +483,7 @@ function AgendaTimeSlotRow({
   day: string;
   slot: { key: string; label: string };
   onDrop: (day: string, chairNumber: number, time: string, data: string) => void;
+  onSlotSelect: (day: string, chairNumber: number, time: string) => void;
   onStatusChange: (appointment: Appointment, status: AppointmentStatus) => void;
   t: (key: L10nKey) => string;
 }) {
@@ -476,6 +501,7 @@ function AgendaTimeSlotRow({
             event.preventDefault();
             onDrop(day, chair, slot.key, event.dataTransfer.getData("text/plain"));
           }}
+          onClick={() => onSlotSelect(day, chair, slot.key)}
         >
           <div className="grid gap-1">
             {blocks.length > 0 ? (
@@ -490,6 +516,7 @@ function AgendaTimeSlotRow({
                   key={appointment.id}
                   draggable
                   className={`rounded-md border p-2 shadow-[0_10px_26px_rgba(0,0,0,0.18)] ${appointmentStatusClass(appointment.status)}`}
+                  onClick={(event) => event.stopPropagation()}
                   onDragStart={(event) => {
                     const duration = appointmentDurationMinutes(appointment);
                     event.dataTransfer.setData("text/plain", `${String(appointment.id)}:${String(duration)}`);
@@ -507,6 +534,7 @@ function AgendaTimeSlotRow({
                   <select
                     className="mt-2 h-7 w-full rounded border border-white/10 bg-ink-black-950/55 px-2 text-[11px] text-white outline-none"
                     value={appointment.status}
+                    onClick={(event) => event.stopPropagation()}
                     onChange={(event) => onStatusChange(appointment, event.target.value as AppointmentStatus)}
                   >
                     {STATUS_OPTIONS.map((status) => (

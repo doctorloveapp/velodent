@@ -6,7 +6,6 @@ import {
   LogOut,
   Menu,
   Search,
-  Smartphone,
   UserPlus,
   Wifi,
   X,
@@ -28,8 +27,7 @@ export type MobileRouteKey =
   | "clinical"
   | "rx"
   | "orthodontics"
-  | "consents"
-  | "deviceStatus";
+  | "consents";
 
 interface MobileNavItem {
   icon: LucideIcon;
@@ -45,8 +43,7 @@ const mobileNavItems: MobileNavItem[] = [
   { key: "clinical", icon: ClipboardList, labelKey: "mobileClinical" },
   { key: "rx", icon: FileText, labelKey: "mobileRxPhoto" },
   { key: "orthodontics", icon: ClipboardList, labelKey: "mobileOrthodonticsMode" },
-  { key: "consents", icon: FileText, labelKey: "mobileConsents" },
-  { key: "deviceStatus", icon: Smartphone, labelKey: "mobileDeviceStatus" }
+  { key: "consents", icon: FileText, labelKey: "mobileConsents" }
 ];
 
 interface MobileShellProps {

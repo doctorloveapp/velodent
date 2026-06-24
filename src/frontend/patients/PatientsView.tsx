@@ -26,6 +26,7 @@ import {
 import {
   createPatient,
   deletePatient,
+  deleteRxAsset,
   importRxFile,
   isTauriRuntime,
   listRxAssets,
@@ -986,6 +987,23 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
     setContrast(100);
   }
 
+  async function handleDeleteViewerAsset() {
+    if (!currentUser?.session_token || !viewerAsset) {
+      return;
+    }
+    if (!window.confirm(t("rxDeleteConfirmFirst"))) {
+      return;
+    }
+    if (!window.confirm(t("rxDeleteConfirmSecond"))) {
+      return;
+    }
+    const deleted = await deleteRxAsset(currentUser.session_token, viewerAsset.id);
+    setViewerAsset(null);
+    setViewerDataUrl("");
+    setStatusMessage(`${t("rxDeleteCompleted")}: ${deleted.relative_path}`);
+    await refreshAssets();
+  }
+
   useEffect(() => {
     void refreshAssets().catch((error: unknown) => {
       setStatusMessage(error instanceof Error ? error.message : t("rxGenericError"));
@@ -1074,10 +1092,16 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("rxViewerEyebrow")}</p>
                 <h3 className="text-sm font-semibold text-white">{t(rxSubTypeKey(viewerAsset.sub_type, viewerAsset.rx_type))}</h3>
               </div>
-              <Button type="button" variant="secondary" size="sm" onClick={() => setViewerAsset(null)}>
-                <X aria-hidden="true" className="h-4 w-4" />
-                {t("rxViewerClose")}
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="secondary" size="sm" className="border-red-500/35 text-red-100 hover:bg-red-500/15" onClick={() => void handleDeleteViewerAsset().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
+                  <Trash2 aria-hidden="true" className="h-4 w-4" />
+                  {t("rxDeleteAction")}
+                </Button>
+                <Button type="button" variant="secondary" size="sm" onClick={() => setViewerAsset(null)}>
+                  <X aria-hidden="true" className="h-4 w-4" />
+                  {t("rxViewerClose")}
+                </Button>
+              </div>
             </div>
             <div className="flex min-h-0 items-center justify-center overflow-hidden p-4">
               <img

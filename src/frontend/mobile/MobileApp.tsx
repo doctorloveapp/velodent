@@ -54,10 +54,6 @@ const routeContent: Record<MobileRouteKey, RouteContent> = {
   consents: {
     titleKey: "mobileConsentsTitle",
     bodyKey: "mobileConsentsBody"
-  },
-  deviceStatus: {
-    titleKey: "mobileDeviceStatusTitle",
-    bodyKey: "mobileDeviceStatusBody"
   }
 };
 
@@ -168,14 +164,24 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
               />
             )
           ) : activeRoute === "clinical" ? (
-            <MobileClinical
-              activePatientId={activePatient?.id ?? null}
-              assetMode={clinicalAssetMode}
-              mode="clinical"
-              onMissingPatient={handleMissingPatient}
-              onSelectedToothRecordInfo={setSelectedToothRecordInfo}
-              sessionToken={currentUser.session_token ?? ""}
-            />
+            activePatient ? (
+              <MobileClinical
+                activePatientId={activePatient.id}
+                assetMode={clinicalAssetMode}
+                mode="clinical"
+                onMissingPatient={handleMissingPatient}
+                onSelectedToothRecordInfo={setSelectedToothRecordInfo}
+                sessionToken={currentUser.session_token ?? ""}
+              />
+            ) : (
+              <MobilePatientSearch
+                sessionToken={currentUser.session_token ?? ""}
+                onPatientSelect={(patient) => {
+                  setActivePatient(patient);
+                  setActiveRoute("clinical");
+                }}
+              />
+            )
           ) : (
             <MobilePlaceholder
               body={t(activeContent.bodyKey)}

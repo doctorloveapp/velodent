@@ -3,7 +3,7 @@ import {
   ClipboardList,
   FileText,
   Search,
-  Smartphone,
+  SmilePlus,
   UserPlus,
   type LucideIcon
 } from "lucide-react";
@@ -23,8 +23,9 @@ const actions: MobileDashboardAction[] = [
   { route: "agenda", icon: CalendarDays, labelKey: "mobileAgenda" },
   { route: "searchPatient", icon: Search, labelKey: "mobileSearchPatient" },
   { route: "clinical", icon: ClipboardList, labelKey: "mobileClinical" },
-  { route: "consents", icon: FileText, labelKey: "mobileConsents" },
-  { route: "deviceStatus", icon: Smartphone, labelKey: "mobileDeviceStatus" }
+  { route: "rx", icon: FileText, labelKey: "mobileRxPhoto" },
+  { route: "orthodontics", icon: SmilePlus, labelKey: "mobileOrthodonticsMode" },
+  { route: "consents", icon: FileText, labelKey: "mobileConsents" }
 ];
 
 interface MobileDashboardProps {

@@ -174,3 +174,7 @@ export async function rxAssetDataUrl(session_token: string, file_asset_id: numbe
   }
   return invoke<RxAssetDataUrl>("rx_asset_data_url", { request: { session_token, file_asset_id } });
 }
+
+export async function deleteRxAsset(session_token: string, rx_asset_id: number) {
+  return invoke<RxAsset>("delete_rx_asset", { request: { session_token, rx_asset_id } });
+}

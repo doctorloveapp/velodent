@@ -206,6 +206,10 @@ export async function updateStudioSettings(request: {
   return invoke<StudioSettings>("update_studio_settings", { request });
 }
 
+export async function pickStudioLogoPath(session_token: string) {
+  return invoke<string | null>("pick_studio_logo_path", { request: { session_token } });
+}
+
 export async function listClinicalServices(session_token: string) {
   return invoke<ClinicalService[]>("list_clinical_services", { request: { session_token } });
 }

@@ -298,6 +298,12 @@ pub struct RxAssetDataUrlRequest {
     file_asset_id: i64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DeleteRxAssetRequest {
+    session_token: String,
+    rx_asset_id: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct RxAssetDataUrl {
     file_asset_id: i64,
@@ -796,6 +802,18 @@ pub fn update_studio_settings(
             },
         )
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn pick_studio_logo_path(
+    state: State<'_, AppState>,
+    request: ActorRequest,
+) -> Result<Option<String>, String> {
+    require_admin_session(&state, &request.session_token)?;
+    Ok(rfd::FileDialog::new()
+        .add_filter("Logo", &["png", "jpg", "jpeg", "webp", "svg"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -1898,6 +1916,20 @@ pub fn rx_asset_data_url(
         mime_type,
         data_url,
     })
+}
+
+#[tauri::command]
+pub fn delete_rx_asset(
+    state: State<'_, AppState>,
+    request: DeleteRxAssetRequest,
+) -> Result<RxAsset, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let asset = state
+        .database()?
+        .delete_rx_asset(actor.id, request.rx_asset_id)
+        .map_err(|error| error.to_string())?;
+    files::delete_patient_file(&asset.relative_path)?;
+    Ok(asset)
 }
 
 #[tauri::command]

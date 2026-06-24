@@ -53,6 +53,7 @@ pub fn run() {
             commands::get_pairing_code,
             commands::get_studio_settings,
             commands::update_studio_settings,
+            commands::pick_studio_logo_path,
             commands::google_oauth_status,
             commands::google_calendar_sync_status,
             commands::google_calendar_authorization_url,
@@ -105,7 +106,8 @@ pub fn run() {
             commands::pick_rx_folder_and_import,
             commands::mock_acquire_rx,
             commands::list_rx_assets,
-            commands::rx_asset_data_url
+            commands::rx_asset_data_url,
+            commands::delete_rx_asset
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VeloDent");

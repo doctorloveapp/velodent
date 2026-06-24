@@ -14,6 +14,7 @@ import {
   listGoogleCalendarAccounts,
   listDevices,
   listUsers,
+  pickStudioLogoPath,
   revokeDevice,
   startGoogleCalendarAccountLink,
   updateStudioSettings,
@@ -171,6 +172,17 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     await refresh();
   }
 
+  async function handlePickLogoPath() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+    const path = await pickStudioLogoPath(currentUser.session_token);
+    if (path) {
+      setStudioForm((current) => ({ ...current, logoRelativePath: path }));
+    }
+  }
+
   async function handleCreateUser() {
     if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
@@ -242,7 +254,12 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       >
         <DenseForm>
           <Input placeholder={t("settingsClinicName")} value={studioForm.clinicName} onChange={(event) => setStudioForm({ ...studioForm, clinicName: event.target.value })} />
-          <Input placeholder={t("settingsLogoPath")} value={studioForm.logoRelativePath} onChange={(event) => setStudioForm({ ...studioForm, logoRelativePath: event.target.value })} />
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+            <Input placeholder={t("settingsLogoPath")} value={studioForm.logoRelativePath} onChange={(event) => setStudioForm({ ...studioForm, logoRelativePath: event.target.value })} />
+            <SettingsActionButton size="sm" onClick={() => void handlePickLogoPath().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+              {t("settingsPickLogo")}
+            </SettingsActionButton>
+          </div>
           <Input placeholder={t("settingsChairCount")} type="number" min={1} value={studioForm.chairCount} onChange={(event) => setStudioForm({ ...studioForm, chairCount: event.target.value })} />
           <Input placeholder={t("settingsDataDirectory")} value={studioForm.dataDirectory} onChange={(event) => setStudioForm({ ...studioForm, dataDirectory: event.target.value })} />
           <Input placeholder={t("settingsHolidayJson")} value={studioForm.holidayPeriodsJson} onChange={(event) => setStudioForm({ ...studioForm, holidayPeriodsJson: event.target.value })} />
@@ -251,6 +268,11 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             {t("settingsSaveStudio")}
           </SettingsActionButton>
         </DenseForm>
+        <div className="mt-3 grid gap-1 text-xs leading-5 text-alabaster-grey-500">
+          <p>{t("settingsLogoHelp")}</p>
+          <p>{t("settingsDataDirectoryHelp")}</p>
+          <p>{t("settingsHolidayJsonHelp")}</p>
+        </div>
         {settings ? <p className="mt-3 text-xs text-alabaster-grey-500">{t("settingsCurrentChairs")}: {settings.chair_count}</p> : null}
       </SettingsSurface>
 

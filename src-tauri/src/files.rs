@@ -128,6 +128,14 @@ pub fn read_patient_file(relative_path: &str) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|error| error.to_string())
 }
 
+pub fn delete_patient_file(relative_path: &str) -> Result<(), String> {
+    let path = absolute_patient_file_path(relative_path)?;
+    if path.is_file() {
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 pub fn export_patient_file_to_downloads_and_open(
     relative_path: &str,
     filename: &str,

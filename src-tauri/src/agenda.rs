@@ -3,6 +3,7 @@ use crate::{
     integrations::google,
     state::AppState,
 };
+use std::collections::HashSet;
 use tauri::Manager;
 
 const BACKGROUND_SYNC_LIMIT: i64 = 25;
@@ -46,8 +47,12 @@ pub async fn process_google_calendar_sync(
 
     let mut processed = 0;
     let mut failed = 0;
+    let mut seen_appointments = HashSet::new();
 
     for job in jobs {
+        if !seen_appointments.insert(job.appointment.id) {
+            continue;
+        }
         let payload = google_payload_for_appointment(&job.appointment);
         let mut last_event_id = None;
         let mut last_error = None;
@@ -92,7 +97,11 @@ pub async fn process_google_calendar_sync(
         }
     }
 
+    let mut seen_blocks = HashSet::new();
     for job in block_jobs {
+        if !seen_blocks.insert(job.block.id) {
+            continue;
+        }
         let payload = google_payload_for_agenda_block(&job.block);
         let mut last_event_id = None;
         let mut last_error = None;
