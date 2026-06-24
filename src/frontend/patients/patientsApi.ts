@@ -46,6 +46,7 @@ export interface RxAsset {
   sha256_hex: string | null;
   size_bytes: number | null;
   rx_type: string;
+  sub_type: "ORTOPANTOMOGRAFIA" | "ENDORALE" | "PHOTO" | string;
   tooth_number: number | null;
   dicom_metadata_json: string;
   acquired_at: string;
@@ -128,6 +129,7 @@ export async function importRxFile(request: {
   patient_id: number;
   source_path: string;
   rx_type?: string;
+  sub_type?: string;
   tooth_number?: number;
 }) {
   return invoke<RxAsset>("import_rx_file", { request });
@@ -137,6 +139,7 @@ export async function pickRxFileAndImport(request: {
   session_token: string;
   patient_id: number;
   rx_type?: string;
+  sub_type?: string;
   tooth_number?: number;
 }) {
   return invoke<RxAsset>("pick_rx_file_and_import", { request });
@@ -146,15 +149,28 @@ export async function pickRxFolderAndImport(request: {
   session_token: string;
   patient_id: number;
   rx_type?: string;
+  sub_type?: string;
   tooth_number?: number;
 }) {
   return invoke<RxAsset[]>("pick_rx_folder_and_import", { request });
 }
 
 export async function listRxAssets(session_token: string, patient_id: number) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<RxAsset[]>(
+      `/api/rx/assets?patient_id=${encodeURIComponent(String(patient_id))}`,
+      fromLanSessionToken(session_token)
+    );
+  }
   return invoke<RxAsset[]>("list_rx_assets", { request: { session_token, patient_id } });
 }
 
 export async function rxAssetDataUrl(session_token: string, file_asset_id: number) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<RxAssetDataUrl>(
+      `/api/rx/asset-data?file_asset_id=${encodeURIComponent(String(file_asset_id))}`,
+      fromLanSessionToken(session_token)
+    );
+  }
   return invoke<RxAssetDataUrl>("rx_asset_data_url", { request: { session_token, file_asset_id } });
 }

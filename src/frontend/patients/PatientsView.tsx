@@ -872,7 +872,7 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
   const [assets, setAssets] = useState<RxAsset[]>([]);
   const [previews, setPreviews] = useState<Record<number, string>>({});
   const [sourcePath, setSourcePath] = useState("");
-  const [rxType, setRxType] = useState("endoral");
+  const [rxSubType, setRxSubType] = useState<"ORTOPANTOMOGRAFIA" | "ENDORALE">("ENDORALE");
   const [toothNumber, setToothNumber] = useState("");
   const [viewerAsset, setViewerAsset] = useState<RxAsset | null>(null);
   const [viewerDataUrl, setViewerDataUrl] = useState("");
@@ -909,7 +909,8 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
       session_token: currentUser.session_token,
       patient_id: patient.id,
       source_path: sourcePath,
-      rx_type: rxType,
+      rx_type: rxTypeForSubType(rxSubType),
+      sub_type: rxSubType,
       tooth_number: toothNumber.trim() ? Number(toothNumber) : undefined
     });
     setStatusMessage(`${t("rxImportCompleted")}: ${imported.relative_path}`);
@@ -926,7 +927,8 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
     const imported = await pickRxFileAndImport({
       session_token: currentUser.session_token,
       patient_id: patient.id,
-      rx_type: rxType,
+      rx_type: rxTypeForSubType(rxSubType),
+      sub_type: rxSubType,
       tooth_number: toothNumber.trim() ? Number(toothNumber) : undefined
     });
     setStatusMessage(`${t("rxImportCompleted")}: ${imported.relative_path}`);
@@ -942,10 +944,27 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
     const imported = await pickRxFolderAndImport({
       session_token: currentUser.session_token,
       patient_id: patient.id,
-      rx_type: rxType,
+      rx_type: rxTypeForSubType(rxSubType),
+      sub_type: rxSubType,
       tooth_number: toothNumber.trim() ? Number(toothNumber) : undefined
     });
     setStatusMessage(`${t("rxImportFolderCompleted")}: ${String(imported.length)}`);
+    await refreshAssets();
+  }
+
+  async function handlePickPhotoImport() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+
+    const imported = await pickRxFileAndImport({
+      session_token: currentUser.session_token,
+      patient_id: patient.id,
+      rx_type: "photo",
+      sub_type: "PHOTO"
+    });
+    setStatusMessage(`${t("rxPhotoImportCompleted")}: ${imported.relative_path}`);
     await refreshAssets();
   }
 
@@ -975,38 +994,48 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
 
   return (
     <div className="grid gap-4">
-      <div className="grid gap-2 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 xl:grid-cols-[minmax(0,1fr)_160px_120px_auto_auto_auto]">
-        <Input
-          placeholder={t("rxSourcePathPlaceholder")}
-          value={sourcePath}
-          onChange={(event) => setSourcePath(event.target.value)}
-        />
-        <select
-          className="h-10 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
-          value={rxType}
-          onChange={(event) => setRxType(event.target.value)}
-        >
-          <option value="endoral">{t("rxTypeEndoral")}</option>
-          <option value="panoramic">{t("rxTypePanoramic")}</option>
-          <option value="cbct">{t("rxTypeCbct")}</option>
-          <option value="photo">{t("rxTypePhoto")}</option>
-        </select>
-        <Input
-          className="font-mono"
-          placeholder={t("clinicalToothNumber")}
-          value={toothNumber}
-          onChange={(event) => setToothNumber(event.target.value)}
-        />
-        <Button type="button" onClick={() => void handlePickImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
-          {t("rxImportAction")}
-        </Button>
-        <Button type="button" variant="secondary" onClick={() => void handleFolderImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
-          <FolderOpen aria-hidden="true" className="h-4 w-4" />
-          {t("rxImportFolderAction")}
-        </Button>
-        <Button disabled={!sourcePath.trim()} type="button" variant="secondary" onClick={() => void handleImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
-          {t("rxImportManualPathAction")}
-        </Button>
+      <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
+        <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_210px_120px_auto_auto_auto]">
+          <Input
+            placeholder={t("rxSourcePathPlaceholder")}
+            value={sourcePath}
+            onChange={(event) => setSourcePath(event.target.value)}
+          />
+          <select
+            aria-label={t("rxSubTypeLabel")}
+            className="h-10 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
+            value={rxSubType}
+            onChange={(event) => setRxSubType(event.target.value as "ORTOPANTOMOGRAFIA" | "ENDORALE")}
+          >
+            <option value="ORTOPANTOMOGRAFIA">{t("rxSubTypeOrtopantomografia")}</option>
+            <option value="ENDORALE">{t("rxSubTypeEndorale")}</option>
+          </select>
+          <Input
+            className="font-mono"
+            placeholder={t("clinicalToothNumber")}
+            value={toothNumber}
+            onChange={(event) => setToothNumber(event.target.value)}
+          />
+          <Button type="button" onClick={() => void handlePickImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
+            {t("rxImportAction")}
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => void handleFolderImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
+            <FolderOpen aria-hidden="true" className="h-4 w-4" />
+            {t("rxImportFolderAction")}
+          </Button>
+          <Button disabled={!sourcePath.trim()} type="button" variant="secondary" onClick={() => void handleImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
+            {t("rxImportManualPathAction")}
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-powder-blue-500/20 bg-powder-blue-950/30 p-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("rxPhotoUploadTitle")}</p>
+            <p className="mt-1 text-sm text-alabaster-grey-500">{t("rxPhotoUploadBody")}</p>
+          </div>
+          <Button type="button" variant="secondary" onClick={() => void handlePickPhotoImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
+            {t("rxPhotoImportAction")}
+          </Button>
+        </div>
       </div>
       {statusMessage ? <p className="text-xs leading-5 text-alabaster-grey-500">{statusMessage}</p> : null}
       {assets.length === 0 ? (
@@ -1028,8 +1057,9 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
                 )}
               </div>
               <div className="grid gap-1 p-3">
-                <span className="text-sm font-semibold text-white">{t(rxTypeKey(asset.rx_type))}</span>
+                <span className="text-sm font-semibold text-white">{t(rxSubTypeKey(asset.sub_type, asset.rx_type))}</span>
                 <span className="truncate font-mono text-[11px] text-alabaster-grey-500">{asset.relative_path}</span>
+                <span className="text-[11px] text-alabaster-grey-500">{formatClinicalAssetDate(asset.acquired_at)}</span>
                 <span className="text-[11px] text-alabaster-grey-500">{asset.tooth_number ? `${t("clinicalToothNumber")}: ${String(asset.tooth_number)}` : t("clinicalArch")}</span>
               </div>
             </button>
@@ -1042,7 +1072,7 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-alabaster-grey-500/20 p-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("rxViewerEyebrow")}</p>
-                <h3 className="text-sm font-semibold text-white">{t(rxTypeKey(viewerAsset.rx_type))}</h3>
+                <h3 className="text-sm font-semibold text-white">{t(rxSubTypeKey(viewerAsset.sub_type, viewerAsset.rx_type))}</h3>
               </div>
               <Button type="button" variant="secondary" size="sm" onClick={() => setViewerAsset(null)}>
                 <X aria-hidden="true" className="h-4 w-4" />
@@ -1074,20 +1104,22 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
   );
 }
 
-function rxTypeKey(rxType: string): L10nKey {
-  if (rxType === "panoramic") {
-    return "rxTypePanoramic";
+function rxSubTypeKey(subType: string | null | undefined, rxType: string): L10nKey {
+  if (subType === "PHOTO" || rxType === "photo") {
+    return "rxSubTypePhoto";
   }
-
-  if (rxType === "cbct") {
-    return "rxTypeCbct";
+  if (subType === "ORTOPANTOMOGRAFIA" || rxType === "panoramic" || rxType === "cbct") {
+    return "rxSubTypeOrtopantomografia";
   }
+  return "rxSubTypeEndorale";
+}
 
-  if (rxType === "photo") {
-    return "rxTypePhoto";
-  }
+function rxTypeForSubType(subType: "ORTOPANTOMOGRAFIA" | "ENDORALE") {
+  return subType === "ORTOPANTOMOGRAFIA" ? "panoramic" : "endoral";
+}
 
-  return "rxTypeEndoral";
+function formatClinicalAssetDate(value: string) {
+  return value.slice(0, 10);
 }
 
 function quoteStatusKey(status: string): L10nKey {

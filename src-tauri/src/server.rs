@@ -2,9 +2,11 @@ pub mod lan {
     use crate::{
         agenda,
         db::{AppointmentInput, NewClinicalRecord},
+        files,
         state::AppState,
         ts_cns,
     };
+    use base64::{engine::general_purpose, Engine as _};
     use mdns_sd::{ServiceDaemon, ServiceInfo};
     use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
@@ -306,6 +308,41 @@ pub mod lan {
                         .delete_clinical_record(user.id, request.record_id)
                         .map_err(|error| error.to_string())?;
                     Ok(json!({ "deleted": true }))
+                })
+            }
+            ("GET", "/api/rx/assets") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = patient_clinical_query(&query)?;
+                    let assets = state
+                        .database()?
+                        .list_rx_assets(user.id, request.patient_id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(assets))
+                })
+            }
+            ("GET", "/api/rx/asset-data") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let file_asset_id = query
+                        .get("file_asset_id")
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .ok_or_else(|| "missing file_asset_id".to_owned())?;
+                    let asset = state
+                        .database()?
+                        .rx_asset_for_access(user.id, file_asset_id)
+                        .map_err(|error| error.to_string())?;
+                    let mime_type = asset
+                        .mime_type
+                        .clone()
+                        .unwrap_or_else(|| "application/octet-stream".to_owned());
+                    if !mime_type.starts_with("image/") {
+                        return Err("clinical file preview is available only for image assets".to_owned());
+                    }
+                    let bytes = files::read_patient_file(&asset.relative_path)?;
+                    Ok(json!({
+                        "file_asset_id": file_asset_id,
+                        "mime_type": mime_type,
+                        "data_url": format!("data:{};base64,{}", mime_type, general_purpose::STANDARD.encode(bytes)),
+                    }))
                 })
             }
             ("POST", "/api/ts-cns/read") => {

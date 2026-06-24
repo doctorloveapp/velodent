@@ -27,6 +27,17 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
     from: `${date}T00:00:00${localOffset(date, "00:00")}`,
     to: `${shiftDate(date, 1)}T00:00:00${localOffset(shiftDate(date, 1), "00:00")}`
   }), [date]);
+  const dayPatients = useMemo(() => {
+    const byPatient = new Map<number, Appointment>();
+    appointments.forEach((appointment) => {
+      if (appointment.patient_id && !byPatient.has(appointment.patient_id)) {
+        byPatient.set(appointment.patient_id, appointment);
+      }
+    });
+    return Array.from(byPatient.values()).sort((left, right) =>
+      (left.patient_name ?? "").localeCompare(right.patient_name ?? "", "it", { sensitivity: "base" })
+    );
+  }, [appointments]);
 
   async function refreshAppointments() {
     setAppointments(await listAppointments(currentUser.session_token ?? "", range.from, range.to));
@@ -76,7 +87,7 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
             <div className="mb-3 flex items-center justify-between gap-2">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("clinicalAgendaToday")}</p>
-                <h2 className="text-base font-semibold text-white">{String(appointments.length)}</h2>
+                <h2 className="text-base font-semibold text-white">{String(dayPatients.length)}</h2>
               </div>
               <CalendarDays aria-hidden="true" className="h-5 w-5 text-powder-blue-500" strokeWidth={1.5} />
             </div>
@@ -90,7 +101,7 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
               </Button>
             </div>
             <div className="grid max-h-[360px] gap-2 overflow-y-auto">
-              {appointments.length ? appointments.map((appointment) => (
+              {dayPatients.length ? dayPatients.map((appointment) => (
                 <button
                   key={appointment.id}
                   className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-left transition hover:border-powder-blue-500/55"

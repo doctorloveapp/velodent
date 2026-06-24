@@ -1,11 +1,11 @@
-import { Check, ListFilter, Plus, Stethoscope, Trash2 } from "lucide-react";
+import { Check, FileImage, Images, ListFilter, Plus, Stethoscope, Trash2, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { useL10n, type L10nKey } from "@/frontend/shared/i18n/L10nProvider";
-import type { Patient } from "@/frontend/patients/patientsApi";
+import { listRxAssets, rxAssetDataUrl, type Patient, type RxAsset } from "@/frontend/patients/patientsApi";
 import type { User } from "@/frontend/settings/settingsApi";
 import { calculateBridgePreview } from "@/frontend/mobile/bridge";
 import { clinicalServiceGroupKey, clinicalServiceMatchesQuickAction } from "@/frontend/clinical/serviceCategories";
@@ -94,6 +94,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   const [activeAction, setActiveAction] = useState<QuickAction | null>(null);
   const [filters, setFilters] = useState({ dateFrom: "", dateTo: "", toothNumber: "", operatorUserId: "" });
   const [statusMessage, setStatusMessage] = useState("");
+  const [assetMode, setAssetMode] = useState<"rx" | "photo" | null>(null);
   const [auditedPatientId, setAuditedPatientId] = useState<number | null>(null);
   const bridgePreview = calculateBridgePreview(selectedTeeth);
 
@@ -235,6 +236,18 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           <h3 className="text-base font-semibold text-white">{t("clinicalOdontogramTitle")}</h3>
         </div>
         <div className="flex flex-wrap gap-2">
+          {(["rx", "photo"] as const).map((mode) => (
+            <Button
+              key={mode}
+              type="button"
+              variant={assetMode === mode ? "navActive" : "secondary"}
+              className="h-9 justify-center px-4"
+              onClick={() => setAssetMode((current) => (current === mode ? null : mode))}
+            >
+              <Images aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+              {mode === "rx" ? t("clinicalAssetRx") : t("clinicalAssetPhoto")}
+            </Button>
+          ))}
           {(["caries", "endodontics", "periodontics", "crown", "extraction"] as QuickAction[]).map((action) => (
             <span key={action} className={`rounded-md border px-2 py-1 text-xs ${quickActionButtonClasses[action]}`}>
               {quickActionLabel(action, false, t)}
@@ -242,6 +255,14 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           ))}
         </div>
       </div>
+
+      {assetMode ? (
+        <ClinicalAssetsViewer
+          currentUser={currentUser}
+          mode={assetMode}
+          patient={patient}
+        />
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
@@ -438,6 +459,152 @@ function OdontogramRow({
   );
 }
 
+function ClinicalAssetsViewer({
+  currentUser,
+  mode,
+  patient
+}: {
+  currentUser: User | null;
+  mode: "rx" | "photo";
+  patient: Patient;
+}) {
+  const { t } = useL10n();
+  const [assets, setAssets] = useState<RxAsset[]>([]);
+  const [selectedSubType, setSelectedSubType] = useState<"ORTOPANTOMOGRAFIA" | "ENDORALE" | null>(null);
+  const [previews, setPreviews] = useState<Record<number, string>>({});
+  const [viewer, setViewer] = useState<{ asset: RxAsset; dataUrl: string } | null>(null);
+  const [zoom, setZoom] = useState(100);
+  const [statusMessage, setStatusMessage] = useState("");
+  const sessionToken = currentUser?.session_token ?? "";
+
+  const modeAssets = useMemo(() => {
+    const filtered = assets.filter((asset) => mode === "photo" ? asset.sub_type === "PHOTO" || asset.rx_type === "photo" : asset.sub_type !== "PHOTO" && asset.rx_type !== "photo");
+    if (mode === "rx" && selectedSubType) {
+      return filtered.filter((asset) => asset.sub_type === selectedSubType || (selectedSubType === "ORTOPANTOMOGRAFIA" && asset.rx_type !== "endoral"));
+    }
+    return filtered;
+  }, [assets, mode, selectedSubType]);
+
+  const rxSubTypes = useMemo(() => {
+    const values = new Set(
+      assets
+        .filter((asset) => asset.sub_type !== "PHOTO" && asset.rx_type !== "photo")
+        .map((asset) => asset.sub_type === "ENDORALE" || asset.rx_type === "endoral" ? "ENDORALE" : "ORTOPANTOMOGRAFIA")
+    );
+    return Array.from(values);
+  }, [assets]);
+
+  useEffect(() => {
+    if (!sessionToken) {
+      return;
+    }
+    let cancelled = false;
+    async function loadAssets() {
+      const nextAssets = await listRxAssets(sessionToken, patient.id);
+      if (cancelled) {
+        return;
+      }
+      setAssets(nextAssets);
+      const imageAssets = nextAssets.filter((asset) => asset.mime_type?.startsWith("image/"));
+      const entries = await Promise.all(
+        imageAssets.map(async (asset) => {
+          const preview = await rxAssetDataUrl(sessionToken, asset.file_asset_id);
+          return [asset.file_asset_id, preview.data_url] as const;
+        })
+      );
+      if (!cancelled) {
+        setPreviews(Object.fromEntries(entries));
+      }
+    }
+    void loadAssets().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")));
+    return () => {
+      cancelled = true;
+    };
+  }, [patient.id, sessionToken, t]);
+
+  useEffect(() => {
+    setSelectedSubType(null);
+    setViewer(null);
+  }, [mode]);
+
+  async function openAsset(asset: RxAsset) {
+    if (!asset.mime_type?.startsWith("image/")) {
+      setStatusMessage(t("rxDicomPreviewUnavailable"));
+      return;
+    }
+    const dataUrl = previews[asset.file_asset_id] ?? (await rxAssetDataUrl(sessionToken, asset.file_asset_id)).data_url;
+    setViewer({ asset, dataUrl });
+    setZoom(100);
+  }
+
+  return (
+    <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{mode === "rx" ? t("clinicalAssetRx") : t("clinicalAssetPhoto")}</p>
+          <h4 className="text-sm font-semibold text-white">{t("clinicalAssetsTitle")}</h4>
+        </div>
+        {mode === "rx" && rxSubTypes.length > 1 ? (
+          <div className="flex flex-wrap gap-2">
+            {(["ORTOPANTOMOGRAFIA", "ENDORALE"] as const).map((subType) => rxSubTypes.includes(subType) ? (
+              <Button key={subType} type="button" variant={selectedSubType === subType ? "navActive" : "secondary"} size="sm" onClick={() => setSelectedSubType(subType)}>
+                {t(rxSubTypeLabelKey(subType))}
+              </Button>
+            ) : null)}
+          </div>
+        ) : null}
+      </div>
+      {statusMessage ? <p className="mb-3 text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
+      {modeAssets.length ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {modeAssets.map((asset) => (
+            <button
+              key={asset.id}
+              className="overflow-hidden rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 text-left transition hover:border-powder-blue-500/60"
+              type="button"
+              onClick={() => void openAsset(asset).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}
+            >
+              <div className="flex aspect-[4/3] items-center justify-center bg-ink-black-950">
+                {previews[asset.file_asset_id] ? (
+                  <img alt={t("rxThumbnailAlt")} className="h-full w-full object-cover" src={previews[asset.file_asset_id]} />
+                ) : (
+                  <FileImage aria-hidden="true" className="h-10 w-10 text-powder-blue-500" strokeWidth={1.5} />
+                )}
+              </div>
+              <div className="grid gap-1 p-3">
+                <span className="text-sm font-semibold text-white">{t(rxSubTypeLabelKey(asset.sub_type))}</span>
+                <span className="text-[11px] text-alabaster-grey-500">{asset.acquired_at.slice(0, 10)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-alabaster-grey-500">{mode === "rx" ? t("clinicalAssetRxEmpty") : t("clinicalAssetPhotoEmpty")}</p>
+      )}
+      {viewer ? (
+        <div className="fixed inset-0 z-50 grid bg-ink-black-950/90 p-4 backdrop-blur-xl">
+          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-lg border border-alabaster-grey-500/20 bg-white/10">
+            <div className="flex items-center justify-between border-b border-alabaster-grey-500/20 p-3">
+              <h3 className="text-sm font-semibold text-white">{t(rxSubTypeLabelKey(viewer.asset.sub_type))}</h3>
+              <Button type="button" variant="secondary" size="sm" onClick={() => setViewer(null)}>
+                <X aria-hidden="true" className="h-4 w-4" />
+                {t("rxViewerClose")}
+              </Button>
+            </div>
+            <div className="flex min-h-0 items-center justify-center overflow-auto p-4">
+              <img alt={t("rxViewerAlt")} className="rounded-md object-contain" src={viewer.dataUrl} style={{ width: `${String(zoom)}%` }} />
+            </div>
+            <label className="grid gap-2 border-t border-alabaster-grey-500/20 p-3 text-xs font-medium text-alabaster-grey-500">
+              {t("clinicalAssetZoom")}
+              <input min="60" max="220" type="range" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
+            </label>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function ClinicalDiary({ onToggleQuote, records }: { onToggleQuote: (record: ClinicalRecord) => void; records: ClinicalRecord[] }) {
   const { t } = useL10n();
   return (
@@ -549,6 +716,16 @@ function quoteEligibilityStatusKey(status: ClinicalRecordStatus): L10nKey {
     return "clinicalQuotePerformed";
   }
   return "clinicalQuoteNotEligible";
+}
+
+function rxSubTypeLabelKey(subType: string | null | undefined): L10nKey {
+  if (subType === "PHOTO") {
+    return "rxSubTypePhoto";
+  }
+  if (subType === "ENDORALE") {
+    return "rxSubTypeEndorale";
+  }
+  return "rxSubTypeOrtopantomografia";
 }
 
 function buildProsthesisGroups(records: Partial<Record<number, RecordedToothRecord>>, visibleTeeth: number[]): ProsthesisGroup[] {

@@ -432,6 +432,7 @@ pub struct NewRxAsset<'a> {
     pub size_bytes: i64,
     pub original_filename: &'a str,
     pub rx_type: &'a str,
+    pub sub_type: &'a str,
     pub tooth_number: Option<i64>,
     pub dicom_metadata_json: &'a str,
     pub acquired_at: Option<&'a str>,
@@ -447,6 +448,7 @@ pub struct RxAsset {
     pub sha256_hex: Option<String>,
     pub size_bytes: Option<i64>,
     pub rx_type: String,
+    pub sub_type: String,
     pub tooth_number: Option<i64>,
     pub dicom_metadata_json: String,
     pub acquired_at: String,
@@ -2941,7 +2943,8 @@ impl Database {
             input.rx_type,
             input.tooth_number,
         )?;
-        let rx_type = normalize_rx_type(input.rx_type)?;
+        let sub_type = normalize_rx_sub_type(input.sub_type, input.rx_type)?;
+        let rx_type = normalize_rx_type_for_sub_type(input.rx_type, sub_type)?;
 
         let metadata_json = serde_json::json!({
             "original_filename": input.original_filename,
@@ -2950,6 +2953,7 @@ impl Database {
         let import_metadata_json = serde_json::json!({
             "relative_path": input.relative_path,
             "rx_type": rx_type,
+            "sub_type": sub_type,
             "tooth_number": input.tooth_number,
             "size_bytes": input.size_bytes,
         })
@@ -2988,16 +2992,18 @@ impl Database {
                     patient_id,
                     file_asset_id,
                     rx_type,
+                    sub_type,
                     tooth_number,
                     dicom_metadata_json,
                     acquired_at
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, COALESCE(?6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
                 "#,
                 params![
                     input.patient_id,
                     file_asset_id,
                     rx_type,
+                    sub_type,
                     input.tooth_number,
                     input.dicom_metadata_json,
                     input.acquired_at
@@ -3054,6 +3060,7 @@ impl Database {
                 file_assets.sha256_hex,
                 file_assets.size_bytes,
                 rx_assets.rx_type,
+                rx_assets.sub_type,
                 rx_assets.tooth_number,
                 rx_assets.dicom_metadata_json,
                 rx_assets.acquired_at,
@@ -4475,6 +4482,7 @@ impl Database {
                     file_assets.sha256_hex,
                     file_assets.size_bytes,
                     rx_assets.rx_type,
+                    rx_assets.sub_type,
                     rx_assets.tooth_number,
                     rx_assets.dicom_metadata_json,
                     rx_assets.acquired_at,
@@ -4503,6 +4511,7 @@ impl Database {
                     file_assets.sha256_hex,
                     file_assets.size_bytes,
                     rx_assets.rx_type,
+                    rx_assets.sub_type,
                     rx_assets.tooth_number,
                     rx_assets.dicom_metadata_json,
                     rx_assets.acquired_at,
@@ -4968,6 +4977,36 @@ fn normalize_rx_type(rx_type: &str) -> DbResult<&'static str> {
     }
 }
 
+fn normalize_rx_sub_type(sub_type: &str, fallback_rx_type: &str) -> DbResult<&'static str> {
+    let value = sub_type.trim().to_ascii_uppercase();
+    match value.as_str() {
+        "ORTOPANTOMOGRAFIA" => Ok("ORTOPANTOMOGRAFIA"),
+        "ENDORALE" => Ok("ENDORALE"),
+        "PHOTO" => Ok("PHOTO"),
+        "" => rx_sub_type_for_legacy_rx_type(fallback_rx_type),
+        _ => Err(DbError::InvalidRxType(sub_type.to_owned())),
+    }
+}
+
+fn rx_sub_type_for_legacy_rx_type(rx_type: &str) -> DbResult<&'static str> {
+    match normalize_rx_type(rx_type)? {
+        "photo" => Ok("PHOTO"),
+        "endoral" => Ok("ENDORALE"),
+        _ => Ok("ORTOPANTOMOGRAFIA"),
+    }
+}
+
+fn normalize_rx_type_for_sub_type(rx_type: &str, sub_type: &str) -> DbResult<&'static str> {
+    let requested = normalize_rx_type(rx_type)?;
+    match sub_type {
+        "PHOTO" => Ok("photo"),
+        "ENDORALE" => Ok("endoral"),
+        "ORTOPANTOMOGRAFIA" if requested == "cbct" => Ok("cbct"),
+        "ORTOPANTOMOGRAFIA" => Ok("panoramic"),
+        _ => Ok(requested),
+    }
+}
+
 fn normalize_appointment_status(status: &str) -> DbResult<&'static str> {
     match status.trim() {
         "booked" => Ok("booked"),
@@ -5136,6 +5175,26 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         "rx_assets",
         "dicom_metadata_json",
         "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    ensure_column(
+        conn,
+        "rx_assets",
+        "sub_type",
+        "TEXT NOT NULL DEFAULT 'ORTOPANTOMOGRAFIA' CHECK(sub_type IN ('ORTOPANTOMOGRAFIA', 'ENDORALE', 'PHOTO'))",
+    )?;
+    conn.execute(
+        r#"
+        UPDATE rx_assets
+        SET sub_type = CASE
+            WHEN rx_type = 'photo' THEN 'PHOTO'
+            WHEN rx_type = 'endoral' THEN 'ENDORALE'
+            ELSE 'ORTOPANTOMOGRAFIA'
+        END
+        WHERE sub_type IS NULL OR sub_type = '' OR (
+            sub_type = 'ORTOPANTOMOGRAFIA' AND rx_type IN ('photo', 'endoral')
+        )
+        "#,
+        [],
     )?;
     ensure_column(
         conn,
@@ -5377,10 +5436,11 @@ fn rx_asset_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RxAsset> {
         sha256_hex: row.get(5)?,
         size_bytes: row.get(6)?,
         rx_type: row.get(7)?,
-        tooth_number: row.get(8)?,
-        dicom_metadata_json: row.get(9)?,
-        acquired_at: row.get(10)?,
-        created_at: row.get(11)?,
+        sub_type: row.get(8)?,
+        tooth_number: row.get(9)?,
+        dicom_metadata_json: row.get(10)?,
+        acquired_at: row.get(11)?,
+        created_at: row.get(12)?,
     })
 }
 
@@ -5856,6 +5916,7 @@ CREATE TABLE IF NOT EXISTS rx_assets (
     patient_id INTEGER NOT NULL,
     file_asset_id INTEGER NOT NULL UNIQUE,
     rx_type TEXT NOT NULL CHECK(rx_type IN ('endoral', 'panoramic', 'cbct', 'photo')),
+    sub_type TEXT NOT NULL DEFAULT 'ORTOPANTOMOGRAFIA' CHECK(sub_type IN ('ORTOPANTOMOGRAFIA', 'ENDORALE', 'PHOTO')),
     tooth_number INTEGER,
     dicom_metadata_json TEXT NOT NULL DEFAULT '{}',
     acquired_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -6747,6 +6808,77 @@ mod tests {
             .find(|status| status.tooth_number == 36)
             .expect("tooth status exists");
         assert_eq!(neutral_tooth.state, "healthy");
+    }
+
+    #[test]
+    fn rx_assets_preserve_sub_type_for_rx_and_photos() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Anna",
+                    last_name: "Assets",
+                    tax_code: "BNCLGU85T41H501W",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+
+        let endoral = db
+            .register_rx_asset(
+                admin.id,
+                &NewRxAsset {
+                    patient_id: patient.id,
+                    relative_path: "patients/1/rx/endorale.png",
+                    mime_type: "image/png",
+                    sha256_hex: "a",
+                    size_bytes: 10,
+                    original_filename: "endorale.png",
+                    rx_type: "endoral",
+                    sub_type: "ENDORALE",
+                    tooth_number: Some(16),
+                    dicom_metadata_json: "{}",
+                    acquired_at: None,
+                },
+            )
+            .expect("endoral asset");
+        let photo = db
+            .register_rx_asset(
+                admin.id,
+                &NewRxAsset {
+                    patient_id: patient.id,
+                    relative_path: "patients/1/rx/foto.png",
+                    mime_type: "image/png",
+                    sha256_hex: "b",
+                    size_bytes: 10,
+                    original_filename: "foto.png",
+                    rx_type: "photo",
+                    sub_type: "PHOTO",
+                    tooth_number: None,
+                    dicom_metadata_json: "{}",
+                    acquired_at: None,
+                },
+            )
+            .expect("photo asset");
+
+        assert_eq!(endoral.rx_type, "endoral");
+        assert_eq!(endoral.sub_type, "ENDORALE");
+        assert_eq!(photo.rx_type, "photo");
+        assert_eq!(photo.sub_type, "PHOTO");
+        let listed = db
+            .list_rx_assets(admin.id, patient.id)
+            .expect("list assets");
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().any(|asset| asset.sub_type == "ENDORALE"));
+        assert!(listed.iter().any(|asset| asset.sub_type == "PHOTO"));
     }
 
     #[test]

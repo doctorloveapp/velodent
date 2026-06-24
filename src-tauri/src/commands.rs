@@ -273,6 +273,7 @@ pub struct ImportRxFileRequest {
     patient_id: i64,
     source_path: String,
     rx_type: Option<String>,
+    sub_type: Option<String>,
     tooth_number: Option<i64>,
 }
 
@@ -281,6 +282,7 @@ pub struct PickRxImportRequest {
     session_token: String,
     patient_id: i64,
     rx_type: Option<String>,
+    sub_type: Option<String>,
     tooth_number: Option<i64>,
 }
 
@@ -308,6 +310,7 @@ pub struct MockAcquireRxRequest {
     session_token: String,
     patient_id: i64,
     rx_type: Option<String>,
+    sub_type: Option<String>,
     tooth_number: Option<i64>,
 }
 
@@ -1631,6 +1634,7 @@ pub fn import_rx_file(
         request.patient_id,
         &request.source_path,
         request.rx_type.as_deref(),
+        request.sub_type.as_deref(),
         request.tooth_number,
     )
 }
@@ -1653,6 +1657,7 @@ pub fn pick_rx_file_and_import(
         request.patient_id,
         path.to_string_lossy().as_ref(),
         request.rx_type.as_deref(),
+        request.sub_type.as_deref(),
         request.tooth_number,
     )
 }
@@ -1678,6 +1683,7 @@ pub fn pick_rx_folder_and_import(
             request.patient_id,
             path.to_string_lossy().as_ref(),
             request.rx_type.as_deref(),
+            request.sub_type.as_deref(),
             request.tooth_number,
         )?);
     }
@@ -1690,10 +1696,12 @@ fn import_rx_path(
     patient_id: i64,
     source_path: &str,
     rx_type: Option<&str>,
+    sub_type: Option<&str>,
     tooth_number: Option<i64>,
 ) -> Result<RxAsset, String> {
     let source = PathBuf::from(source_path);
     let inferred_rx_type = infer_rx_type(&source, rx_type);
+    let inferred_sub_type = infer_rx_sub_type(&source, sub_type, &inferred_rx_type);
     let mut dicom_metadata = if is_dicom_file_path(&source) {
         dicom_meta::extract_dicom_metadata(&source)?
     } else {
@@ -1725,6 +1733,7 @@ fn import_rx_path(
                 size_bytes: stored.size_bytes,
                 original_filename: &stored.original_filename,
                 rx_type: &inferred_rx_type,
+                sub_type: &inferred_sub_type,
                 tooth_number: resolved_tooth,
                 dicom_metadata_json: &dicom_metadata.metadata_json,
                 acquired_at: dicom_metadata.acquisition_datetime.as_deref(),
@@ -1791,6 +1800,21 @@ fn infer_rx_type(path: &Path, requested: Option<&str>) -> String {
     "endoral".to_owned()
 }
 
+fn infer_rx_sub_type(path: &Path, requested: Option<&str>, rx_type: &str) -> String {
+    if let Some(sub_type) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+        return sub_type.to_ascii_uppercase();
+    }
+
+    let name = path.to_string_lossy().to_ascii_lowercase();
+    if rx_type == "photo" || name.contains("foto") || name.contains("photo") || name.contains("camera") {
+        return "PHOTO".to_owned();
+    }
+    if rx_type == "endoral" || name.contains("endor") || name.contains("periap") || name.contains("bite") {
+        return "ENDORALE".to_owned();
+    }
+    "ORTOPANTOMOGRAFIA".to_owned()
+}
+
 #[tauri::command]
 pub fn mock_acquire_rx(
     state: State<'_, AppState>,
@@ -1825,6 +1849,7 @@ pub fn mock_acquire_rx(
                 size_bytes: stored.size_bytes,
                 original_filename: &stored.original_filename,
                 rx_type: request.rx_type.as_deref().unwrap_or("endoral"),
+                sub_type: request.sub_type.as_deref().unwrap_or("ENDORALE"),
                 tooth_number: request.tooth_number,
                 dicom_metadata_json: &empty_dicom_metadata.metadata_json,
                 acquired_at: None,

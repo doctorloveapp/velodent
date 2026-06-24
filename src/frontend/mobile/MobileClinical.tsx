@@ -12,7 +12,8 @@ import {
   type ToothStatus,
   type ToothState
 } from "@/frontend/clinical/clinicalApi";
-import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
+import { listRxAssets, rxAssetDataUrl, type RxAsset } from "@/frontend/patients/patientsApi";
+import { useL10n, type L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
 import { clinicalServiceGroupKey, clinicalServiceMatchesQuickAction } from "@/frontend/clinical/serviceCategories";
 import { calculateBridgePreview } from "./bridge";
@@ -52,6 +53,7 @@ const toothStateClasses: Partial<Record<ToothState, string>> = {
 
 interface MobileClinicalProps {
   activePatientId: number | null;
+  assetMode?: "rx" | "photo" | null;
   mode: ClinicalMobileMode;
   onMissingPatient: () => void;
   onSelectedToothRecordInfo: (info: SelectedToothRecordInfo | null) => void;
@@ -83,6 +85,7 @@ interface ProsthesisGroup {
 
 export function MobileClinical({
   activePatientId,
+  assetMode = null,
   mode,
   onMissingPatient,
   onSelectedToothRecordInfo,
@@ -348,6 +351,16 @@ export function MobileClinical({
     );
   }
 
+  if (assetMode) {
+    return (
+      <MobileClinicalAssetsViewer
+        activePatientId={activePatientId}
+        mode={assetMode}
+        sessionToken={sessionToken}
+      />
+    );
+  }
+
   return (
     <section className="grid gap-4">
       <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
@@ -534,6 +547,129 @@ function QuickActions({
   );
 }
 
+function MobileClinicalAssetsViewer({
+  activePatientId,
+  mode,
+  sessionToken
+}: {
+  activePatientId: number | null;
+  mode: "rx" | "photo";
+  sessionToken: string;
+}) {
+  const { t } = useL10n();
+  const [assets, setAssets] = useState<RxAsset[]>([]);
+  const [previews, setPreviews] = useState<Record<number, string>>({});
+  const [selectedSubType, setSelectedSubType] = useState<"ORTOPANTOMOGRAFIA" | "ENDORALE" | null>(null);
+  const [viewer, setViewer] = useState<{ asset: RxAsset; dataUrl: string } | null>(null);
+  const [statusMessage, setStatusMessage] = useState("");
+
+  const rxSubTypes = useMemo(() => {
+    const values = new Set(
+      assets
+        .filter((asset) => asset.sub_type !== "PHOTO" && asset.rx_type !== "photo")
+        .map((asset) => asset.sub_type === "ENDORALE" || asset.rx_type === "endoral" ? "ENDORALE" : "ORTOPANTOMOGRAFIA")
+    );
+    return Array.from(values);
+  }, [assets]);
+  const visibleAssets = useMemo(() => {
+    const filtered = assets.filter((asset) => mode === "photo" ? asset.sub_type === "PHOTO" || asset.rx_type === "photo" : asset.sub_type !== "PHOTO" && asset.rx_type !== "photo");
+    return mode === "rx" && selectedSubType ? filtered.filter((asset) => asset.sub_type === selectedSubType || (selectedSubType === "ORTOPANTOMOGRAFIA" && asset.rx_type !== "endoral")) : filtered;
+  }, [assets, mode, selectedSubType]);
+
+  useEffect(() => {
+    if (!activePatientId || !sessionToken) {
+      setAssets([]);
+      setPreviews({});
+      return;
+    }
+    let cancelled = false;
+    async function loadAssets() {
+      const nextAssets = await listRxAssets(sessionToken, activePatientId ?? 0);
+      if (cancelled) {
+        return;
+      }
+      setAssets(nextAssets);
+      const entries = await Promise.all(
+        nextAssets
+          .filter((asset) => asset.mime_type?.startsWith("image/"))
+          .map(async (asset) => {
+            const preview = await rxAssetDataUrl(sessionToken, asset.file_asset_id);
+            return [asset.file_asset_id, preview.data_url] as const;
+          })
+      );
+      if (!cancelled) {
+        setPreviews(Object.fromEntries(entries));
+      }
+    }
+    void loadAssets().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")));
+    return () => {
+      cancelled = true;
+    };
+  }, [activePatientId, sessionToken, t]);
+
+  async function openAsset(asset: RxAsset) {
+    if (!asset.mime_type?.startsWith("image/")) {
+      setStatusMessage(t("rxDicomPreviewUnavailable"));
+      return;
+    }
+    const dataUrl = previews[asset.file_asset_id] ?? (await rxAssetDataUrl(sessionToken, asset.file_asset_id)).data_url;
+    setViewer({ asset, dataUrl });
+  }
+
+  return (
+    <section className="grid gap-4">
+      {mode === "rx" && rxSubTypes.length > 1 ? (
+        <div className="grid grid-cols-2 gap-2">
+          {(["ORTOPANTOMOGRAFIA", "ENDORALE"] as const).map((subType) => rxSubTypes.includes(subType) ? (
+            <Button key={subType} type="button" variant={selectedSubType === subType ? "navActive" : "secondary"} className="h-14 justify-center" onClick={() => setSelectedSubType(subType)}>
+              {t(rxSubTypeLabelKey(subType))}
+            </Button>
+          ) : null)}
+        </div>
+      ) : null}
+      {statusMessage ? <p className="text-sm text-alabaster-grey-500">{statusMessage}</p> : null}
+      {visibleAssets.length ? (
+        <div className="grid grid-cols-2 gap-3">
+          {visibleAssets.map((asset) => (
+            <button key={asset.id} type="button" className="overflow-hidden rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 text-left" onClick={() => void openAsset(asset).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
+              <div className="flex aspect-square items-center justify-center bg-ink-black-950">
+                {previews[asset.file_asset_id] ? (
+                  <img alt={t("rxThumbnailAlt")} className="h-full w-full object-cover" src={previews[asset.file_asset_id]} />
+                ) : (
+                  <span className="text-sm text-alabaster-grey-500">{t(rxSubTypeLabelKey(asset.sub_type))}</span>
+                )}
+              </div>
+              <div className="grid gap-1 p-3">
+                <span className="text-sm font-semibold text-white">{t(rxSubTypeLabelKey(asset.sub_type))}</span>
+                <span className="text-xs text-alabaster-grey-500">{asset.acquired_at.slice(0, 10)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4 text-sm text-alabaster-grey-500">
+          {mode === "rx" ? t("clinicalAssetRxEmpty") : t("clinicalAssetPhotoEmpty")}
+        </p>
+      )}
+      {viewer ? (
+        <div className="fixed inset-0 z-50 grid bg-ink-black-950/90 p-3 backdrop-blur-xl">
+          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950">
+            <div className="flex items-center justify-between border-b border-alabaster-grey-500/20 p-3">
+              <span className="text-sm font-semibold text-white">{t(rxSubTypeLabelKey(viewer.asset.sub_type))}</span>
+              <Button type="button" variant="secondary" className="h-11 justify-center" onClick={() => setViewer(null)}>
+                {t("rxViewerClose")}
+              </Button>
+            </div>
+            <div className="flex min-h-0 items-center justify-center overflow-auto p-3">
+              <img alt={t("rxViewerAlt")} className="max-h-full max-w-full rounded-md object-contain" src={viewer.dataUrl} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function MobileServiceOverlay({
   onClose,
   onSelect,
@@ -658,6 +794,16 @@ function quickActionFromCategory(category: string | null): QuickAction | null {
     return "periodontics";
   }
   return null;
+}
+
+function rxSubTypeLabelKey(subType: string | null | undefined): L10nKey {
+  if (subType === "PHOTO") {
+    return "rxSubTypePhoto";
+  }
+  if (subType === "ENDORALE") {
+    return "rxSubTypeEndorale";
+  }
+  return "rxSubTypeOrtopantomografia";
 }
 
 function buildProsthesisGroups(

@@ -1,4 +1,4 @@
-import { CircleDollarSign, Images, Search } from "lucide-react";
+import { Braces, CircleDollarSign, Images, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { BillingPanel, RxPanel } from "@/frontend/patients/PatientsView";
 import { openPatientRecord, searchPatients, type Patient } from "@/frontend/patients/patientsApi";
@@ -8,7 +8,7 @@ import type { User } from "@/frontend/settings/settingsApi";
 
 interface PatientModuleWorkspaceProps {
   currentUser: User;
-  module: "rx" | "billing";
+  module: "rx" | "billing" | "orthodontics";
   selectedPatient: Patient | null;
   onPatientSelected: (patient: Patient | null) => void;
 }
@@ -34,9 +34,9 @@ export function PatientModuleWorkspace({ currentUser, module, onPatientSelected,
     void handleSearch("").catch(() => undefined);
   }, [currentUser.session_token]);
 
-  const Icon = module === "rx" ? Images : CircleDollarSign;
-  const title = module === "rx" ? t("rxWorkspaceTitle") : t("billingWorkspaceTitle");
-  const eyebrow = module === "rx" ? t("rxWorkspaceEyebrow") : t("billingWorkspaceEyebrow");
+  const Icon = module === "rx" ? Images : module === "orthodontics" ? Braces : CircleDollarSign;
+  const title = module === "rx" ? t("rxWorkspaceTitle") : module === "orthodontics" ? t("orthodonticsWorkspaceTitle") : t("billingWorkspaceTitle");
+  const eyebrow = module === "rx" ? t("rxWorkspaceEyebrow") : module === "orthodontics" ? t("orthodonticsWorkspaceEyebrow") : t("billingWorkspaceEyebrow");
 
   return (
     <section className="grid gap-4">
@@ -86,6 +86,8 @@ export function PatientModuleWorkspace({ currentUser, module, onPatientSelected,
           {selectedPatient ? (
             module === "rx" ? (
               <RxPanel currentUser={currentUser} patient={selectedPatient} />
+            ) : module === "orthodontics" ? (
+              <OrthodonticsPanel patient={selectedPatient} />
             ) : (
               <BillingPanel currentUser={currentUser} patient={selectedPatient} />
             )
@@ -95,5 +97,18 @@ export function PatientModuleWorkspace({ currentUser, module, onPatientSelected,
         </section>
       </div>
     </section>
+  );
+}
+
+function OrthodonticsPanel({ patient }: { patient: Patient }) {
+  const { t } = useL10n();
+  return (
+    <div className="grid gap-4">
+      <div className="rounded-md border border-powder-blue-500/20 bg-powder-blue-950/35 p-4">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("orthodonticsFolderEyebrow")}</p>
+        <h2 className="mt-2 text-lg font-semibold text-white">{patient.last_name} {patient.first_name}</h2>
+        <p className="mt-3 text-sm leading-6 text-alabaster-grey-500">{t("orthodonticsFolderBody")}</p>
+      </div>
+    </div>
   );
 }

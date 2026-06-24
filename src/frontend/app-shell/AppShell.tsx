@@ -1,4 +1,4 @@
-import { Activity, CalendarDays, CircleDollarSign, ClipboardList, Images, Search, Settings, UserRound, UsersRound, Wifi } from "lucide-react";
+import { Activity, CalendarDays, CircleDollarSign, ClipboardList, Images, Search, Settings, SmilePlus, UserRound, UsersRound, Wifi } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { getHealthStatus, type HealthStatus } from "@/frontend/shared/api/health";
@@ -20,6 +20,7 @@ const navItems = [
   { key: "agenda", icon: CalendarDays, labelKey: "navAgenda" },
   { key: "patients", icon: UsersRound, labelKey: "navPatients" },
   { key: "clinical", icon: ClipboardList, labelKey: "navClinical" },
+  { key: "orthodontics", icon: SmilePlus, labelKey: "navOrthodontics" },
   { key: "rx", icon: Images, labelKey: "navRx" },
   { key: "billing", icon: CircleDollarSign, labelKey: "navBilling" },
   { key: "tariffario", icon: ClipboardList, labelKey: "navTariffario" },
@@ -192,6 +193,13 @@ export function AppShell({ currentUser }: AppShellProps) {
                 <PatientModuleWorkspace
                   currentUser={currentUser}
                   module="rx"
+                  selectedPatient={selectedPatient}
+                  onPatientSelected={setSelectedPatient}
+                />
+              ) : activeKey === "orthodontics" ? (
+                <PatientModuleWorkspace
+                  currentUser={currentUser}
+                  module="orthodontics"
                   selectedPatient={selectedPatient}
                   onPatientSelected={setSelectedPatient}
                 />

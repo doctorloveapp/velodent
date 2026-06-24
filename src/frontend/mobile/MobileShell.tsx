@@ -26,6 +26,8 @@ export type MobileRouteKey =
   | "newPatient"
   | "searchPatient"
   | "clinical"
+  | "rx"
+  | "orthodontics"
   | "consents"
   | "deviceStatus";
 
@@ -41,6 +43,8 @@ const mobileNavItems: MobileNavItem[] = [
   { key: "newPatient", icon: UserPlus, labelKey: "mobileNewPatient" },
   { key: "searchPatient", icon: Search, labelKey: "mobileSearchPatient" },
   { key: "clinical", icon: ClipboardList, labelKey: "mobileClinical" },
+  { key: "rx", icon: FileText, labelKey: "mobileRxPhoto" },
+  { key: "orthodontics", icon: ClipboardList, labelKey: "mobileOrthodonticsMode" },
   { key: "consents", icon: FileText, labelKey: "mobileConsents" },
   { key: "deviceStatus", icon: Smartphone, labelKey: "mobileDeviceStatus" }
 ];

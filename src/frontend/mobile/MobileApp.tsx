@@ -43,6 +43,14 @@ const routeContent: Record<MobileRouteKey, RouteContent> = {
     titleKey: "mobileClinicalTitle",
     bodyKey: "mobileClinicalBody"
   },
+  rx: {
+    titleKey: "mobileRxPhotoTitle",
+    bodyKey: "mobileRxPhotoBody"
+  },
+  orthodontics: {
+    titleKey: "mobileOrthodonticsTitle",
+    bodyKey: "mobileOrthodonticsBody"
+  },
   consents: {
     titleKey: "mobileConsentsTitle",
     bodyKey: "mobileConsentsBody"
@@ -55,7 +63,7 @@ const routeContent: Record<MobileRouteKey, RouteContent> = {
 
 export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
   const { t } = useL10n();
-  const [clinicalMode, setClinicalMode] = useState<"clinical" | "orthodontics">("clinical");
+  const [clinicalAssetMode, setClinicalAssetMode] = useState<"rx" | "photo" | null>(null);
   const [activePatient, setActivePatient] = useState<Patient | null>(null);
   const [activeRoute, setActiveRoute] = useState<MobileRouteKey>("dashboard");
   const [selectedToothRecordInfo, setSelectedToothRecordInfo] = useState<SelectedToothRecordInfo | null>(null);
@@ -81,15 +89,15 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2 rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
-              {(["clinical", "orthodontics"] as const).map((item) => (
+              {(["rx", "photo"] as const).map((item) => (
                 <Button
                   key={item}
                   type="button"
-                  variant={clinicalMode === item ? "navActive" : "nav"}
+                  variant={clinicalAssetMode === item ? "navActive" : "nav"}
                   className="h-11 justify-center"
-                  onClick={() => setClinicalMode(item)}
+                  onClick={() => setClinicalAssetMode((current) => (current === item ? null : item))}
                 >
-                  {item === "clinical" ? t("mobileClinicalMode") : t("mobileOrthodonticsMode")}
+                  {item === "rx" ? t("clinicalAssetRx") : t("clinicalAssetPhoto")}
                 </Button>
               ))}
             </div>
@@ -123,10 +131,47 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
                 setActiveRoute("clinical");
               }}
             />
+          ) : activeRoute === "rx" ? (
+            activePatient ? (
+              <MobileClinical
+                activePatientId={activePatient.id}
+                assetMode="rx"
+                mode="clinical"
+                onMissingPatient={handleMissingPatient}
+                onSelectedToothRecordInfo={setSelectedToothRecordInfo}
+                sessionToken={currentUser.session_token ?? ""}
+              />
+            ) : (
+              <MobilePatientSearch
+                sessionToken={currentUser.session_token ?? ""}
+                onPatientSelect={(patient) => {
+                  setActivePatient(patient);
+                  setActiveRoute("rx");
+                }}
+              />
+            )
+          ) : activeRoute === "orthodontics" ? (
+            activePatient ? (
+              <MobilePlaceholder
+                body={t("mobileOrthodonticsBody")}
+                eyebrow={t("mobileOrthodonticsMode")}
+                title={activePatientName ?? title}
+                primaryLabel={t("mobilePrimaryAction")}
+              />
+            ) : (
+              <MobilePatientSearch
+                sessionToken={currentUser.session_token ?? ""}
+                onPatientSelect={(patient) => {
+                  setActivePatient(patient);
+                  setActiveRoute("orthodontics");
+                }}
+              />
+            )
           ) : activeRoute === "clinical" ? (
             <MobileClinical
               activePatientId={activePatient?.id ?? null}
-              mode={clinicalMode}
+              assetMode={clinicalAssetMode}
+              mode="clinical"
               onMissingPatient={handleMissingPatient}
               onSelectedToothRecordInfo={setSelectedToothRecordInfo}
               sessionToken={currentUser.session_token ?? ""}
