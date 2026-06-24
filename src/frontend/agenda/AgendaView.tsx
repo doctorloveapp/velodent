@@ -16,6 +16,7 @@ import {
   listAgendaBlocks,
   listAppointments,
   moveAppointment,
+  processGoogleCalendarSync,
   updateAppointmentStatus,
   type AgendaBlock,
   type Appointment,
@@ -23,7 +24,15 @@ import {
   type GoogleCalendarSyncStatus
 } from "./agendaApi";
 
-const HOURS = Array.from({ length: 12 }, (_, index) => index + 8);
+const TIME_SLOTS = Array.from({ length: 24 }, (_, index) => {
+  const totalMinutes = 8 * 60 + index * 30;
+  const hour = Math.floor(totalMinutes / 60);
+  const minute = totalMinutes % 60;
+  return {
+    key: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+    label: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`
+  };
+});
 const STATUS_OPTIONS: AppointmentStatus[] = ["booked", "arrived", "waiting", "in_chair", "completed", "cancelled"];
 const DEFAULT_DURATION_MINUTES = 30;
 
@@ -68,6 +77,10 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   async function refreshAgenda() {
     if (!currentUser?.session_token) {
       return;
+    }
+
+    if (currentUser.role === "admin") {
+      void processGoogleCalendarSync(currentUser.session_token).catch(() => undefined);
     }
 
     const [chairs, rows, blocks, sync, patientRows] = await Promise.all([
@@ -200,7 +213,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     await refreshAgenda();
   }
 
-  async function handleDrop(targetDate: string, chairNumber: number, hour: number, data: string) {
+  async function handleDrop(targetDate: string, chairNumber: number, time: string, data: string) {
     if (!currentUser?.session_token || !data) {
       return;
     }
@@ -210,8 +223,8 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
       return;
     }
 
-    const startsAt = localDateTimeWithOffset(targetDate, `${String(hour).padStart(2, "0")}:00`);
-    const endsAt = addMinutesLocalDateTime(targetDate, `${String(hour).padStart(2, "0")}:00`, duration);
+    const startsAt = localDateTimeWithOffset(targetDate, time);
+    const endsAt = addMinutesLocalDateTime(targetDate, time, duration);
     await moveAppointment(currentUser.session_token, appointmentId, chairNumber, startsAt, endsAt);
     setStatusMessage(t("agendaAppointmentMoved"));
     await refreshAgenda();
@@ -232,7 +245,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
         <PageTitle eyebrow={t("agendaEyebrow")} title={t("agendaTitle")} />
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={syncStatus?.failed_jobs ? "danger" : syncStatus?.connected ? "success" : "warning"}>
-            {syncStatus?.connected ? t("agendaCalendarConnected") : t("agendaGooglePending")}
+            {syncStatus?.failed_jobs || !syncStatus?.connected ? t("agendaCalendarDisconnected") : t("agendaCalendarConnected")}
           </Badge>
           <Badge variant="default">
             {t("agendaQueuedJobs")}: {syncStatus?.queued_jobs ?? 0}
@@ -408,15 +421,15 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
                     {t("agendaChair")} {String(chair)}
                   </div>
                 ))}
-                {HOURS.map((hour) => (
-                  <AgendaHourRow
-                    key={`${day}-${String(hour)}`}
-                    appointments={appointmentsForSlot(appointments, day, hour)}
-                    blocks={blocksForSlot(agendaBlocks, day, hour)}
+                {TIME_SLOTS.map((slot) => (
+                  <AgendaTimeSlotRow
+                    key={`${day}-${slot.key}`}
+                    appointments={appointmentsForSlot(appointments, day, slot.key)}
+                    blocks={blocksForSlot(agendaBlocks, day, slot.key)}
                     chairNumbers={chairNumbers}
                     day={day}
-                    hour={hour}
-                    onDrop={(targetDate, chairNumber, targetHour, data) => void handleDrop(targetDate, chairNumber, targetHour, data).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}
+                    slot={slot}
+                    onDrop={(targetDate, chairNumber, targetTime, data) => void handleDrop(targetDate, chairNumber, targetTime, data).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}
                     onStatusChange={(appointment, status) => void handleStatusChange(appointment, status).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}
                     t={t}
                   />
@@ -430,12 +443,12 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   );
 }
 
-function AgendaHourRow({
+function AgendaTimeSlotRow({
   appointments,
   blocks,
   chairNumbers,
   day,
-  hour,
+  slot,
   onDrop,
   onStatusChange,
   t
@@ -444,24 +457,24 @@ function AgendaHourRow({
   blocks: AgendaBlock[];
   chairNumbers: number[];
   day: string;
-  hour: number;
-  onDrop: (day: string, chairNumber: number, hour: number, data: string) => void;
+  slot: { key: string; label: string };
+  onDrop: (day: string, chairNumber: number, time: string, data: string) => void;
   onStatusChange: (appointment: Appointment, status: AppointmentStatus) => void;
   t: (key: L10nKey) => string;
 }) {
   return (
     <>
       <div className="border-t border-alabaster-grey-500/10 py-2 font-mono text-xs text-alabaster-grey-500">
-        {String(hour).padStart(2, "0")}:00
+        {slot.label}
       </div>
       {chairNumbers.map((chair) => (
         <div
-          key={`${day}-${String(hour)}-${String(chair)}`}
+          key={`${day}-${slot.key}-${String(chair)}`}
           className="min-h-[78px] border-t border-alabaster-grey-500/10 p-1"
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => {
             event.preventDefault();
-            onDrop(day, chair, hour, event.dataTransfer.getData("text/plain"));
+            onDrop(day, chair, slot.key, event.dataTransfer.getData("text/plain"));
           }}
         >
           <div className="grid gap-1">
@@ -527,12 +540,12 @@ function WeekAvailabilitySummary({ appointments, blocks, days, t }: { appointmen
         <div key={day} className="grid min-w-9 justify-items-center gap-1">
           <span className="text-[9px] font-semibold uppercase text-alabaster-grey-500">{formatDayLabel(day).slice(0, 3)}</span>
           <div className="grid grid-cols-3 gap-0.5">
-            {HOURS.map((hour) => {
-              const hasAppointments = appointmentsForSlot(appointments, day, hour).length > 0;
-              const hasClosure = blocksForSlot(blocks, day, hour).length > 0;
+            {TIME_SLOTS.map((slot) => {
+              const hasAppointments = appointmentsForSlot(appointments, day, slot.key).length > 0;
+              const hasClosure = blocksForSlot(blocks, day, slot.key).length > 0;
               return (
                 <span
-                  key={`${day}-${String(hour)}`}
+                  key={`${day}-${slot.key}`}
                   className={`h-1.5 w-1.5 rounded-full ${hasClosure ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.55)]" : hasAppointments ? "bg-powder-blue-500 shadow-[0_0_8px_rgba(56,142,216,0.55)]" : "border border-alabaster-grey-500/20 bg-transparent"}`}
                 />
               );
@@ -604,8 +617,8 @@ function appointmentsForDay(appointments: Appointment[], day: string) {
   return appointments.filter((appointment) => appointment.starts_at.slice(0, 10) === day);
 }
 
-function appointmentsForSlot(appointments: Appointment[], day: string, hour: number) {
-  return appointmentsForDay(appointments, day).filter((appointment) => Number(appointment.starts_at.slice(11, 13)) === hour);
+function appointmentsForSlot(appointments: Appointment[], day: string, time: string) {
+  return appointmentsForDay(appointments, day).filter((appointment) => appointment.starts_at.slice(11, 16) === time);
 }
 
 function nextFreeAppointmentTime(dateInput: string, chairNumber: number, appointments: Appointment[], durationMinutes: number) {
@@ -628,9 +641,9 @@ function appointmentOverlaps(dateInput: string, timeInput: string, chairNumber: 
     .some((appointment) => Date.parse(appointment.starts_at) < end && Date.parse(appointment.ends_at) > start);
 }
 
-function blocksForSlot(blocks: AgendaBlock[], day: string, hour: number) {
-  const slotStart = Date.parse(localDateTimeWithOffset(day, `${String(hour).padStart(2, "0")}:00`));
-  const slotEnd = Date.parse(addMinutesLocalDateTime(day, `${String(hour).padStart(2, "0")}:00`, 60));
+function blocksForSlot(blocks: AgendaBlock[], day: string, time: string) {
+  const slotStart = Date.parse(localDateTimeWithOffset(day, time));
+  const slotEnd = Date.parse(addMinutesLocalDateTime(day, time, 30));
   return blocks.filter((block) => Date.parse(block.starts_at) < slotEnd && Date.parse(block.ends_at) > slotStart);
 }
 

@@ -344,6 +344,7 @@ pub struct GoogleCalendarSyncJob {
 
 #[derive(Debug, Clone)]
 pub struct GoogleCalendarTokenRecord {
+    pub account_id: i64,
     pub calendar_id: String,
     pub token_json: String,
 }
@@ -3457,7 +3458,13 @@ impl Database {
             |row| row.get(0),
         )?;
         let failed_jobs: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sync_jobs WHERE integration_type = 'google_calendar' AND status = 'failed'",
+            r#"
+            SELECT COUNT(*)
+            FROM sync_jobs
+            WHERE
+                integration_type = 'google_calendar'
+                AND (status = 'failed' OR (status = 'queued' AND last_error IS NOT NULL))
+            "#,
             [],
             |row| row.get(0),
         )?;
@@ -3587,7 +3594,7 @@ impl Database {
         self.assert_admin(actor_user_id)?;
         let mut statement = self.conn.prepare(
             r#"
-            SELECT calendar_id, token_json
+            SELECT id, calendar_id, token_json
             FROM google_calendar_accounts
             WHERE active = 1
             ORDER BY id ASC
@@ -3596,13 +3603,160 @@ impl Database {
         let tokens = statement
             .query_map([], |row| {
                 Ok(GoogleCalendarTokenRecord {
-                    calendar_id: row.get(0)?,
-                    token_json: row.get(1)?,
+                    account_id: row.get(0)?,
+                    calendar_id: row.get(1)?,
+                    token_json: row.get(2)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(DbError::from)?;
         Ok(tokens)
+    }
+
+    pub fn update_google_calendar_account_token(
+        &self,
+        actor_user_id: i64,
+        account_id: i64,
+        token_json: &str,
+    ) -> DbResult<()> {
+        self.assert_admin(actor_user_id)?;
+        let affected = self.conn.execute(
+            r#"
+            UPDATE google_calendar_accounts
+            SET
+                token_json = ?1,
+                active = 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2
+            "#,
+            params![token_json, account_id],
+        )?;
+        if affected == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub fn upsert_google_calendar_remote_appointment(
+        &self,
+        actor_user_id: i64,
+        google_event_id: &str,
+        title: &str,
+        starts_at: &str,
+        ends_at: &str,
+        google_updated_at: &str,
+    ) -> DbResult<bool> {
+        self.assert_admin(actor_user_id)?;
+        let event_id = google_event_id.trim();
+        if event_id.is_empty() || starts_at.trim().is_empty() || ends_at.trim().is_empty() {
+            return Ok(false);
+        }
+        let normalized_title = title
+            .trim()
+            .strip_suffix(" (VeloDent)")
+            .unwrap_or(title.trim())
+            .trim();
+        let normalized_title = if normalized_title.is_empty() {
+            "Google Calendar"
+        } else {
+            normalized_title
+        };
+        let existing: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, updated_at FROM appointments WHERE google_calendar_event_id = ?1",
+                [event_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        if let Some((appointment_id, local_updated_at)) = existing {
+            if !google_updated_at.trim().is_empty() && local_updated_at.as_str() >= google_updated_at.trim() {
+                return Ok(false);
+            }
+            let affected = self.conn.execute(
+                r#"
+                UPDATE appointments
+                SET
+                    title = ?1,
+                    starts_at = ?2,
+                    ends_at = ?3,
+                    last_google_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?4
+                "#,
+                params![
+                    normalized_title,
+                    starts_at.trim(),
+                    ends_at.trim(),
+                    appointment_id
+                ],
+            )?;
+            return Ok(affected > 0);
+        }
+
+        self.conn.execute(
+            r#"
+            INSERT INTO appointments (
+                patient_id,
+                chair_number,
+                title,
+                starts_at,
+                ends_at,
+                status,
+                color_tag,
+                google_calendar_event_id,
+                last_google_sync_at
+            )
+            VALUES (NULL, 1, ?1, ?2, ?3, 'booked', 'powder_blue', ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            "#,
+            params![normalized_title, starts_at.trim(), ends_at.trim(), event_id],
+        )?;
+        let appointment_id = self.conn.last_insert_rowid();
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "agenda.google_calendar_imported",
+            Some("appointments"),
+            Some(appointment_id),
+            "{}",
+        )?;
+        Ok(true)
+    }
+
+    pub fn cancel_google_calendar_remote_appointment(
+        &self,
+        actor_user_id: i64,
+        google_event_id: &str,
+        google_updated_at: &str,
+    ) -> DbResult<bool> {
+        self.assert_admin(actor_user_id)?;
+        let existing: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, updated_at FROM appointments WHERE google_calendar_event_id = ?1",
+                [google_event_id.trim()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((appointment_id, local_updated_at)) = existing else {
+            return Ok(false);
+        };
+        if !google_updated_at.trim().is_empty() && local_updated_at.as_str() >= google_updated_at.trim() {
+            return Ok(false);
+        }
+        let affected = self.conn.execute(
+            r#"
+            UPDATE appointments
+            SET
+                status = 'cancelled',
+                last_google_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?1
+            "#,
+            [appointment_id],
+        )?;
+        Ok(affected > 0)
     }
 
     pub fn pending_google_calendar_sync_jobs(
@@ -3638,7 +3792,7 @@ impl Database {
             WHERE
                 sync_jobs.integration_type = 'google_calendar'
                 AND sync_jobs.entity_type = 'appointment'
-                AND sync_jobs.status = 'queued'
+                AND sync_jobs.status IN ('queued', 'failed')
                 AND (sync_jobs.run_after IS NULL OR sync_jobs.run_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             ORDER BY sync_jobs.created_at ASC
             LIMIT ?1
@@ -3683,7 +3837,7 @@ impl Database {
             WHERE
                 sync_jobs.integration_type = 'google_calendar'
                 AND sync_jobs.entity_type = 'agenda_block'
-                AND sync_jobs.status = 'queued'
+                AND sync_jobs.status IN ('queued', 'failed')
                 AND (sync_jobs.run_after IS NULL OR sync_jobs.run_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             ORDER BY sync_jobs.created_at ASC
             LIMIT ?1
@@ -3766,15 +3920,16 @@ impl Database {
         Ok(())
     }
 
-    pub fn fail_google_calendar_sync_job(&self, job_id: i64, error_message: &str) -> DbResult<()> {
+    pub fn retry_google_calendar_sync_job(&self, job_id: i64, error_message: &str) -> DbResult<()> {
         let sanitized = sanitize_sync_error(error_message);
         self.conn.execute(
             r#"
             UPDATE sync_jobs
             SET
-                status = 'failed',
+                status = 'queued',
                 attempts = attempts + 1,
                 last_error = ?1,
+                run_after = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+5 minutes'),
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE id = ?2
             "#,
@@ -6654,6 +6809,71 @@ mod tests {
             )
             .expect("agenda block sync jobs count");
         assert_eq!(block_jobs, 1);
+    }
+
+    #[test]
+    fn google_calendar_sync_errors_remain_retryable_and_visible() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Paolo",
+                    last_name: "Bianchi",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        db.create_appointment(
+            admin.id,
+            &AppointmentInput {
+                patient_id: Some(patient.id),
+                chair_number: 1,
+                title: "Visita di controllo",
+                starts_at: "2026-06-20T09:00:00+02:00",
+                ends_at: "2026-06-20T09:30:00+02:00",
+                status: "booked",
+                color_tag: Some("powder_blue"),
+                notes: None,
+            },
+        )
+        .expect("create appointment");
+
+        let job_id: i64 = db
+            .conn
+            .query_row(
+                "SELECT id FROM sync_jobs WHERE integration_type = 'google_calendar' AND entity_type = 'appointment'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("queued sync job");
+        db.retry_google_calendar_sync_job(job_id, "temporary network error")
+            .expect("mark retryable");
+
+        let status = db
+            .google_calendar_sync_status(admin.id)
+            .expect("sync status");
+        assert_eq!(status.failed_jobs, 1);
+
+        db.conn
+            .execute(
+                "UPDATE sync_jobs SET run_after = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 minute') WHERE id = ?1",
+                [job_id],
+            )
+            .expect("make job due");
+        let retryable = db
+            .pending_google_calendar_sync_jobs(admin.id, 10)
+            .expect("pending retry jobs");
+        assert_eq!(retryable.len(), 1);
+        assert_eq!(retryable[0].job_id, job_id);
     }
 
     #[test]

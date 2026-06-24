@@ -78,6 +78,27 @@ struct GoogleEventResponse {
     id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct GoogleCalendarRemoteEvent {
+    pub id: String,
+    pub summary: Option<String>,
+    pub status: Option<String>,
+    pub updated: Option<String>,
+    pub start: GoogleCalendarRemoteEventTime,
+    pub end: GoogleCalendarRemoteEventTime,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GoogleCalendarRemoteEventTime {
+    #[serde(rename = "dateTime")]
+    pub date_time: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleCalendarEventsResponse {
+    items: Option<Vec<GoogleCalendarRemoteEvent>>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GoogleUserInfo {
     pub email: String,
@@ -271,6 +292,62 @@ pub async fn exchange_authorization_code(
     })
 }
 
+pub async fn refresh_access_token(
+    existing_token: &GoogleCalendarToken,
+) -> Result<GoogleCalendarToken, GoogleApiError> {
+    let refresh_token = existing_token
+        .refresh_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| GoogleApiError::Request("stored google refresh token is missing".to_owned()))?;
+    let config = load_oauth_config()?;
+    let client = reqwest::Client::new();
+    let body = format!(
+        "refresh_token={}&client_id={}&client_secret={}&grant_type=refresh_token",
+        encode_url_component(refresh_token),
+        encode_url_component(&config.client_id),
+        encode_url_component(&config.client_secret),
+    );
+    let response = client
+        .post(GOOGLE_TOKEN_URI)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await
+        .map_err(|error| GoogleApiError::Request(error.to_string()))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "redacted google error".to_owned());
+        return Err(GoogleApiError::HttpStatus(
+            status.as_u16(),
+            sanitize_google_error(&body),
+        ));
+    }
+
+    let token = response
+        .json::<GoogleTokenResponse>()
+        .await
+        .map_err(|error| GoogleApiError::Request(error.to_string()))?;
+    let expires_at_epoch_seconds = token
+        .expires_in
+        .and_then(|seconds| current_epoch_seconds().map(|now| now + seconds));
+
+    Ok(GoogleCalendarToken {
+        access_token: token.access_token,
+        refresh_token: token
+            .refresh_token
+            .or_else(|| existing_token.refresh_token.clone()),
+        token_type: token.token_type.unwrap_or_else(|| existing_token.token_type.clone()),
+        scope: token.scope.or_else(|| existing_token.scope.clone()),
+        expires_at_epoch_seconds,
+    })
+}
+
 pub async fn user_info(access_token: &str) -> Result<GoogleUserInfo, GoogleApiError> {
     let response = reqwest::Client::new()
         .get(GOOGLE_USERINFO_URI)
@@ -362,6 +439,45 @@ pub async fn upsert_calendar_event(
     }
 }
 
+pub async fn list_calendar_events(
+    access_token: &str,
+    calendar_id: &str,
+) -> Result<Vec<GoogleCalendarRemoteEvent>, GoogleApiError> {
+    let calendar_id = if calendar_id.trim().is_empty() {
+        "primary"
+    } else {
+        calendar_id.trim()
+    };
+    let url = format!(
+        "{GOOGLE_CALENDAR_EVENTS_URI}/{}/events?singleEvents=true&showDeleted=true&maxResults=250",
+        encode_url_component(calendar_id),
+    );
+    let response = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|error| GoogleApiError::Request(error.to_string()))?;
+    let status = response.status();
+
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "redacted google error".to_owned());
+        return Err(GoogleApiError::HttpStatus(
+            status.as_u16(),
+            sanitize_google_error(&body),
+        ));
+    }
+
+    response
+        .json::<GoogleCalendarEventsResponse>()
+        .await
+        .map(|response| response.items.unwrap_or_default())
+        .map_err(|error| GoogleApiError::Request(error.to_string()))
+}
+
 impl GoogleOAuthConfig {
     pub fn redirect_uri(&self) -> &str {
         &self.redirect_uri
@@ -373,6 +489,15 @@ impl GoogleOAuthConfig {
 
     pub fn client_secret_is_present(&self) -> bool {
         !self.client_secret.trim().is_empty()
+    }
+}
+
+impl GoogleCalendarToken {
+    pub fn should_refresh(&self) -> bool {
+        match (self.expires_at_epoch_seconds, current_epoch_seconds()) {
+            (Some(expires_at), Some(now)) => expires_at <= now + 120,
+            _ => false,
+        }
     }
 }
 

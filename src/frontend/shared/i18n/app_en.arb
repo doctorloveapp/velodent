@@ -274,6 +274,7 @@
   "agendaGenericError": "Agenda operation not completed",
   "agendaGoogleConnected": "Google connected",
   "agendaCalendarConnected": "Calendar connected",
+  "agendaCalendarDisconnected": "Calendar disconnected",
   "agendaGooglePending": "Google pending",
   "agendaQueuedJobs": "Sync queue",
   "agendaPatientOptional": "Optional patient",

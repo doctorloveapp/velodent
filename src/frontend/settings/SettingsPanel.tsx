@@ -5,6 +5,7 @@ import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
+import { googleCalendarSyncStatus, type GoogleCalendarSyncStatus } from "@/frontend/agenda/agendaApi";
 import {
   createUser,
   getPairingCode,
@@ -35,6 +36,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [backendAvailable] = useState(isTauriRuntime());
   const [users, setUsers] = useState<User[]>([]);
   const [calendarAccounts, setCalendarAccounts] = useState<GoogleCalendarAccount[]>([]);
+  const [calendarSyncStatus, setCalendarSyncStatus] = useState<GoogleCalendarSyncStatus | null>(null);
   const [devices, setDevices] = useState<AuthorizedDevice[]>([]);
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
@@ -64,15 +66,17 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       return;
     }
 
-    const [nextUsers, nextCalendarAccounts, nextDevices, nextSettings] = await Promise.all([
+    const [nextUsers, nextCalendarAccounts, nextDevices, nextSettings, nextCalendarSyncStatus] = await Promise.all([
       listUsers(currentUser.session_token),
       listGoogleCalendarAccounts(currentUser.session_token),
       listDevices(currentUser.session_token),
-      getStudioSettings(currentUser.session_token)
+      getStudioSettings(currentUser.session_token),
+      googleCalendarSyncStatus(currentUser.session_token)
     ]);
 
     setUsers(nextUsers);
     setCalendarAccounts(nextCalendarAccounts);
+    setCalendarSyncStatus(nextCalendarSyncStatus);
     setDevices(nextDevices);
     setSettings(nextSettings);
     setStudioForm({
@@ -278,7 +282,15 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
         eyebrow={t("settingsGoogleCalendarAccountsEyebrow")}
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-alabaster-grey-500">{t("settingsGoogleCalendarAccountsHelp")}</p>
+          <div className="grid gap-2">
+            <p className="text-sm text-alabaster-grey-500">{t("settingsGoogleCalendarAccountsHelp")}</p>
+            <Badge
+              className="w-fit"
+              variant={calendarSyncStatus?.failed_jobs ? "danger" : calendarSyncStatus?.connected ? "success" : "warning"}
+            >
+              {calendarSyncStatus?.failed_jobs || !calendarSyncStatus?.connected ? t("agendaCalendarDisconnected") : t("agendaCalendarConnected")}
+            </Badge>
+          </div>
           <SettingsActionButton onClick={() => void handleLinkGoogleCalendar().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
             <CalendarCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
             {t("settingsGoogleCalendarAddAccount")}
@@ -289,8 +301,8 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
           rows={calendarAccounts.map((account) => [
             account.email ?? "-",
             account.calendar_id,
-            <Badge key={account.id} variant={account.active ? "success" : "warning"}>
-              {account.active ? t("agendaCalendarConnected") : t("settingsInactive")}
+            <Badge key={account.id} variant={account.active && !calendarSyncStatus?.failed_jobs ? "success" : "warning"}>
+              {account.active && !calendarSyncStatus?.failed_jobs ? t("agendaCalendarConnected") : t("agendaCalendarDisconnected")}
             </Badge>
           ])}
         />

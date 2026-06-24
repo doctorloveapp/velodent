@@ -112,3 +112,9 @@ export async function updateAppointmentStatus(session_token: string, appointment
 export async function googleCalendarSyncStatus(session_token: string) {
   return invoke<GoogleCalendarSyncStatus>("google_calendar_sync_status", { request: { session_token } });
 }
+
+export async function processGoogleCalendarSync(session_token: string) {
+  return invoke<{ processed: number; failed: number }>("process_google_calendar_sync", {
+    request: { session_token }
+  });
+}

@@ -1,5 +1,5 @@
 use crate::{
-    db::{AgendaBlock, Appointment},
+    db::{AgendaBlock, Appointment, GoogleCalendarTokenRecord},
     integrations::google,
     state::AppState,
 };
@@ -53,20 +53,15 @@ pub async fn process_google_calendar_sync(
         let mut last_error = None;
 
         for account in &accounts {
-            let token = match serde_json::from_str::<google::GoogleCalendarToken>(&account.token_json)
-            {
-                Ok(token) if !token.access_token.trim().is_empty() => token,
-                Ok(_) => {
-                    last_error = Some("stored google calendar token is empty".to_owned());
-                    continue;
-                }
-                Err(_) => {
-                    last_error = Some("stored google calendar token is not readable".to_owned());
+            let access_token = match access_token_for_account(&state, actor_user_id, account).await {
+                Ok(access_token) => access_token,
+                Err(error) => {
+                    last_error = Some(error);
                     continue;
                 }
             };
             let result = upsert_with_insert_fallback(
-                &token.access_token,
+                &access_token,
                 &account.calendar_id,
                 job.appointment.google_calendar_event_id.as_deref(),
                 &payload,
@@ -86,7 +81,7 @@ pub async fn process_google_calendar_sync(
             processed += 1;
         } else {
             database
-                .fail_google_calendar_sync_job(
+                .retry_google_calendar_sync_job(
                     job.job_id,
                     last_error
                         .as_deref()
@@ -103,20 +98,15 @@ pub async fn process_google_calendar_sync(
         let mut last_error = None;
 
         for account in &accounts {
-            let token = match serde_json::from_str::<google::GoogleCalendarToken>(&account.token_json)
-            {
-                Ok(token) if !token.access_token.trim().is_empty() => token,
-                Ok(_) => {
-                    last_error = Some("stored google calendar token is empty".to_owned());
-                    continue;
-                }
-                Err(_) => {
-                    last_error = Some("stored google calendar token is not readable".to_owned());
+            let access_token = match access_token_for_account(&state, actor_user_id, account).await {
+                Ok(access_token) => access_token,
+                Err(error) => {
+                    last_error = Some(error);
                     continue;
                 }
             };
             let result = upsert_with_insert_fallback(
-                &token.access_token,
+                &access_token,
                 &account.calendar_id,
                 job.block.google_calendar_event_id.as_deref(),
                 &payload,
@@ -136,7 +126,7 @@ pub async fn process_google_calendar_sync(
             processed += 1;
         } else {
             database
-                .fail_google_calendar_sync_job(
+                .retry_google_calendar_sync_job(
                     job.job_id,
                     last_error
                         .as_deref()
@@ -147,7 +137,92 @@ pub async fn process_google_calendar_sync(
         }
     }
 
+    for account in &accounts {
+        let access_token = match access_token_for_account(&state, actor_user_id, account).await {
+            Ok(access_token) => access_token,
+            Err(_) => {
+                failed += 1;
+                continue;
+            }
+        };
+        match google::list_calendar_events(&access_token, &account.calendar_id).await {
+            Ok(events) => {
+                for event in events {
+                    if event.status.as_deref() == Some("cancelled") {
+                        let changed = {
+                            let database = state.database()?;
+                            database
+                                .cancel_google_calendar_remote_appointment(
+                                    actor_user_id,
+                                    &event.id,
+                                    event.updated.as_deref().unwrap_or(""),
+                                )
+                                .map_err(|error| error.to_string())?
+                        };
+                        if changed {
+                            processed += 1;
+                        }
+                        continue;
+                    }
+                    let Some(starts_at) = event.start.date_time.as_deref() else {
+                        continue;
+                    };
+                    let Some(ends_at) = event.end.date_time.as_deref() else {
+                        continue;
+                    };
+                    let changed = {
+                        let database = state.database()?;
+                        database
+                            .upsert_google_calendar_remote_appointment(
+                                actor_user_id,
+                                &event.id,
+                                event.summary.as_deref().unwrap_or("Google Calendar"),
+                                starts_at,
+                                ends_at,
+                                event.updated.as_deref().unwrap_or(""),
+                            )
+                            .map_err(|error| error.to_string())?
+                    };
+                    if changed {
+                        processed += 1;
+                    }
+                }
+            }
+            Err(_) => {
+                failed += 1;
+            }
+        }
+    }
+
     Ok((processed, failed))
+}
+
+async fn access_token_for_account(
+    state: &AppState,
+    actor_user_id: i64,
+    account: &GoogleCalendarTokenRecord,
+) -> Result<String, String> {
+    let token = serde_json::from_str::<google::GoogleCalendarToken>(&account.token_json)
+        .map_err(|_| "stored google calendar token is not readable".to_owned())?;
+    if token.access_token.trim().is_empty() {
+        return Err("stored google calendar token is empty".to_owned());
+    }
+    if !token.should_refresh() {
+        return Ok(token.access_token);
+    }
+
+    let refreshed = google::refresh_access_token(&token)
+        .await
+        .map_err(|error| error.to_string())?;
+    if refreshed.access_token.trim().is_empty() {
+        return Err("refreshed google calendar token is empty".to_owned());
+    }
+    let token_json = serde_json::to_string(&refreshed).map_err(|error| error.to_string())?;
+    let database = state.database()?;
+    database
+        .update_google_calendar_account_token(actor_user_id, account.account_id, &token_json)
+        .map_err(|error| error.to_string())?;
+    Ok(refreshed.access_token)
 }
 
 async fn upsert_with_insert_fallback(
