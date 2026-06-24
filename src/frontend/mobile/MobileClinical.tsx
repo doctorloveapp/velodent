@@ -20,12 +20,14 @@ import { calculateBridgePreview } from "./bridge";
 
 type ClinicalMobileMode = "clinical" | "orthodontics";
 type ArchMode = "upper" | "lower";
-type QuickAction = "caries" | "endodontics" | "periodontics" | "crown" | "extraction" | "mobileProsthesis";
+type QuickAction = "diagnosis" | "hygiene" | "caries" | "endodontics" | "periodontics" | "crown" | "extraction" | "mobileProsthesis";
 
 const upperTeeth = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28];
 const lowerTeeth = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
 
 const quickActionButtonClasses: Record<QuickAction, string> = {
+  diagnosis: "border-alabaster-grey-500/20 bg-glaucous-950 text-white hover:border-powder-blue-500/45 hover:bg-powder-blue-950",
+  hygiene: "border-alabaster-grey-500/20 bg-glaucous-950 text-white hover:border-powder-blue-500/45 hover:bg-powder-blue-950",
   caries: "border-emerald-400/45 bg-emerald-400/12 text-emerald-100 hover:bg-emerald-400/20",
   endodontics: "border-violet-400/45 bg-violet-400/12 text-violet-100 hover:bg-violet-400/20",
   periodontics: "border-powder-blue-500/45 bg-powder-blue-500/12 text-powder-blue-100 hover:bg-powder-blue-500/20",
@@ -35,6 +37,8 @@ const quickActionButtonClasses: Record<QuickAction, string> = {
 };
 
 const recordedToothClasses: Record<QuickAction, string> = {
+  diagnosis: "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500",
+  hygiene: "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500",
   caries: "border-emerald-400/55 bg-emerald-400/18 text-white",
   endodontics: "border-violet-400/55 bg-violet-400/18 text-white",
   periodontics: "border-powder-blue-500/55 bg-powder-blue-500/18 text-white",
@@ -237,6 +241,11 @@ export function MobileClinical({
       });
       return;
     }
+    if (!selectionMode && selectedTeeth.length === 1 && selectedTeeth[0] === tooth) {
+      setSelectedTeeth([]);
+      onSelectedToothRecordInfo(null);
+      return;
+    }
     setSelectedTeeth([tooth]);
   }
 
@@ -258,16 +267,18 @@ export function MobileClinical({
           : selectedTeeth
       )
     );
-    if (targetTeeth.length === 0) {
+    const isGeneralAction = activeAction === "diagnosis" || activeAction === "hygiene" || activeAction === "mobileProsthesis";
+    if (targetTeeth.length === 0 && !isGeneralAction) {
       return;
     }
 
+    const recordTargets = targetTeeth.length > 0 ? targetTeeth : [null];
     const records = await Promise.all(
-      targetTeeth.map((tooth) =>
+      recordTargets.map((tooth) =>
         createClinicalRecord(sessionToken, {
           patient_id: activePatientId,
           service_id: service.id,
-          tooth_number: tooth,
+          tooth_number: tooth ?? undefined,
           pathology_description: service.name,
           status: "diagnosed",
           ready_for_quote: true
@@ -278,7 +289,10 @@ export function MobileClinical({
     setRecordedToothRecords((current) => {
       const next = { ...current };
       records.forEach((record, index) => {
-        const tooth = targetTeeth[index];
+        const tooth = recordTargets[index];
+        if (tooth === null) {
+          return;
+        }
         next[tooth] = { action: activeAction, recordId: record.id, serviceName: record.service_name ?? service.name };
       });
       return next;
@@ -320,6 +334,21 @@ export function MobileClinical({
     onSelectedToothRecordInfo(null);
   }
 
+  async function handleGeneralServiceSelect(service: ClinicalService) {
+    if (!activePatientId || !sessionToken) {
+      return;
+    }
+    const record = await createClinicalRecord(sessionToken, {
+      patient_id: activePatientId,
+      service_id: service.id,
+      pathology_description: service.name,
+      status: "diagnosed",
+      ready_for_quote: true
+    });
+    setClinicalRecords((current) => [record, ...current]);
+    setStatusMessage(t("mobileClinicalServiceRegistered"));
+  }
+
   if (!activePatientId) {
     return (
       <section className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
@@ -334,6 +363,7 @@ export function MobileClinical({
         <MobileServicePanel
           title={t("mobileOrthodonticCatalog")}
           services={services.filter((service) => service.category?.toLowerCase().includes("ortodonz"))}
+          onSelect={(service) => void handleGeneralServiceSelect(service).catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
         />
         <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
@@ -435,12 +465,11 @@ export function MobileClinical({
           })}
         </div>
         {statusMessage ? <p className="mt-3 text-xs text-powder-blue-500">{statusMessage}</p> : null}
-        {selectedTeeth.length === 0 ? (
-          <p className="mt-3 text-sm leading-6 text-alabaster-grey-500">
-            {t("mobileClinicalNoDataInstruction")}
-          </p>
-        ) : null}
       </div>
+
+      {selectedTeeth.length === 0 && !selectionMode ? (
+        <GeneralQuickActions activeAction={activeAction} onAction={handleQuickAction} />
+      ) : null}
 
       {selectedTeeth.length > 0 && !selectionMode ? (
         <QuickActions
@@ -477,6 +506,41 @@ export function MobileClinical({
   );
 }
 
+function GeneralQuickActions({
+  activeAction,
+  onAction
+}: {
+  activeAction: QuickAction | null;
+  onAction: (action: QuickAction) => void;
+}) {
+  const { t } = useL10n();
+  const actions: { key: QuickAction; label: string }[] = [
+    { key: "diagnosis", label: t("mobileDiagnosis") },
+    { key: "hygiene", label: t("mobileHygiene") },
+    { key: "mobileProsthesis", label: t("mobileRemovableProsthesis") }
+  ];
+
+  return (
+    <div className="grid grid-cols-1 gap-2">
+      {actions.map((action) => (
+        <Button
+          key={action.key}
+          type="button"
+          variant="secondary"
+          className={[
+            "h-14 justify-center text-sm",
+            quickActionButtonClasses[action.key],
+            activeAction === action.key ? "ring-2 ring-powder-blue-500/55" : ""
+          ].join(" ")}
+          onClick={() => onAction(action.key)}
+        >
+          {action.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 function QuickActions({
   activeAction,
   activePatientId,
@@ -500,8 +564,7 @@ function QuickActions({
     { key: "endodontics", label: t("mobileEndodontics") },
     { key: "periodontics", label: t("mobileVarious") },
     { key: "crown", label: useBridge ? t("mobileBridge") : t("mobileCrown") },
-    { key: "extraction", label: t("mobileExtraction") },
-    { key: "mobileProsthesis", label: t("mobileRemovableProsthesis") }
+    { key: "extraction", label: t("mobileExtraction") }
   ];
 
   return (
@@ -726,10 +789,12 @@ function quickActionLabel(action: QuickAction, useBridge: boolean, t: ReturnType
     return t("mobileBridge");
   }
   const labels: Record<QuickAction, string> = {
+    diagnosis: t("mobileDiagnosis"),
     caries: t("mobileCaries"),
     crown: t("mobileCrown"),
     endodontics: t("mobileEndodontics"),
     extraction: t("mobileExtraction"),
+    hygiene: t("mobileHygiene"),
     mobileProsthesis: t("mobileRemovableProsthesis"),
     periodontics: t("mobileVarious")
   };
@@ -775,6 +840,9 @@ function normalizeToothStates(
 function quickActionFromCategory(category: string | null): QuickAction | null {
   const value = category?.trim().toLowerCase() ?? "";
   const group = clinicalServiceGroupKey(category);
+  if (group === "diagnosis" || group === "hygiene") {
+    return null;
+  }
   if (group === "conservative") {
     return "caries";
   }
@@ -829,7 +897,15 @@ function buildProsthesisGroups(
   }));
 }
 
-function MobileServicePanel({ services, title }: { services: ClinicalService[]; title: string }) {
+function MobileServicePanel({
+  onSelect,
+  services,
+  title
+}: {
+  onSelect?: (service: ClinicalService) => void;
+  services: ClinicalService[];
+  title: string;
+}) {
   const { t } = useL10n();
   return (
     <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
@@ -837,7 +913,13 @@ function MobileServicePanel({ services, title }: { services: ClinicalService[]; 
       <div className="mt-3 grid gap-2">
         {services.length ? (
           services.slice(0, 8).map((service) => (
-            <Button key={service.id} type="button" variant="secondary" className="h-auto min-h-14 justify-start py-3 text-left">
+            <Button
+              key={service.id}
+              type="button"
+              variant="secondary"
+              className="h-auto min-h-14 justify-start py-3 text-left"
+              onClick={() => onSelect?.(service)}
+            >
               {service.name}
             </Button>
           ))

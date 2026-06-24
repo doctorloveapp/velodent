@@ -3673,6 +3673,63 @@ impl Database {
         Ok(())
     }
 
+    pub fn google_calendar_event_id_for(
+        &self,
+        actor_user_id: i64,
+        account_id: i64,
+        entity_type: &str,
+        entity_id: i64,
+    ) -> DbResult<Option<String>> {
+        self.assert_admin(actor_user_id)?;
+        let entity_type = normalize_google_calendar_link_entity_type(entity_type)?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT google_event_id
+                FROM google_calendar_event_links
+                WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3
+                "#,
+                params![account_id, entity_type, entity_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    pub fn store_google_calendar_event_link(
+        &self,
+        actor_user_id: i64,
+        account_id: i64,
+        entity_type: &str,
+        entity_id: i64,
+        google_event_id: &str,
+    ) -> DbResult<()> {
+        self.assert_admin(actor_user_id)?;
+        let entity_type = normalize_google_calendar_link_entity_type(entity_type)?;
+        let event_id = google_event_id.trim();
+        if event_id.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            r#"
+            INSERT INTO google_calendar_event_links (
+                entity_type,
+                entity_id,
+                account_id,
+                google_event_id,
+                last_google_sync_at
+            )
+            VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ON CONFLICT(entity_type, entity_id, account_id) DO UPDATE SET
+                google_event_id = excluded.google_event_id,
+                last_google_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            params![entity_type, entity_id, account_id, event_id],
+        )?;
+        Ok(())
+    }
+
     pub fn upsert_google_calendar_remote_appointment(
         &self,
         actor_user_id: i64,
@@ -3700,7 +3757,18 @@ impl Database {
         let existing: Option<(i64, String)> = self
             .conn
             .query_row(
-                "SELECT id, updated_at FROM appointments WHERE google_calendar_event_id = ?1",
+                r#"
+                SELECT appointments.id, appointments.updated_at
+                FROM appointments
+                LEFT JOIN google_calendar_event_links ON
+                    google_calendar_event_links.entity_type = 'appointment'
+                    AND google_calendar_event_links.entity_id = appointments.id
+                WHERE
+                    appointments.google_calendar_event_id = ?1
+                    OR google_calendar_event_links.google_event_id = ?1
+                ORDER BY appointments.updated_at DESC
+                LIMIT 1
+                "#,
                 [event_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -3811,7 +3879,18 @@ impl Database {
         let existing: Option<(i64, String)> = self
             .conn
             .query_row(
-                "SELECT id, updated_at FROM appointments WHERE google_calendar_event_id = ?1",
+                r#"
+                SELECT appointments.id, appointments.updated_at
+                FROM appointments
+                LEFT JOIN google_calendar_event_links ON
+                    google_calendar_event_links.entity_type = 'appointment'
+                    AND google_calendar_event_links.entity_id = appointments.id
+                WHERE
+                    appointments.google_calendar_event_id = ?1
+                    OR google_calendar_event_links.google_event_id = ?1
+                ORDER BY appointments.updated_at DESC
+                LIMIT 1
+                "#,
                 [google_event_id.trim()],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -5266,6 +5345,16 @@ fn normalize_appointment_status(status: &str) -> DbResult<&'static str> {
     }
 }
 
+fn normalize_google_calendar_link_entity_type(entity_type: &str) -> DbResult<&'static str> {
+    match entity_type.trim() {
+        "appointment" => Ok("appointment"),
+        "agenda_block" => Ok("agenda_block"),
+        value => Err(DbError::Sql(format!(
+            "invalid google calendar link entity type: {value}"
+        ))),
+    }
+}
+
 fn normalize_quote_status(status: &str) -> DbResult<&'static str> {
     match status.trim() {
         "draft" => Ok("draft"),
@@ -6271,6 +6360,20 @@ CREATE TABLE IF NOT EXISTS google_calendar_accounts (
     UNIQUE(email, calendar_id)
 );
 
+CREATE TABLE IF NOT EXISTS google_calendar_event_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('appointment', 'agenda_block')),
+    entity_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    google_event_id TEXT NOT NULL,
+    last_google_sync_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (account_id) REFERENCES google_calendar_accounts(id) ON DELETE CASCADE,
+    UNIQUE(entity_type, entity_id, account_id),
+    UNIQUE(account_id, google_event_id)
+);
+
 CREATE TABLE IF NOT EXISTS sync_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     integration_type TEXT NOT NULL,
@@ -6328,6 +6431,7 @@ CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_audit_patient_created ON audit_log(patient_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_action_created ON audit_log(action, created_at);
 CREATE INDEX IF NOT EXISTS idx_google_calendar_accounts_active ON google_calendar_accounts(active);
+CREATE INDEX IF NOT EXISTS idx_google_calendar_event_links_entity ON google_calendar_event_links(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_status_run_after ON sync_jobs(status, run_after);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token_hash);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
@@ -7050,6 +7154,100 @@ mod tests {
             )
             .expect("linked event id");
         assert_eq!(linked_event_id.as_deref(), Some("google-event-matching-local"));
+    }
+
+    #[test]
+    fn google_calendar_event_links_are_isolated_per_account() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Luca",
+                    last_name: "Calendar",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let appointment = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Visita di controllo",
+                    starts_at: "2026-06-20T12:00:00+02:00",
+                    ends_at: "2026-06-20T12:30:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: None,
+                },
+            )
+            .expect("create appointment");
+        let first_account = db
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("first@example.test"),
+                "primary",
+                r#"{"access_token":"a","refresh_token":"r","expires_at":4102444800}"#,
+            )
+            .expect("first account");
+        let second_account = db
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("second@example.test"),
+                "primary",
+                r#"{"access_token":"b","refresh_token":"r","expires_at":4102444800}"#,
+            )
+            .expect("second account");
+
+        db.store_google_calendar_event_link(
+            admin.id,
+            first_account.id,
+            "appointment",
+            appointment.id,
+            "event-first",
+        )
+        .expect("store first link");
+        db.store_google_calendar_event_link(
+            admin.id,
+            second_account.id,
+            "appointment",
+            appointment.id,
+            "event-second",
+        )
+        .expect("store second link");
+
+        assert_eq!(
+            db.google_calendar_event_id_for(
+                admin.id,
+                first_account.id,
+                "appointment",
+                appointment.id
+            )
+            .expect("first link")
+            .as_deref(),
+            Some("event-first")
+        );
+        assert_eq!(
+            db.google_calendar_event_id_for(
+                admin.id,
+                second_account.id,
+                "appointment",
+                appointment.id
+            )
+            .expect("second link")
+            .as_deref(),
+            Some("event-second")
+        );
     }
 
     #[test]

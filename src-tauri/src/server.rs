@@ -1,7 +1,7 @@
 pub mod lan {
     use crate::{
         agenda,
-        db::{AppointmentInput, NewClinicalRecord},
+        db::{AppointmentInput, NewClinicalRecord, NewPatient},
         files,
         state::AppState,
         ts_cns,
@@ -32,6 +32,17 @@ pub mod lan {
     #[derive(Debug, Deserialize)]
     struct PatientOpenRequest {
         patient_id: i64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PatientCreateRequest {
+        first_name: String,
+        last_name: String,
+        tax_code: String,
+        date_of_birth: String,
+        phone: Option<String>,
+        email: Option<String>,
+        address: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -187,6 +198,28 @@ pub mod lan {
                     let patient = state
                         .database()?
                         .open_patient_record(user.id, request.patient_id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(patient))
+                })
+            }
+            ("POST", "/api/patients") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = serde_json::from_str::<PatientCreateRequest>(body.trim())
+                        .map_err(|_| "invalid patient create body".to_owned())?;
+                    let patient = state
+                        .database()?
+                        .create_patient(
+                            user.id,
+                            &NewPatient {
+                                first_name: &request.first_name,
+                                last_name: &request.last_name,
+                                tax_code: &request.tax_code,
+                                date_of_birth: &request.date_of_birth,
+                                phone: request.phone.as_deref(),
+                                email: request.email.as_deref(),
+                                address: request.address.as_deref(),
+                            },
+                        )
                         .map_err(|error| error.to_string())?;
                     Ok(json!(patient))
                 })

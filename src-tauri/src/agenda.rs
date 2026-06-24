@@ -31,6 +31,7 @@ pub async fn process_google_calendar_sync(
     if accounts.is_empty() {
         return Ok((0, 0));
     }
+    let use_legacy_google_event_id = accounts.len() == 1;
 
     let jobs = {
         let database = state.database()?;
@@ -65,15 +66,43 @@ pub async fn process_google_calendar_sync(
                     continue;
                 }
             };
+            let existing_event_id = {
+                let database = state.database()?;
+                database
+                    .google_calendar_event_id_for(
+                        actor_user_id,
+                        account.account_id,
+                        "appointment",
+                        job.appointment.id,
+                    )
+                    .map_err(|error| error.to_string())?
+            }
+            .or_else(|| {
+                use_legacy_google_event_id
+                    .then(|| job.appointment.google_calendar_event_id.clone())
+                    .flatten()
+            });
             let result = upsert_with_insert_fallback(
                 &access_token,
                 &account.calendar_id,
-                job.appointment.google_calendar_event_id.as_deref(),
+                existing_event_id.as_deref(),
                 &payload,
             )
             .await;
             match result {
-                Ok(event_id) => last_event_id = Some(event_id),
+                Ok(event_id) => {
+                    let database = state.database()?;
+                    database
+                        .store_google_calendar_event_link(
+                            actor_user_id,
+                            account.account_id,
+                            "appointment",
+                            job.appointment.id,
+                            &event_id,
+                        )
+                        .map_err(|error| error.to_string())?;
+                    last_event_id = Some(event_id);
+                }
                 Err(error) => last_error = Some(error.to_string()),
             }
         }
@@ -114,15 +143,43 @@ pub async fn process_google_calendar_sync(
                     continue;
                 }
             };
+            let existing_event_id = {
+                let database = state.database()?;
+                database
+                    .google_calendar_event_id_for(
+                        actor_user_id,
+                        account.account_id,
+                        "agenda_block",
+                        job.block.id,
+                    )
+                    .map_err(|error| error.to_string())?
+            }
+            .or_else(|| {
+                use_legacy_google_event_id
+                    .then(|| job.block.google_calendar_event_id.clone())
+                    .flatten()
+            });
             let result = upsert_with_insert_fallback(
                 &access_token,
                 &account.calendar_id,
-                job.block.google_calendar_event_id.as_deref(),
+                existing_event_id.as_deref(),
                 &payload,
             )
             .await;
             match result {
-                Ok(event_id) => last_event_id = Some(event_id),
+                Ok(event_id) => {
+                    let database = state.database()?;
+                    database
+                        .store_google_calendar_event_link(
+                            actor_user_id,
+                            account.account_id,
+                            "agenda_block",
+                            job.block.id,
+                            &event_id,
+                        )
+                        .map_err(|error| error.to_string())?;
+                    last_event_id = Some(event_id);
+                }
                 Err(error) => last_error = Some(error.to_string()),
             }
         }
@@ -179,6 +236,10 @@ pub async fn process_google_calendar_sync(
                     let Some(ends_at) = event.end.date_time.as_deref() else {
                         continue;
                     };
+                    let starts_at = normalize_google_datetime_for_storage(starts_at)
+                        .unwrap_or_else(|| starts_at.to_owned());
+                    let ends_at = normalize_google_datetime_for_storage(ends_at)
+                        .unwrap_or_else(|| ends_at.to_owned());
                     let changed = {
                         let database = state.database()?;
                         database
@@ -186,8 +247,8 @@ pub async fn process_google_calendar_sync(
                                 actor_user_id,
                                 &event.id,
                                 event.summary.as_deref().unwrap_or("Google Calendar"),
-                                starts_at,
-                                ends_at,
+                                &starts_at,
+                                &ends_at,
                                 event.updated.as_deref().unwrap_or(""),
                             )
                             .map_err(|error| error.to_string())?
@@ -287,6 +348,161 @@ fn google_payload_for_agenda_block(block: &AgendaBlock) -> google::GoogleCalenda
     }
 }
 
+fn normalize_google_datetime_for_storage(value: &str) -> Option<String> {
+    let parsed = parse_rfc3339_datetime(value)?;
+    let utc_seconds = epoch_seconds_from_civil(
+        parsed.year,
+        parsed.month,
+        parsed.day,
+        parsed.hour,
+        parsed.minute,
+        parsed.second,
+    ) - i64::from(parsed.offset_minutes) * 60;
+    let local_offset_minutes = europe_rome_offset_minutes(utc_seconds);
+    let local_seconds = utc_seconds + i64::from(local_offset_minutes) * 60;
+    let (year, month, day, hour, minute, second) = civil_from_epoch_seconds(local_seconds);
+    let sign = if local_offset_minutes >= 0 { '+' } else { '-' };
+    let absolute_offset = local_offset_minutes.abs();
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{sign}{:02}:{:02}",
+        absolute_offset / 60,
+        absolute_offset % 60
+    ))
+}
+
+#[derive(Clone, Copy)]
+struct ParsedRfc3339DateTime {
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    offset_minutes: i32,
+}
+
+fn parse_rfc3339_datetime(value: &str) -> Option<ParsedRfc3339DateTime> {
+    let (date_part, time_part) = value.trim().split_once('T')?;
+    let mut date = date_part.split('-');
+    let year = date.next()?.parse().ok()?;
+    let month = date.next()?.parse().ok()?;
+    let day = date.next()?.parse().ok()?;
+    if date.next().is_some() {
+        return None;
+    }
+
+    let (time_part, offset_minutes) = if let Some(time) = time_part.strip_suffix('Z') {
+        (time, 0)
+    } else if let Some(index) = time_part.rfind('+') {
+        (&time_part[..index], parse_offset_minutes(&time_part[index..])?)
+    } else if let Some(index) = time_part.rfind('-') {
+        (&time_part[..index], parse_offset_minutes(&time_part[index..])?)
+    } else {
+        return None;
+    };
+
+    let mut time = time_part.split(':');
+    let hour = time.next()?.parse().ok()?;
+    let minute = time.next()?.parse().ok()?;
+    let second_part = time.next()?;
+    if time.next().is_some() {
+        return None;
+    }
+    let second = second_part.split('.').next()?.parse().ok()?;
+    Some(ParsedRfc3339DateTime {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        offset_minutes,
+    })
+}
+
+fn parse_offset_minutes(value: &str) -> Option<i32> {
+    let sign = if value.starts_with('-') { -1 } else { 1 };
+    let offset = value.trim_start_matches(['+', '-']);
+    let (hours, minutes) = offset.split_once(':')?;
+    Some(sign * (hours.parse::<i32>().ok()? * 60 + minutes.parse::<i32>().ok()?))
+}
+
+fn europe_rome_offset_minutes(utc_seconds: i64) -> i32 {
+    let (year, _, _, _, _, _) = civil_from_epoch_seconds(utc_seconds);
+    let dst_start = epoch_seconds_from_civil(year, 3, last_sunday_of_month(year, 3), 1, 0, 0);
+    let dst_end = epoch_seconds_from_civil(year, 10, last_sunday_of_month(year, 10), 1, 0, 0);
+    if utc_seconds >= dst_start && utc_seconds < dst_end {
+        120
+    } else {
+        60
+    }
+}
+
+fn last_sunday_of_month(year: i32, month: u32) -> u32 {
+    let last_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 30,
+    };
+    let weekday = (days_from_civil(year, month, last_day) + 4).rem_euclid(7);
+    last_day - weekday as u32
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn epoch_seconds_from_civil(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> i64 {
+    days_from_civil(year, month, day) * 86_400
+        + i64::from(hour) * 3_600
+        + i64::from(minute) * 60
+        + i64::from(second)
+}
+
+fn civil_from_epoch_seconds(seconds: i64) -> (i32, u32, u32, u32, u32, u32) {
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = (seconds_of_day / 3_600) as u32;
+    let minute = ((seconds_of_day % 3_600) / 60) as u32;
+    let second = (seconds_of_day % 60) as u32;
+    (year, month, day, hour, minute, second)
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let year = year - i32::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_prime = month as i32 + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * month_prime + 2) / 5 + day as i32 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    i64::from(era) * 146_097 + i64::from(day_of_era) - 719_468
+}
+
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era as i32 + era as i32 * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i32::from(month <= 2);
+    (year, month as u32, day as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +529,21 @@ mod tests {
 
         assert_eq!(payload.summary, "Rossi Mario - Visita di controllo (VeloDent)");
         assert_eq!(payload.description, "VeloDent agenda sync");
+    }
+
+    #[test]
+    fn google_utc_datetime_is_stored_as_europe_rome_summer_time() {
+        assert_eq!(
+            normalize_google_datetime_for_storage("2026-06-24T10:00:00Z").as_deref(),
+            Some("2026-06-24T12:00:00+02:00")
+        );
+    }
+
+    #[test]
+    fn google_utc_datetime_is_stored_as_europe_rome_winter_time() {
+        assert_eq!(
+            normalize_google_datetime_for_storage("2026-01-10T08:30:00Z").as_deref(),
+            Some("2026-01-10T09:30:00+01:00")
+        );
     }
 }

@@ -98,6 +98,13 @@ export async function readTsCns(session_token: string) {
 }
 
 export async function createPatient(session_token: string, patient: PatientInput) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<Patient>("/api/patients", fromLanSessionToken(session_token), {
+      body: JSON.stringify(patient),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+  }
   return invoke<Patient>("create_patient", { request: { session_token, ...patient } });
 }
 

@@ -1,6 +1,8 @@
 import type { L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 
 export type ClinicalServiceGroupKey =
+  | "diagnosis"
+  | "hygiene"
   | "conservative"
   | "endodontics"
   | "prosthesis"
@@ -9,6 +11,8 @@ export type ClinicalServiceGroupKey =
   | "various";
 
 export type ClinicalQuickActionKey =
+  | "diagnosis"
+  | "hygiene"
   | "caries"
   | "endodontics"
   | "periodontics"
@@ -17,6 +21,8 @@ export type ClinicalQuickActionKey =
   | "mobileProsthesis";
 
 export const clinicalServiceGroupOrder: ClinicalServiceGroupKey[] = [
+  "diagnosis",
+  "hygiene",
   "conservative",
   "endodontics",
   "prosthesis",
@@ -27,6 +33,15 @@ export const clinicalServiceGroupOrder: ClinicalServiceGroupKey[] = [
 
 export function clinicalServiceGroupKey(category: string | null): ClinicalServiceGroupKey {
   const value = category?.trim().toLowerCase() ?? "";
+  if (value.includes("diagnosi")) {
+    return "diagnosis";
+  }
+  if (value.includes("igiene")) {
+    return "hygiene";
+  }
+  if (value.includes("parodont")) {
+    return "various";
+  }
   if (value.includes("conservativa")) {
     return "conservative";
   }
@@ -55,6 +70,12 @@ export function clinicalServiceMatchesQuickAction(
 ) {
   const value = category?.trim().toLowerCase() ?? "";
   const group = clinicalServiceGroupKey(category);
+  if (action === "diagnosis") {
+    return group === "diagnosis";
+  }
+  if (action === "hygiene") {
+    return group === "hygiene";
+  }
   if (action === "caries") {
     return group === "conservative";
   }

@@ -100,9 +100,16 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
           )
         ) : undefined
       }
-      patientName={activeRoute === "clinical" ? activePatientName : undefined}
+      patientName={(activeRoute === "clinical" || activeRoute === "rx" || activeRoute === "orthodontics") ? activePatientName : undefined}
       title={title}
       onLogout={onLogout}
+      onPatientNameClick={
+        (activeRoute === "clinical" || activeRoute === "rx" || activeRoute === "orthodontics") && activePatient ? () => {
+          setClinicalAssetMode(null);
+          setSelectedToothRecordInfo(null);
+          setActivePatient(null);
+        } : undefined
+      }
       onRouteChange={setActiveRoute}
     >
       <AnimatePresence mode="wait">
@@ -118,7 +125,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
           ) : activeRoute === "agenda" ? (
             <MobileAgenda sessionToken={currentUser.session_token ?? ""} />
           ) : activeRoute === "newPatient" ? (
-            <MobilePatientRegistration />
+            <MobilePatientRegistration sessionToken={currentUser.session_token ?? ""} />
           ) : activeRoute === "searchPatient" ? (
             <MobilePatientSearch
               sessionToken={currentUser.session_token ?? ""}
@@ -148,11 +155,12 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
             )
           ) : activeRoute === "orthodontics" ? (
             activePatient ? (
-              <MobilePlaceholder
-                body={t("mobileOrthodonticsBody")}
-                eyebrow={t("mobileOrthodonticsMode")}
-                title={activePatientName ?? title}
-                primaryLabel={t("mobilePrimaryAction")}
+              <MobileClinical
+                activePatientId={activePatient.id}
+                mode="orthodontics"
+                onMissingPatient={handleMissingPatient}
+                onSelectedToothRecordInfo={setSelectedToothRecordInfo}
+                sessionToken={currentUser.session_token ?? ""}
               />
             ) : (
               <MobilePatientSearch

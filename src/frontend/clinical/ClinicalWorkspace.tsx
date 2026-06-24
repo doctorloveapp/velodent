@@ -101,21 +101,29 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
               </Button>
             </div>
             <div className="grid max-h-[360px] gap-2 overflow-y-auto">
-              {dayPatients.length ? dayPatients.map((appointment) => (
-                <button
-                  key={appointment.id}
-                  className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-left transition hover:border-powder-blue-500/55"
-                  disabled={!appointment.patient_id}
-                  type="button"
-                  onClick={() => appointment.patient_id ? void openPatient(appointment.patient_id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError"))) : undefined}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-semibold text-white">{appointment.patient_name ?? t("agendaNoPatient")}</span>
-                    <Badge variant="default">{appointment.starts_at.slice(11, 16)}</Badge>
-                  </div>
-                  <p className="mt-1 truncate text-xs text-alabaster-grey-500">{appointment.title}</p>
-                </button>
-              )) : (
+              {dayPatients.length ? dayPatients.map((appointment) => {
+                const selected = selectedPatient?.id === appointment.patient_id;
+                return (
+                  <button
+                    key={appointment.id}
+                    className={[
+                      "rounded-md border p-3 text-left transition",
+                      selected
+                        ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_24px_rgba(251,191,36,0.16)]"
+                        : "border-alabaster-grey-500/20 bg-ink-black-950 hover:border-powder-blue-500/55"
+                    ].join(" ")}
+                    disabled={!appointment.patient_id}
+                    type="button"
+                    onClick={() => appointment.patient_id ? void openPatient(appointment.patient_id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError"))) : undefined}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-sm font-semibold text-white">{appointment.patient_name ?? t("agendaNoPatient")}</span>
+                      <Badge variant={selected ? "warning" : "default"}>{appointment.starts_at.slice(11, 16)}</Badge>
+                    </div>
+                    <p className="mt-1 truncate text-xs text-alabaster-grey-500">{appointment.title}</p>
+                  </button>
+                );
+              }) : (
                 <p className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-sm text-alabaster-grey-500">{t("agendaAppointmentsEmpty")}</p>
               )}
             </div>
@@ -133,17 +141,25 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
               />
             </div>
             <div className="mt-3 grid max-h-[320px] gap-2 overflow-y-auto">
-              {patients.map((patient) => (
-                <button
-                  key={patient.id}
-                  className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-left transition hover:border-powder-blue-500/55"
-                  type="button"
-                  onClick={() => void openPatient(patient.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
-                >
-                  <span className="block text-sm font-semibold text-white">{patient.last_name} {patient.first_name}</span>
-                  <span className="mt-1 block font-mono text-[11px] text-alabaster-grey-500">{patient.tax_code}</span>
-                </button>
-              ))}
+              {patients.map((patient) => {
+                const selected = selectedPatient?.id === patient.id;
+                return (
+                  <button
+                    key={patient.id}
+                    className={[
+                      "rounded-md border p-3 text-left transition",
+                      selected
+                        ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_24px_rgba(251,191,36,0.16)]"
+                        : "border-alabaster-grey-500/20 bg-ink-black-950 hover:border-powder-blue-500/55"
+                    ].join(" ")}
+                    type="button"
+                    onClick={() => void openPatient(patient.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
+                  >
+                    <span className="block text-sm font-semibold text-white">{patient.last_name} {patient.first_name}</span>
+                    <span className="mt-1 block font-mono text-[11px] text-alabaster-grey-500">{patient.tax_code}</span>
+                  </button>
+                );
+              })}
             </div>
           </section>
         </div>

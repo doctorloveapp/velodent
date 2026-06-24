@@ -91,7 +91,7 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
   }
 
   return (
-    <section className="grid gap-4">
+    <section className="grid max-w-full gap-4 overflow-x-hidden">
       <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("agendaModeDay")}</p>
         <div className="mt-3 grid gap-2">
@@ -126,7 +126,7 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
             ) : null}
           </div>
           <Input placeholder={t("agendaAppointmentTitle")} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid min-w-0 gap-2 min-[420px]:grid-cols-3">
             <Input type="time" value={form.time} onChange={(event) => {
               setTimeTouched(true);
               setForm({ ...form, time: event.target.value });

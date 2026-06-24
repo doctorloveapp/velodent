@@ -2,7 +2,6 @@ import {
   CalendarDays,
   ClipboardList,
   FileText,
-  Search,
   SmilePlus,
   UserPlus,
   type LucideIcon
@@ -21,7 +20,6 @@ interface MobileDashboardAction {
 const actions: MobileDashboardAction[] = [
   { route: "newPatient", icon: UserPlus, labelKey: "mobileNewPatient" },
   { route: "agenda", icon: CalendarDays, labelKey: "mobileAgenda" },
-  { route: "searchPatient", icon: Search, labelKey: "mobileSearchPatient" },
   { route: "clinical", icon: ClipboardList, labelKey: "mobileClinical" },
   { route: "rx", icon: FileText, labelKey: "mobileRxPhoto" },
   { route: "orthodontics", icon: SmilePlus, labelKey: "mobileOrthodonticsMode" },

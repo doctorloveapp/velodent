@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
-  Search,
   UserPlus,
   Wifi,
   X,
@@ -39,7 +38,6 @@ const mobileNavItems: MobileNavItem[] = [
   { key: "dashboard", icon: LayoutDashboard, labelKey: "mobileDashboard" },
   { key: "agenda", icon: CalendarDays, labelKey: "mobileAgenda" },
   { key: "newPatient", icon: UserPlus, labelKey: "mobileNewPatient" },
-  { key: "searchPatient", icon: Search, labelKey: "mobileSearchPatient" },
   { key: "clinical", icon: ClipboardList, labelKey: "mobileClinical" },
   { key: "rx", icon: FileText, labelKey: "mobileRxPhoto" },
   { key: "orthodontics", icon: ClipboardList, labelKey: "mobileOrthodonticsMode" },
@@ -54,6 +52,7 @@ interface MobileShellProps {
   patientName?: string;
   title: string;
   onLogout: () => void;
+  onPatientNameClick?: () => void;
   onRouteChange: (route: MobileRouteKey) => void;
 }
 
@@ -65,6 +64,7 @@ export function MobileShell({
   patientName,
   title,
   onLogout,
+  onPatientNameClick,
   onRouteChange
 }: MobileShellProps) {
   const { t } = useL10n();
@@ -87,7 +87,18 @@ export function MobileShell({
             <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
               {t("mobilePrecision")}
             </p>
-            <h1 className="truncate text-lg font-semibold text-white">{headerTitle}</h1>
+            {patientName && onPatientNameClick ? (
+              <button
+                type="button"
+                className="block max-w-full truncate text-left text-lg font-semibold text-white underline-offset-4 hover:text-amber-200 hover:underline"
+                aria-label={t("mobileChangePatient")}
+                onClick={onPatientNameClick}
+              >
+                {headerTitle}
+              </button>
+            ) : (
+              <h1 className="truncate text-lg font-semibold text-white">{headerTitle}</h1>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

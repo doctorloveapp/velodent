@@ -29,7 +29,7 @@ interface ClinicalPanelProps {
   patient: Patient;
 }
 
-type QuickAction = "caries" | "endodontics" | "periodontics" | "crown" | "extraction" | "mobileProsthesis";
+type QuickAction = "diagnosis" | "hygiene" | "caries" | "endodontics" | "periodontics" | "crown" | "extraction" | "mobileProsthesis";
 
 interface RecordedToothRecord {
   action: QuickAction;
@@ -48,6 +48,8 @@ const upperTeeth = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 
 const lowerTeeth = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
 
 const quickActionButtonClasses: Record<QuickAction, string> = {
+  diagnosis: "border-alabaster-grey-500/20 bg-glaucous-950 text-white hover:border-powder-blue-500/45 hover:bg-powder-blue-950",
+  hygiene: "border-alabaster-grey-500/20 bg-glaucous-950 text-white hover:border-powder-blue-500/45 hover:bg-powder-blue-950",
   caries: "border-emerald-400/45 bg-emerald-400/12 text-emerald-100 hover:bg-emerald-400/20",
   crown: "border-amber-400/50 bg-amber-400/14 text-amber-100 hover:bg-amber-400/24",
   endodontics: "border-violet-400/45 bg-violet-400/12 text-violet-100 hover:bg-violet-400/20",
@@ -57,6 +59,8 @@ const quickActionButtonClasses: Record<QuickAction, string> = {
 };
 
 const recordedToothClasses: Record<QuickAction, string> = {
+  diagnosis: "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500",
+  hygiene: "border-alabaster-grey-500/20 bg-ink-black-950 text-alabaster-grey-500",
   caries: "border-emerald-400/55 bg-emerald-400/18 text-white",
   crown: "border-amber-400/60 bg-amber-400/20 text-white",
   endodontics: "border-violet-400/55 bg-violet-400/18 text-white",
@@ -66,6 +70,8 @@ const recordedToothClasses: Record<QuickAction, string> = {
 };
 
 const recordedToothGlyphClasses: Record<QuickAction, string> = {
+  diagnosis: "text-alabaster-grey-500",
+  hygiene: "text-alabaster-grey-500",
   caries: "text-emerald-200",
   crown: "text-amber-200",
   endodontics: "text-violet-200",
@@ -178,6 +184,10 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
       setSelectedTeeth((current) => current.includes(tooth) ? current.filter((item) => item !== tooth) : [...current, tooth]);
       return;
     }
+    if (selectedTeeth.length === 1 && selectedTeeth[0] === tooth) {
+      setSelectedTeeth([]);
+      return;
+    }
     setSelectedTeeth([tooth]);
   }
 
@@ -187,19 +197,21 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
     }
 
     const targetTeeth = Array.from(new Set(activeAction === "crown" && bridgePreview ? bridgePreview.includedTeeth : selectedTeeth));
-    if (targetTeeth.length === 0) {
+    const isGeneralAction = activeAction === "diagnosis" || activeAction === "hygiene" || activeAction === "mobileProsthesis";
+    if (targetTeeth.length === 0 && !isGeneralAction) {
       return;
     }
+    const recordTargets = targetTeeth.length > 0 ? targetTeeth : [null];
 
     await Promise.all(
-      targetTeeth.map((tooth) =>
+      recordTargets.map((tooth) =>
         createClinicalRecord(sessionToken, {
           patient_id: patient.id,
           pathology_description: service.name,
           ready_for_quote: true,
           service_id: service.id,
           status: "diagnosed",
-          tooth_number: tooth
+          tooth_number: tooth ?? undefined
         })
       )
     );
@@ -307,7 +319,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                 <Plus aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
                 {t("mobileAddToSelection")}
               </Button>
-              {(["caries", "endodontics", "periodontics", "crown", "extraction", "mobileProsthesis"] as QuickAction[]).map((action) => (
+              {(["caries", "endodontics", "periodontics", "crown", "extraction"] as QuickAction[]).map((action) => (
                 <Button
                   key={action}
                   type="button"
@@ -331,7 +343,19 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
               ) : null}
             </div>
           ) : (
-            <p className="mt-3 text-sm leading-6 text-alabaster-grey-500">{t("mobileClinicalNoDataInstruction")}</p>
+            <div className="mt-3 grid gap-2">
+              {(["diagnosis", "hygiene", "mobileProsthesis"] as QuickAction[]).map((action) => (
+                <Button
+                  key={action}
+                  type="button"
+                  variant="secondary"
+                  className={`h-12 justify-center ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
+                  onClick={() => setActiveAction(action)}
+                >
+                  {quickActionLabel(action, false, t)}
+                </Button>
+              ))}
+            </div>
           )}
 
           {selectionMode ? (
@@ -687,6 +711,9 @@ function normalizeToothStates(
 function quickActionFromCategory(category: string | null): QuickAction | null {
   const value = category?.trim().toLowerCase() ?? "";
   const group = clinicalServiceGroupKey(category);
+  if (group === "diagnosis" || group === "hygiene") {
+    return null;
+  }
   if (group === "conservative") {
     return "caries";
   }
@@ -754,10 +781,12 @@ function quickActionLabel(action: QuickAction, useBridge: boolean, t: (key: L10n
     return t("mobileBridge");
   }
   const labels: Record<QuickAction, string> = {
+    diagnosis: t("mobileDiagnosis"),
     caries: t("mobileCaries"),
     crown: t("mobileCrown"),
     endodontics: t("mobileEndodontics"),
     extraction: t("mobileExtraction"),
+    hygiene: t("mobileHygiene"),
     mobileProsthesis: t("mobileRemovableProsthesis"),
     periodontics: t("mobileVarious")
   };

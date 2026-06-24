@@ -1,5 +1,6 @@
 import { Save } from "lucide-react";
 import { useState } from "react";
+import { createPatient } from "@/frontend/patients/patientsApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
@@ -24,9 +25,41 @@ const emptyDraft: MobilePatientDraft = {
   address: ""
 };
 
-export function MobilePatientRegistration() {
+export function MobilePatientRegistration({ sessionToken }: { sessionToken: string }) {
   const { t } = useL10n();
   const [draft, setDraft] = useState<MobilePatientDraft>(emptyDraft);
+  const [saving, setSaving] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const canSave = Boolean(
+    draft.first_name.trim()
+    && draft.last_name.trim()
+    && draft.tax_code.trim()
+    && draft.date_of_birth.trim()
+  );
+
+  async function handleSave() {
+    if (!canSave || saving) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await createPatient(sessionToken, {
+        first_name: draft.first_name.trim(),
+        last_name: draft.last_name.trim(),
+        tax_code: draft.tax_code.trim().toUpperCase(),
+        date_of_birth: draft.date_of_birth,
+        phone: draft.phone.trim() || undefined,
+        email: draft.email.trim() || undefined,
+        address: draft.address.trim() || undefined
+      });
+      setDraft(emptyDraft);
+      setStatusMessage(t("mobilePatientSaved"));
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError"));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <section className="grid min-h-[calc(100dvh-7.5rem)] content-between gap-6">
@@ -35,14 +68,20 @@ export function MobilePatientRegistration() {
         sourceLabel={t("mobileFormManual")}
         onDraftChange={setDraft}
       />
+      {statusMessage ? <p className="text-sm text-powder-blue-500">{statusMessage}</p> : null}
 
       <div
         className="sticky bottom-0 -mx-4 border-t border-alabaster-grey-500/20 bg-ink-black-950/95 px-4 py-3 backdrop-blur"
         style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
       >
-        <Button type="button" className="h-14 w-full justify-center text-base" disabled>
+        <Button
+          type="button"
+          className="h-14 w-full justify-center text-base"
+          disabled={!canSave || saving}
+          onClick={() => void handleSave()}
+        >
           <Save aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
-          {t("mobileFormPendingSave")}
+          {saving ? t("saving") : t("mobilePatientSave")}
         </Button>
       </div>
     </section>
