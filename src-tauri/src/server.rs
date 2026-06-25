@@ -236,6 +236,15 @@ pub mod lan {
                     Ok(json!(appointments))
                 })
             }
+            ("GET", "/api/agenda/chairs") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let chairs = state
+                        .database()?
+                        .chair_config(user.id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(chairs))
+                })
+            }
             ("POST", "/api/agenda/appointments") => {
                 with_device_user(&headers, remote_ip, app, |state, user| {
                     let request = serde_json::from_str::<AppointmentRequest>(body.trim())

@@ -82,15 +82,32 @@ pub async fn process_google_calendar_sync(
                 }
                 Err(error) => {
                     let database = state.database()?;
-                    database
-                        .retry_google_calendar_sync_job(job.job_id, &error)
-                        .map_err(|error| error.to_string())?;
+                    if is_fatal_google_sync_error(&error) {
+                        database
+                            .cancel_google_calendar_sync_job(job.job_id, &error)
+                            .map_err(|error| error.to_string())?;
+                    } else {
+                        database
+                            .retry_google_calendar_sync_job(job.job_id, &error)
+                            .map_err(|error| error.to_string())?;
+                    }
                     failed += 1;
+                    if is_rate_limited_google_sync_error(&error) {
+                        return Ok((processed, failed));
+                    }
                 }
             }
             continue;
         }
         let payload = google_payload_for_appointment(&job.appointment);
+        if let Err(error) = validate_google_payload(&payload) {
+            let database = state.database()?;
+            database
+                .cancel_google_calendar_sync_job(job.job_id, &error)
+                .map_err(|error| error.to_string())?;
+            failed += 1;
+            continue;
+        }
         let mut last_event_id = None;
         let mut last_error = None;
 
@@ -153,15 +170,22 @@ pub async fn process_google_calendar_sync(
                 .map_err(|error| error.to_string())?;
             processed += 1;
         } else {
-            database
-                .retry_google_calendar_sync_job(
-                    job.job_id,
-                    last_error
-                        .as_deref()
-                        .unwrap_or("google calendar sync did not process any account"),
-                )
-                .map_err(|error| error.to_string())?;
+            let error_message = last_error
+                .as_deref()
+                .unwrap_or("google calendar sync did not process any account");
+            if is_fatal_google_sync_error(error_message) {
+                database
+                    .cancel_google_calendar_sync_job(job.job_id, error_message)
+                    .map_err(|error| error.to_string())?;
+            } else {
+                database
+                    .retry_google_calendar_sync_job(job.job_id, error_message)
+                    .map_err(|error| error.to_string())?;
+            }
             failed += 1;
+            if is_rate_limited_google_sync_error(error_message) {
+                return Ok((processed, failed));
+            }
         }
     }
 
@@ -171,6 +195,14 @@ pub async fn process_google_calendar_sync(
             continue;
         }
         let payload = google_payload_for_agenda_block(&job.block);
+        if let Err(error) = validate_google_payload(&payload) {
+            let database = state.database()?;
+            database
+                .cancel_google_calendar_sync_job(job.job_id, &error)
+                .map_err(|error| error.to_string())?;
+            failed += 1;
+            continue;
+        }
         let mut last_event_id = None;
         let mut last_error = None;
 
@@ -233,19 +265,50 @@ pub async fn process_google_calendar_sync(
                 .map_err(|error| error.to_string())?;
             processed += 1;
         } else {
-            database
-                .retry_google_calendar_sync_job(
-                    job.job_id,
-                    last_error
-                        .as_deref()
-                        .unwrap_or("google calendar sync did not process any account"),
-                )
-                .map_err(|error| error.to_string())?;
+            let error_message = last_error
+                .as_deref()
+                .unwrap_or("google calendar sync did not process any account");
+            if is_fatal_google_sync_error(error_message) {
+                database
+                    .cancel_google_calendar_sync_job(job.job_id, error_message)
+                    .map_err(|error| error.to_string())?;
+            } else {
+                database
+                    .retry_google_calendar_sync_job(job.job_id, error_message)
+                    .map_err(|error| error.to_string())?;
+            }
             failed += 1;
+            if is_rate_limited_google_sync_error(error_message) {
+                return Ok((processed, failed));
+            }
         }
     }
 
     Ok((processed, failed))
+}
+
+pub async fn delete_google_calendar_events_for_appointment(
+    app: &tauri::AppHandle,
+    actor_user_id: i64,
+    appointment: &Appointment,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let accounts = {
+        let database = state.database()?;
+        database
+            .active_google_calendar_tokens(actor_user_id)
+            .map_err(|error| error.to_string())?
+    };
+    let fallback_account = accounts.iter().min_by_key(|account| account.account_id);
+    delete_google_events_for_entity(
+        &state,
+        actor_user_id,
+        "appointment",
+        appointment.id,
+        appointment.google_calendar_event_id.as_deref(),
+        fallback_account,
+    )
+    .await
 }
 
 async fn pull_remote_google_calendar_events(
@@ -443,7 +506,7 @@ async fn upsert_with_insert_fallback(
     match google::upsert_calendar_event(access_token, calendar_id, existing_event_id, payload).await
     {
         Ok(event_id) => Ok(event_id),
-        Err(error) if existing_event_id.is_some() => {
+        Err(error) if existing_event_id.is_some() && is_missing_google_event_error(&error) => {
             eprintln!("VeloDent calendar event update failed, retrying insert: {error}");
             google::upsert_calendar_event(access_token, calendar_id, None, payload).await
         }
@@ -485,6 +548,45 @@ fn google_payload_for_agenda_block(block: &AgendaBlock) -> google::GoogleCalenda
             time_zone: "Europe/Rome".to_owned(),
         },
     }
+}
+
+fn validate_google_payload(payload: &google::GoogleCalendarEventPayload) -> Result<(), String> {
+    let start = google_datetime_epoch_seconds(&payload.start.date_time)
+        .ok_or_else(|| "invalid google calendar payload: start date is not ISO8601".to_owned())?;
+    let end = google_datetime_epoch_seconds(&payload.end.date_time)
+        .ok_or_else(|| "invalid google calendar payload: end date is not ISO8601".to_owned())?;
+    if end <= start {
+        return Err(
+            "invalid google calendar payload: end date must be after start date".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn google_datetime_epoch_seconds(value: &str) -> Option<i64> {
+    let parsed = parse_rfc3339_datetime(value)?;
+    Some(
+        epoch_seconds_from_civil(
+            parsed.year,
+            parsed.month,
+            parsed.day,
+            parsed.hour,
+            parsed.minute,
+            parsed.second,
+        ) - i64::from(parsed.offset_minutes) * 60,
+    )
+}
+
+fn is_missing_google_event_error(error: &google::GoogleApiError) -> bool {
+    matches!(error, google::GoogleApiError::HttpStatus(404 | 410, _))
+}
+
+fn is_fatal_google_sync_error(error_message: &str) -> bool {
+    error_message.contains("HTTP 400") || error_message.contains("invalid google calendar payload")
+}
+
+fn is_rate_limited_google_sync_error(error_message: &str) -> bool {
+    error_message.contains("HTTP 403")
 }
 
 fn normalize_google_datetime_for_storage(value: &str) -> Option<String> {

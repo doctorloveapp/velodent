@@ -62,6 +62,7 @@ interface MobileClinicalProps {
   mode: ClinicalMobileMode;
   onMissingPatient: () => void;
   onDiaryOpenChange?: (open: boolean) => void;
+  onClinicalDiaryCountChange?: (count: number) => void;
   onSelectedToothRecordInfo: (info: SelectedToothRecordInfo | null) => void;
   sessionToken: string;
 }
@@ -94,6 +95,7 @@ export function MobileClinical({
   assetMode = null,
   diaryOpen = false,
   mode,
+  onClinicalDiaryCountChange,
   onDiaryOpenChange,
   onMissingPatient,
   onSelectedToothRecordInfo,
@@ -176,6 +178,10 @@ export function MobileClinical({
         setToothStates({});
       });
   }, [activePatientId, services, sessionToken]);
+
+  useEffect(() => {
+    onClinicalDiaryCountChange?.(clinicalRecords.length);
+  }, [clinicalRecords.length, onClinicalDiaryCountChange]);
 
   useEffect(() => {
     if (!activePatientId || !sessionToken || services.length === 0) {

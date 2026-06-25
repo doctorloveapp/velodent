@@ -61,6 +61,7 @@ const routeContent: Record<MobileRouteKey, RouteContent> = {
 export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
   const { t } = useL10n();
   const [clinicalAssetMode, setClinicalAssetMode] = useState<"rx" | "photo" | null>(null);
+  const [clinicalDiaryCount, setClinicalDiaryCount] = useState(0);
   const [clinicalDiaryOpen, setClinicalDiaryOpen] = useState(false);
   const [activePatient, setActivePatient] = useState<Patient | null>(null);
   const [activeRoute, setActiveRoute] = useState<MobileRouteKey>("dashboard");
@@ -97,12 +98,15 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
             ) : null}
             <Button
               aria-label={t("mobileOpenClinicalDiary")}
-              className="h-11 w-11 justify-center p-0"
+              className="relative h-11 w-11 justify-center p-0"
               type="button"
               variant="secondary"
               onClick={() => setClinicalDiaryOpen(true)}
             >
               <FileText aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
+              <span className="absolute -bottom-1 -right-1 grid min-h-5 min-w-5 place-items-center rounded-full border border-ink-black-950 bg-powder-blue-500 px-1 font-mono text-[10px] font-bold leading-none text-white">
+                {clinicalDiaryCount}
+              </span>
             </Button>
           </div>
         ) : undefined
@@ -178,6 +182,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
                 mode="clinical"
                 onMissingPatient={handleMissingPatient}
                 onDiaryOpenChange={() => undefined}
+                onClinicalDiaryCountChange={setClinicalDiaryCount}
                 onSelectedToothRecordInfo={setSelectedToothRecordInfo}
                 sessionToken={currentUser.session_token ?? ""}
               />
@@ -198,6 +203,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
                 mode="orthodontics"
                 onMissingPatient={handleMissingPatient}
                 onDiaryOpenChange={() => undefined}
+                onClinicalDiaryCountChange={setClinicalDiaryCount}
                 onSelectedToothRecordInfo={setSelectedToothRecordInfo}
                 sessionToken={currentUser.session_token ?? ""}
               />
@@ -219,6 +225,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
                 mode="clinical"
                 onMissingPatient={handleMissingPatient}
                 onDiaryOpenChange={setClinicalDiaryOpen}
+                onClinicalDiaryCountChange={setClinicalDiaryCount}
                 onSelectedToothRecordInfo={setSelectedToothRecordInfo}
                 sessionToken={currentUser.session_token ?? ""}
               />

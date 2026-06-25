@@ -15,6 +15,7 @@ import {
   listDevices,
   listUsers,
   pickStudioLogoPath,
+  removeGoogleAccount,
   revokeDevice,
   startGoogleCalendarAccountLink,
   updateStudioSettings,
@@ -211,6 +212,17 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     await refresh();
   }
 
+  async function handleRemoveGoogleCalendarAccount(accountId: number) {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+
+    await removeGoogleAccount(currentUser.session_token, accountId);
+    setStatusMessage(t("settingsCalendarAccountRemoved"));
+    await refresh();
+  }
+
   async function handleGetPairingCode() {
     if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
@@ -313,19 +325,28 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
               {calendarSyncStatus?.failed_jobs || !calendarSyncStatus?.connected ? t("agendaCalendarDisconnected") : t("agendaCalendarConnected")}
             </Badge>
           </div>
-          <SettingsActionButton onClick={() => void handleLinkGoogleCalendar().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+          <SettingsActionButton disabled={calendarAccounts.length > 0} onClick={() => void handleLinkGoogleCalendar().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
             <CalendarCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
             {t("settingsGoogleCalendarAddAccount")}
           </SettingsActionButton>
         </div>
         <DenseTable
-          headers={[t("settingsGoogleEmail"), t("settingsCalendarId"), t("settingsStatus")]}
+          headers={[t("settingsGoogleEmail"), t("settingsCalendarId"), t("settingsStatus"), t("settingsAction")]}
           rows={calendarAccounts.map((account) => [
             account.email ?? "-",
             account.calendar_id,
             <Badge key={account.id} variant={account.active && !calendarSyncStatus?.failed_jobs ? "success" : "warning"}>
               {account.active && !calendarSyncStatus?.failed_jobs ? t("agendaCalendarConnected") : t("agendaCalendarDisconnected")}
-            </Badge>
+            </Badge>,
+            <SettingsActionButton
+              key={`remove-${String(account.id)}`}
+              size="sm"
+              tone="danger"
+              onClick={() => void handleRemoveGoogleCalendarAccount(account.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}
+            >
+              <Trash2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+              {t("settingsGoogleCalendarRemoveAccount")}
+            </SettingsActionButton>
           ])}
         />
       </SettingsSurface>
@@ -429,11 +450,13 @@ function DenseForm({ children }: { children: React.ReactNode }) {
 
 function SettingsActionButton({
   children,
+  disabled = false,
   onClick,
   size = "default",
   tone = "primary"
 }: {
   children: React.ReactNode;
+  disabled?: boolean;
   onClick: () => void;
   size?: "default" | "sm";
   tone?: "primary" | "danger";
@@ -446,11 +469,13 @@ function SettingsActionButton({
     : "border-powder-blue-500/35 bg-powder-blue-950/60 text-powder-blue-100 hover:border-powder-blue-400/60 hover:bg-powder-blue-500/20 hover:text-white hover:shadow-[0_0_20px_rgba(47,127,208,0.18)]";
   return (
     <Button
+      disabled={disabled}
       type="button"
       variant="secondary"
       className={[
         baseClass,
         toneClass,
+        disabled ? "cursor-not-allowed opacity-45 hover:shadow-none" : "",
         "w-fit justify-center justify-self-start whitespace-nowrap rounded-md font-semibold transition-[border-color,background-color,box-shadow,color]"
       ].join(" ")}
       onClick={onClick}

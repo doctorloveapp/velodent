@@ -494,7 +494,7 @@ pub async fn list_calendar_events(
         calendar_id.trim()
     };
     let url = format!(
-        "{GOOGLE_CALENDAR_EVENTS_URI}/{}/events?singleEvents=true&showDeleted=true&maxResults=250",
+        "{GOOGLE_CALENDAR_EVENTS_URI}/{}/events?singleEvents=true&showDeleted=true&maxResults=2500&timeMin=2020-01-01T00%3A00%3A00Z&timeMax=2035-01-01T00%3A00%3A00Z",
         encode_url_component(calendar_id),
     );
     let response = reqwest::Client::new()

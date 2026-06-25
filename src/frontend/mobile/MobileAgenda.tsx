@@ -1,6 +1,6 @@
 import { CalendarClock, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { createAppointment, listAppointments, type Appointment } from "@/frontend/agenda/agendaApi";
+import { createAppointment, getChairConfig, listAppointments, type Appointment } from "@/frontend/agenda/agendaApi";
 import { searchPatients, type Patient } from "@/frontend/patients/patientsApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
@@ -16,6 +16,7 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
   const { t } = useL10n();
   const [date, setDate] = useState(todayDateInput());
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [chairCount, setChairCount] = useState(1);
   const [statusMessage, setStatusMessage] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientQuery, setPatientQuery] = useState("");
@@ -32,12 +33,18 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
     from: `${date}T00:00:00${localOffset(date, "00:00")}`,
     to: `${shiftDate(date, 1)}T00:00:00${localOffset(shiftDate(date, 1), "00:00")}`
   }), [date]);
+  const chairNumbers = useMemo(() => Array.from({ length: chairCount }, (_, index) => index + 1), [chairCount]);
 
   async function refresh() {
     if (!sessionToken) {
       return;
     }
-    setAppointments(await listAppointments(sessionToken, range.from, range.to));
+    const [rows, chairs] = await Promise.all([
+      listAppointments(sessionToken, range.from, range.to),
+      getChairConfig(sessionToken).catch(() => ({ chair_count: 1 }))
+    ]);
+    setAppointments(rows);
+    setChairCount(Math.max(1, chairs.chair_count));
   }
 
   async function handlePatientSearch(nextQuery: string) {
@@ -131,14 +138,27 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
               setTimeTouched(true);
               setForm({ ...form, time: event.target.value });
             }} />
-            <Input min={15} step={15} type="number" value={form.duration} onChange={(event) => {
-              setTimeTouched(false);
-              setForm({ ...form, duration: event.target.value });
-            }} />
-            <Input min={1} type="number" value={form.chairNumber} onChange={(event) => {
-              setTimeTouched(false);
-              setForm({ ...form, chairNumber: event.target.value });
-            }} />
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">{t("agendaDurationLabel")}</span>
+              <Input min={15} step={15} type="number" value={form.duration} onChange={(event) => {
+                setTimeTouched(false);
+                setForm({ ...form, duration: event.target.value });
+              }} />
+            </label>
+            <select
+              className="h-12 rounded-md border border-alabaster-grey-500/20 bg-ink-black-900 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
+              value={form.chairNumber}
+              onChange={(event) => {
+                setTimeTouched(false);
+                setForm({ ...form, chairNumber: event.target.value });
+              }}
+            >
+              {chairNumbers.map((chair) => (
+                <option key={chair} value={chair}>
+                  {t("agendaChair")} {String(chair)}
+                </option>
+              ))}
+            </select>
           </div>
           <Button
             type="button"

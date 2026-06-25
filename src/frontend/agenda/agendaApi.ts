@@ -56,6 +56,9 @@ export interface AppointmentInput {
 }
 
 export async function getChairConfig(session_token: string) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<ChairConfig>("/api/agenda/chairs", fromLanSessionToken(session_token));
+  }
   return invoke<ChairConfig>("get_chair_config", { request: { session_token } });
 }
 
@@ -107,6 +110,10 @@ export async function moveAppointment(
 
 export async function updateAppointmentStatus(session_token: string, appointment_id: number, status: AppointmentStatus) {
   return invoke<Appointment>("update_appointment_status", { request: { session_token, appointment_id, status } });
+}
+
+export async function deleteAppointment(session_token: string, appointment_id: number) {
+  return invoke<Appointment>("delete_appointment", { request: { session_token, appointment_id } });
 }
 
 export async function googleCalendarSyncStatus(session_token: string) {

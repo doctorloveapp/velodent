@@ -202,6 +202,12 @@ pub struct GoogleOAuthStatusRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RemoveGoogleAccountRequest {
+    session_token: String,
+    account_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ActorRequest {
     session_token: String,
 }
@@ -369,6 +375,12 @@ pub struct UpdateAppointmentStatusRequest {
     session_token: String,
     appointment_id: i64,
     status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteAppointmentRequest {
+    session_token: String,
+    appointment_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -880,6 +892,18 @@ pub fn list_google_calendar_accounts(
 }
 
 #[tauri::command]
+pub fn remove_google_account(
+    state: State<'_, AppState>,
+    request: RemoveGoogleAccountRequest,
+) -> Result<(), String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .remove_google_account(actor.id, request.account_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn start_google_calendar_account_link(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1098,6 +1122,24 @@ pub fn update_appointment_status(
         .map_err(|error| error.to_string())?;
     agenda::trigger_google_calendar_sync(&app, actor.id);
     Ok(appointment)
+}
+
+#[tauri::command]
+pub async fn delete_appointment(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: DeleteAppointmentRequest,
+) -> Result<Appointment, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let appointment = state
+        .database()?
+        .appointment_for_actor(actor.id, request.appointment_id)
+        .map_err(|error| error.to_string())?;
+    agenda::delete_google_calendar_events_for_appointment(&app, actor.id, &appointment).await?;
+    state
+        .database()?
+        .delete_appointment(actor.id, request.appointment_id)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1966,7 +2008,7 @@ pub async fn process_google_calendar_sync(
     state: State<'_, AppState>,
     request: ProcessGoogleCalendarSyncRequest,
 ) -> Result<GoogleCalendarSyncRunResult, String> {
-    let actor = require_admin_session(&state, &request.session_token)?;
+    let actor = require_session(&state, &request.session_token)?;
     let _ = request.limit;
     let (processed, failed) = agenda::process_google_calendar_sync(&app, actor.id).await?;
     Ok(GoogleCalendarSyncRunResult { processed, failed })

@@ -251,6 +251,10 @@ export async function listGoogleCalendarAccounts(session_token: string) {
   return invoke<GoogleCalendarAccount[]>("list_google_calendar_accounts", { request: { session_token } });
 }
 
+export async function removeGoogleAccount(session_token: string, account_id: number) {
+  return invoke<void>("remove_google_account", { request: { session_token, account_id } });
+}
+
 export async function startGoogleCalendarAccountLink(session_token: string) {
   return invoke<GoogleCalendarAccount>("start_google_calendar_account_link", {
     request: { session_token, state: "velodent-calendar" }

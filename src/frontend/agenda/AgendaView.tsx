@@ -10,6 +10,7 @@ import { isTauriRuntime, searchPatients, type Patient } from "@/frontend/patient
 import {
   createAgendaBlock,
   createAppointment,
+  deleteAppointment,
   deleteAgendaBlock,
   getChairConfig,
   googleCalendarSyncStatus,
@@ -80,9 +81,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
       return;
     }
 
-    if (currentUser.role === "admin") {
-      await processGoogleCalendarSync(currentUser.session_token).catch(() => undefined);
-    }
+    await processGoogleCalendarSync(currentUser.session_token).catch(() => undefined);
 
     const [chairs, rows, blocks, sync, patientRows] = await Promise.all([
       getChairConfig(currentUser.session_token),
@@ -243,6 +242,13 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     if (!currentUser?.session_token) {
       return;
     }
+    if (status === "cancelled") {
+      await deleteAppointment(currentUser.session_token, appointment.id);
+      setAppointments((current) => current.filter((item) => item.id !== appointment.id));
+      setStatusMessage(t("agendaAppointmentDeleted"));
+      await refreshAgenda();
+      return;
+    }
     setAppointments((current) => current.map((item) => item.id === appointment.id ? { ...item, status } : item));
     const updated = await updateAppointmentStatus(currentUser.session_token, appointment.id, status);
     setAppointments((current) => current.map((item) => item.id === updated.id ? updated : item));
@@ -275,8 +281,8 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
         </div>
       </div>
 
-      <div className="grid gap-3 border-y border-alabaster-grey-500/15 py-3 xl:grid-cols-[1fr_auto]">
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="grid items-end gap-3 border-y border-alabaster-grey-500/15 py-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="grid items-end gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(190px,1.2fr)_minmax(180px,1fr)_minmax(150px,0.8fr)_minmax(118px,0.62fr)_minmax(120px,0.62fr)_minmax(150px,0.75fr)]">
           <div className="relative">
             <Input
               placeholder={t("agendaPatientRequiredPlaceholder")}
@@ -311,10 +317,15 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
             setTimeTouched(true);
             setForm({ ...form, time: event.target.value });
           }} />
-          <Input type="number" min={15} step={15} value={form.duration} onChange={(event) => {
-            setTimeTouched(false);
-            setForm({ ...form, duration: event.target.value });
-          }} />
+          <div className="relative">
+            <span className="pointer-events-none absolute -top-2 left-3 z-10 rounded bg-ink-black-950 px-1 text-[9px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
+              {t("agendaDurationLabel")}
+            </span>
+            <Input className="h-10 pt-2" type="number" min={15} step={15} value={form.duration} onChange={(event) => {
+              setTimeTouched(false);
+              setForm({ ...form, duration: event.target.value });
+            }} />
+          </div>
           <select
             className="h-10 rounded-md border border-alabaster-grey-500/20 bg-ink-black-900 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
             value={form.chairNumber}
@@ -334,6 +345,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
           disabled={!form.patientId || appointmentSaving}
           title={!form.patientId ? t("agendaPatientRequiredTooltip") : undefined}
           type="button"
+          className="h-10 whitespace-nowrap"
           onClick={() => void handleCreateAppointment()}
         >
           <CalendarClock aria-hidden="true" className="h-4 w-4" />

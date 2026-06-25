@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 11;
+const CURRENT_SCHEMA_VERSION: i64 = 12;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -3499,6 +3499,70 @@ impl Database {
             .ok_or(DbError::NotFound)
     }
 
+    pub fn appointment_for_actor(
+        &self,
+        actor_user_id: i64,
+        appointment_id: i64,
+    ) -> DbResult<Appointment> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_appointment(appointment_id)?
+            .ok_or(DbError::NotFound)
+    }
+
+    pub fn delete_appointment(
+        &self,
+        actor_user_id: i64,
+        appointment_id: i64,
+    ) -> DbResult<Appointment> {
+        self.assert_active_user(actor_user_id)?;
+        let appointment = self
+            .get_appointment(appointment_id)?
+            .ok_or(DbError::NotFound)?;
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.conn.execute(
+                r#"
+                DELETE FROM sync_jobs
+                WHERE integration_type = 'google_calendar'
+                    AND entity_type = 'appointment'
+                    AND entity_id = ?1
+                "#,
+                [appointment_id],
+            )?;
+            self.conn.execute(
+                r#"
+                DELETE FROM google_calendar_event_links
+                WHERE entity_type = 'appointment' AND entity_id = ?1
+                "#,
+                [appointment_id],
+            )?;
+            let affected = self
+                .conn
+                .execute("DELETE FROM appointments WHERE id = ?1", [appointment_id])?;
+            if affected == 0 {
+                return Err(DbError::NotFound);
+            }
+            self.insert_appointment_audit(
+                actor_user_id,
+                appointment.patient_id,
+                appointment_id,
+                "agenda.appointment_deleted",
+                &format!(r#"{{"appointment_id":{appointment_id}}}"#),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => Ok(appointment),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     pub fn google_calendar_sync_status(
         &self,
         actor_user_id: i64,
@@ -3581,7 +3645,7 @@ impl Database {
             r#"
             SELECT id, email, calendar_id, active, created_at, updated_at
             FROM google_calendar_accounts
-            ORDER BY active DESC, email ASC, calendar_id ASC
+            ORDER BY active DESC, updated_at DESC, id DESC
             "#,
         )?;
         let accounts = statement
@@ -3608,57 +3672,178 @@ impl Database {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_ascii_lowercase);
-        self.conn.execute(
-            r#"
-            INSERT INTO google_calendar_accounts (
-                email,
-                calendar_id,
-                token_json,
-                active,
-                created_by_user_id
-            )
-            VALUES (?1, ?2, ?3, 1, ?4)
-            ON CONFLICT(email, calendar_id) DO UPDATE SET
-                token_json = excluded.token_json,
-                active = 1,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            "#,
-            params![normalized_email, calendar_id, token_json, actor_user_id],
-        )?;
-        let account_id = self.conn.query_row(
-            r#"
-            SELECT id
-            FROM google_calendar_accounts
-            WHERE ((?1 IS NULL AND email IS NULL) OR email = ?1) AND calendar_id = ?2
-            ORDER BY id DESC
-            LIMIT 1
-            "#,
-            params![normalized_email, calendar_id],
-            |row| row.get::<_, i64>(0),
-        )?;
-        self.insert_audit(
-            Some(actor_user_id),
-            None,
-            "settings.google_calendar_account_connected",
-            Some("google_calendar_accounts"),
-            Some(account_id),
-            "{}",
-        )?;
+        let normalized_email_param = normalized_email.as_deref();
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.conn
+                .execute("DELETE FROM google_calendar_event_links", [])?;
+            self.conn
+                .execute("DELETE FROM google_calendar_accounts", [])?;
+            self.conn.execute(
+                "DELETE FROM sync_jobs WHERE integration_type = 'google_calendar'",
+                [],
+            )?;
+            self.conn.execute(
+                r#"
+                UPDATE appointments
+                SET
+                    google_calendar_event_id = NULL,
+                    last_google_sync_at = NULL,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                "#,
+                [],
+            )?;
+            self.conn.execute(
+                r#"
+                UPDATE agenda_blocks
+                SET
+                    google_calendar_event_id = NULL,
+                    last_google_sync_at = NULL,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                "#,
+                [],
+            )?;
+            self.conn.execute(
+                r#"
+                INSERT INTO sync_jobs (integration_type, entity_type, entity_id, status)
+                SELECT 'google_calendar', 'appointment', id, 'queued'
+                FROM appointments
+                WHERE status != 'cancelled'
+                "#,
+                [],
+            )?;
+            self.conn.execute(
+                r#"
+                INSERT INTO sync_jobs (integration_type, entity_type, entity_id, status)
+                SELECT 'google_calendar', 'agenda_block', id, 'queued'
+                FROM agenda_blocks
+                "#,
+                [],
+            )?;
+            self.conn.execute(
+                r#"
+                INSERT INTO google_calendar_accounts (
+                    email,
+                    calendar_id,
+                    token_json,
+                    active,
+                    created_by_user_id
+                )
+                VALUES (?1, ?2, ?3, 1, ?4)
+                "#,
+                params![
+                    normalized_email_param,
+                    calendar_id,
+                    token_json,
+                    actor_user_id
+                ],
+            )?;
+            let account_id = self.conn.last_insert_rowid();
+            self.insert_audit(
+                Some(actor_user_id),
+                None,
+                "settings.google_calendar_account_connected",
+                Some("google_calendar_accounts"),
+                Some(account_id),
+                "{}",
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(account_id)
+        })();
+
+        match result {
+            Ok(account_id) => self
+                .get_google_calendar_account(account_id)?
+                .ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn remove_google_account(&self, actor_user_id: i64, account_id: i64) -> DbResult<()> {
+        self.assert_admin(actor_user_id)?;
         self.get_google_calendar_account(account_id)?
-            .ok_or(DbError::NotFound)
+            .ok_or(DbError::NotFound)?;
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.conn.execute(
+                "DELETE FROM google_calendar_event_links WHERE account_id = ?1",
+                [account_id],
+            )?;
+            let affected = self.conn.execute(
+                "DELETE FROM google_calendar_accounts WHERE id = ?1",
+                [account_id],
+            )?;
+            if affected == 0 {
+                return Err(DbError::NotFound);
+            }
+            let active_count: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM google_calendar_accounts WHERE active = 1",
+                [],
+                |row| row.get(0),
+            )?;
+            if active_count == 0 {
+                self.conn.execute(
+                    "DELETE FROM sync_jobs WHERE integration_type = 'google_calendar'",
+                    [],
+                )?;
+                self.conn.execute(
+                    r#"
+                    UPDATE appointments
+                    SET
+                        google_calendar_event_id = NULL,
+                        last_google_sync_at = NULL,
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    "#,
+                    [],
+                )?;
+                self.conn.execute(
+                    r#"
+                    UPDATE agenda_blocks
+                    SET
+                        google_calendar_event_id = NULL,
+                        last_google_sync_at = NULL,
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    "#,
+                    [],
+                )?;
+            }
+            self.insert_audit(
+                Some(actor_user_id),
+                None,
+                "settings.google_calendar_account_removed",
+                Some("google_calendar_accounts"),
+                Some(account_id),
+                "{}",
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
     }
 
     pub fn active_google_calendar_tokens(
         &self,
         actor_user_id: i64,
     ) -> DbResult<Vec<GoogleCalendarTokenRecord>> {
-        self.assert_admin(actor_user_id)?;
+        self.assert_active_user(actor_user_id)?;
         let mut statement = self.conn.prepare(
             r#"
             SELECT id, calendar_id, token_json
             FROM google_calendar_accounts
             WHERE active = 1
-            ORDER BY id ASC
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
             "#,
         )?;
         let tokens = statement
@@ -3680,7 +3865,7 @@ impl Database {
         account_id: i64,
         token_json: &str,
     ) -> DbResult<()> {
-        self.assert_admin(actor_user_id)?;
+        self.assert_active_user(actor_user_id)?;
         let affected = self.conn.execute(
             r#"
             UPDATE google_calendar_accounts
@@ -3705,7 +3890,7 @@ impl Database {
         entity_type: &str,
         entity_id: i64,
     ) -> DbResult<Option<String>> {
-        self.assert_admin(actor_user_id)?;
+        self.assert_active_user(actor_user_id)?;
         let entity_type = normalize_google_calendar_link_entity_type(entity_type)?;
         self.conn
             .query_row(
@@ -3729,12 +3914,22 @@ impl Database {
         entity_id: i64,
         google_event_id: &str,
     ) -> DbResult<()> {
-        self.assert_admin(actor_user_id)?;
+        self.assert_active_user(actor_user_id)?;
         let entity_type = normalize_google_calendar_link_entity_type(entity_type)?;
         let event_id = google_event_id.trim();
         if event_id.is_empty() {
             return Ok(());
         }
+        self.conn.execute(
+            r#"
+            DELETE FROM google_calendar_event_links
+            WHERE
+                account_id = ?1
+                AND google_event_id = ?2
+                AND NOT (entity_type = ?3 AND entity_id = ?4)
+            "#,
+            params![account_id, event_id, entity_type, entity_id],
+        )?;
         self.conn.execute(
             r#"
             INSERT INTO google_calendar_event_links (
@@ -3761,7 +3956,7 @@ impl Database {
         entity_type: &str,
         entity_id: i64,
     ) -> DbResult<Vec<GoogleCalendarEventLinkRecord>> {
-        self.assert_admin(actor_user_id)?;
+        self.assert_active_user(actor_user_id)?;
         let entity_type = normalize_google_calendar_link_entity_type(entity_type)?;
         let mut statement = self.conn.prepare(
             r#"
@@ -3800,7 +3995,7 @@ impl Database {
         entity_type: &str,
         entity_id: i64,
     ) -> DbResult<()> {
-        self.assert_admin(actor_user_id)?;
+        self.assert_active_user(actor_user_id)?;
         let entity_type = normalize_google_calendar_link_entity_type(entity_type)?;
         self.conn.execute(
             r#"
@@ -3990,11 +4185,11 @@ impl Database {
         google_updated_at: &str,
     ) -> DbResult<bool> {
         self.assert_admin(actor_user_id)?;
-        let existing: Option<(i64, String)> = self
+        let existing: Option<(i64, String, Option<i64>)> = self
             .conn
             .query_row(
                 r#"
-                SELECT appointments.id, appointments.updated_at
+                SELECT appointments.id, appointments.updated_at, appointments.patient_id
                 FROM appointments
                 LEFT JOIN google_calendar_event_links ON
                     google_calendar_event_links.entity_type = 'appointment'
@@ -4006,10 +4201,10 @@ impl Database {
                 LIMIT 1
                 "#,
                 [google_event_id.trim()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let Some((appointment_id, local_updated_at)) = existing else {
+        let Some((appointment_id, local_updated_at, patient_id)) = existing else {
             return Ok(false);
         };
         if !google_updated_at.trim().is_empty()
@@ -4017,18 +4212,45 @@ impl Database {
         {
             return Ok(false);
         }
-        let affected = self.conn.execute(
-            r#"
-            UPDATE appointments
-            SET
-                status = 'cancelled',
-                last_google_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?1
-            "#,
-            [appointment_id],
-        )?;
-        Ok(affected > 0)
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.conn.execute(
+                r#"
+                DELETE FROM sync_jobs
+                WHERE integration_type = 'google_calendar'
+                    AND entity_type = 'appointment'
+                    AND entity_id = ?1
+                "#,
+                [appointment_id],
+            )?;
+            self.conn.execute(
+                r#"
+                DELETE FROM google_calendar_event_links
+                WHERE entity_type = 'appointment' AND entity_id = ?1
+                "#,
+                [appointment_id],
+            )?;
+            let affected = self
+                .conn
+                .execute("DELETE FROM appointments WHERE id = ?1", [appointment_id])?;
+            self.insert_appointment_audit(
+                actor_user_id,
+                patient_id,
+                appointment_id,
+                "agenda.google_calendar_deleted",
+                &serde_json::json!({ "google_event_id": google_event_id.trim() }).to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(affected > 0)
+        })();
+
+        match result {
+            Ok(changed) => Ok(changed),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
     }
 
     pub fn pending_google_calendar_sync_jobs(
@@ -4257,10 +4479,35 @@ impl Database {
             r#"
             UPDATE sync_jobs
             SET
-                status = 'queued',
+                status = CASE WHEN attempts + 1 > 10 THEN 'cancelled' ELSE 'queued' END,
                 attempts = attempts + 1,
                 last_error = ?1,
-                run_after = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+5 minutes'),
+                run_after = CASE
+                    WHEN attempts + 1 > 10 THEN NULL
+                    ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+5 minutes')
+                END,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2
+            "#,
+            params![sanitized, job_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn cancel_google_calendar_sync_job(
+        &self,
+        job_id: i64,
+        error_message: &str,
+    ) -> DbResult<()> {
+        let sanitized = sanitize_sync_error(error_message);
+        self.conn.execute(
+            r#"
+            UPDATE sync_jobs
+            SET
+                status = 'cancelled',
+                attempts = attempts + 1,
+                last_error = ?1,
+                run_after = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE id = ?2
             "#,
@@ -5228,7 +5475,15 @@ impl Database {
         self.conn.execute(
             r#"
             INSERT INTO sync_jobs (integration_type, entity_type, entity_id, status)
-            VALUES ('google_calendar', 'appointment', ?1, 'queued')
+            SELECT 'google_calendar', 'appointment', ?1, 'queued'
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM sync_jobs
+                WHERE integration_type = 'google_calendar'
+                    AND entity_type = 'appointment'
+                    AND entity_id = ?1
+                    AND status IN ('queued', 'running', 'failed')
+            )
             "#,
             [appointment_id],
         )?;
@@ -5239,7 +5494,15 @@ impl Database {
         self.conn.execute(
             r#"
             INSERT INTO sync_jobs (integration_type, entity_type, entity_id, status)
-            VALUES ('google_calendar', 'agenda_block', ?1, 'queued')
+            SELECT 'google_calendar', 'agenda_block', ?1, 'queued'
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM sync_jobs
+                WHERE integration_type = 'google_calendar'
+                    AND entity_type = 'agenda_block'
+                    AND entity_id = ?1
+                    AND status IN ('queued', 'running', 'failed')
+            )
             "#,
             [block_id],
         )?;
@@ -5802,12 +6065,13 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         "TEXT NOT NULL DEFAULT 'final' CHECK(invoice_kind IN ('final', 'deposit'))",
     )?;
     migrate_tooth_status_constraint(conn)?;
+    migrate_sync_jobs_status_constraint(conn)?;
     conn.execute(
         r#"
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "mobile_pairing_device_uid"],
+        params![CURRENT_SCHEMA_VERSION, "calendar_sync_job_hardening"],
     )?;
     Ok(())
 }
@@ -5877,6 +6141,128 @@ fn migrate_tooth_status_constraint(conn: &Connection) -> DbResult<()> {
         "#,
     )?;
 
+    Ok(())
+}
+
+fn migrate_sync_jobs_status_constraint(conn: &Connection) -> DbResult<()> {
+    let table_sql = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sync_jobs'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+
+    if !table_sql.contains("'cancelled'") {
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys = OFF;
+            ALTER TABLE sync_jobs RENAME TO sync_jobs_legacy;
+            CREATE TABLE sync_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                integration_type TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+                attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+                last_error TEXT,
+                run_after TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            );
+            INSERT INTO sync_jobs (
+                id,
+                integration_type,
+                entity_type,
+                entity_id,
+                status,
+                attempts,
+                last_error,
+                run_after,
+                created_at,
+                updated_at
+            )
+            SELECT
+                id,
+                integration_type,
+                entity_type,
+                entity_id,
+                CASE
+                    WHEN status IN ('queued', 'running', 'completed', 'failed') THEN status
+                    ELSE 'cancelled'
+                END,
+                attempts,
+                last_error,
+                run_after,
+                created_at,
+                updated_at
+            FROM sync_jobs_legacy;
+            DROP TABLE sync_jobs_legacy;
+            PRAGMA foreign_keys = ON;
+            "#,
+        )?;
+    }
+
+    cleanup_google_calendar_sync_jobs(conn)?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sync_jobs_status_run_after ON sync_jobs(status, run_after)",
+        [],
+    )?;
+    conn.execute(
+        r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_jobs_active_google_entity
+        ON sync_jobs(integration_type, entity_type, entity_id)
+        WHERE integration_type = 'google_calendar' AND status IN ('queued', 'running', 'failed')
+        "#,
+        [],
+    )?;
+    Ok(())
+}
+
+fn cleanup_google_calendar_sync_jobs(conn: &Connection) -> DbResult<()> {
+    conn.execute(
+        r#"
+        UPDATE sync_jobs
+        SET
+            status = 'cancelled',
+            last_error = COALESCE(last_error, 'cancelled after more than 10 failed attempts'),
+            run_after = NULL,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE
+            integration_type = 'google_calendar'
+            AND status IN ('queued', 'failed')
+            AND attempts > 10
+        "#,
+        [],
+    )?;
+    conn.execute(
+        r#"
+        WITH ranked_jobs AS (
+            SELECT
+                id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY integration_type, entity_type, entity_id
+                    ORDER BY created_at ASC, id ASC
+                ) AS row_number
+            FROM sync_jobs
+            WHERE integration_type = 'google_calendar'
+                AND status IN ('queued', 'running', 'failed')
+        )
+        UPDATE sync_jobs
+        SET
+            status = 'cancelled',
+            last_error = 'duplicate active google calendar sync job cancelled',
+            run_after = NULL,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE id IN (
+            SELECT id
+            FROM ranked_jobs
+            WHERE row_number > 1
+        )
+        "#,
+        [],
+    )?;
     Ok(())
 }
 
@@ -6643,7 +7029,7 @@ CREATE TABLE IF NOT EXISTS sync_jobs (
     integration_type TEXT NOT NULL,
     entity_type TEXT NOT NULL,
     entity_id INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
     attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
     last_error TEXT,
     run_after TEXT,
@@ -6697,6 +7083,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_action_created ON audit_log(action, created
 CREATE INDEX IF NOT EXISTS idx_google_calendar_accounts_active ON google_calendar_accounts(active);
 CREATE INDEX IF NOT EXISTS idx_google_calendar_event_links_entity ON google_calendar_event_links(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_status_run_after ON sync_jobs(status, run_after);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_jobs_active_google_entity
+ON sync_jobs(integration_type, entity_type, entity_id)
+WHERE integration_type = 'google_calendar' AND status IN ('queued', 'running', 'failed');
 CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token_hash);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
 "#;
@@ -7198,7 +7587,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("sync jobs count");
-        assert_eq!(queued_jobs, 3);
+        assert_eq!(queued_jobs, 2);
 
         let first_job_id: i64 = db
             .conn
@@ -7357,6 +7746,172 @@ mod tests {
             .expect("pending retry jobs");
         assert_eq!(retryable.len(), 1);
         assert_eq!(retryable[0].job_id, job_id);
+
+        db.conn
+            .execute("UPDATE sync_jobs SET attempts = 10 WHERE id = ?1", [job_id])
+            .expect("prepare exhausted retry");
+        db.retry_google_calendar_sync_job(job_id, "google calendar returned HTTP 403: rate limit")
+            .expect("cancel exhausted retry");
+        let cancelled_status: String = db
+            .conn
+            .query_row(
+                "SELECT status FROM sync_jobs WHERE id = ?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .expect("cancelled job status");
+        assert_eq!(cancelled_status, "cancelled");
+        assert!(db
+            .pending_google_calendar_sync_jobs(admin.id, 10)
+            .expect("pending after cancellation")
+            .is_empty());
+    }
+
+    #[test]
+    fn google_calendar_sync_queue_keeps_single_active_job_per_appointment() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Laura",
+                    last_name: "Queue",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let appointment = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Visita di controllo",
+                    starts_at: "2026-06-20T11:00:00+02:00",
+                    ends_at: "2026-06-20T11:30:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: None,
+                },
+            )
+            .expect("create appointment");
+
+        db.enqueue_google_calendar_sync_without_tx(appointment.id)
+            .expect("enqueue duplicate once");
+        db.enqueue_google_calendar_sync_without_tx(appointment.id)
+            .expect("enqueue duplicate twice");
+
+        let active_jobs: i64 = db
+            .conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM sync_jobs
+                WHERE integration_type = 'google_calendar'
+                    AND entity_type = 'appointment'
+                    AND entity_id = ?1
+                    AND status IN ('queued', 'running', 'failed')
+                "#,
+                [appointment.id],
+                |row| row.get(0),
+            )
+            .expect("active job count");
+        assert_eq!(active_jobs, 1);
+    }
+
+    #[test]
+    fn google_calendar_event_link_reassignment_does_not_violate_unique_index() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Giulia",
+                    last_name: "Links",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let first = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Prima visita",
+                    starts_at: "2026-06-20T12:00:00+02:00",
+                    ends_at: "2026-06-20T12:30:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: None,
+                },
+            )
+            .expect("create first appointment");
+        let second = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Seconda visita",
+                    starts_at: "2026-06-20T12:30:00+02:00",
+                    ends_at: "2026-06-20T13:00:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: None,
+                },
+            )
+            .expect("create second appointment");
+        let account = db
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("links@example.test"),
+                "primary",
+                r#"{"access_token":"a","refresh_token":"r","expires_at":4102444800}"#,
+            )
+            .expect("calendar account");
+
+        db.store_google_calendar_event_link(
+            admin.id,
+            account.id,
+            "appointment",
+            first.id,
+            "shared-event",
+        )
+        .expect("store first link");
+        db.store_google_calendar_event_link(
+            admin.id,
+            account.id,
+            "appointment",
+            second.id,
+            "shared-event",
+        )
+        .expect("reassign link");
+
+        let first_link = db
+            .google_calendar_event_id_for(admin.id, account.id, "appointment", first.id)
+            .expect("first link lookup");
+        let second_link = db
+            .google_calendar_event_id_for(admin.id, account.id, "appointment", second.id)
+            .expect("second link lookup");
+        assert!(first_link.is_none());
+        assert_eq!(second_link.as_deref(), Some("shared-event"));
     }
 
     #[test]
@@ -7437,7 +7992,7 @@ mod tests {
     }
 
     #[test]
-    fn google_calendar_event_links_are_isolated_per_account() {
+    fn google_calendar_account_replacement_keeps_only_one_active_account() {
         let db = Database::open(test_database_path(), EncryptionKey::for_tests())
             .expect("open encrypted db");
         let admin = db
@@ -7480,6 +8035,14 @@ mod tests {
                 r#"{"access_token":"a","refresh_token":"r","expires_at":4102444800}"#,
             )
             .expect("first account");
+        db.store_google_calendar_event_link(
+            admin.id,
+            first_account.id,
+            "appointment",
+            appointment.id,
+            "event-first",
+        )
+        .expect("store first link");
         let second_account = db
             .store_google_calendar_account_token(
                 admin.id,
@@ -7489,45 +8052,21 @@ mod tests {
             )
             .expect("second account");
 
-        db.store_google_calendar_event_link(
-            admin.id,
-            first_account.id,
-            "appointment",
-            appointment.id,
-            "event-first",
-        )
-        .expect("store first link");
-        db.store_google_calendar_event_link(
-            admin.id,
-            second_account.id,
-            "appointment",
-            appointment.id,
-            "event-second",
-        )
-        .expect("store second link");
-
+        let accounts = db
+            .list_google_calendar_accounts(admin.id)
+            .expect("calendar accounts");
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, second_account.id);
         assert_eq!(
-            db.google_calendar_event_id_for(
-                admin.id,
-                first_account.id,
-                "appointment",
-                appointment.id
-            )
-            .expect("first link")
-            .as_deref(),
-            Some("event-first")
+            db.active_google_calendar_tokens(admin.id)
+                .expect("active tokens")
+                .len(),
+            1
         );
-        assert_eq!(
-            db.google_calendar_event_id_for(
-                admin.id,
-                second_account.id,
-                "appointment",
-                appointment.id
-            )
-            .expect("second link")
-            .as_deref(),
-            Some("event-second")
-        );
+        let old_link = db
+            .google_calendar_event_id_for(admin.id, first_account.id, "appointment", appointment.id)
+            .expect("old link lookup");
+        assert!(old_link.is_none());
     }
 
     #[test]
@@ -7618,6 +8157,90 @@ mod tests {
     }
 
     #[test]
+    fn delete_appointment_removes_local_row_calendar_links_and_sync_jobs() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Dario",
+                    last_name: "Agenda",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let appointment = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Visita di controllo",
+                    starts_at: "2026-06-20T16:00:00+02:00",
+                    ends_at: "2026-06-20T16:30:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: None,
+                },
+            )
+            .expect("create appointment");
+        let account = db
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("delete-local@example.test"),
+                "primary",
+                r#"{"access_token":"a","refresh_token":"r","expires_at":4102444800}"#,
+            )
+            .expect("calendar account");
+        db.store_google_calendar_event_link(
+            admin.id,
+            account.id,
+            "appointment",
+            appointment.id,
+            "event-delete-local",
+        )
+        .expect("store event link");
+        db.delete_appointment(admin.id, appointment.id)
+            .expect("delete appointment");
+
+        let appointment_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM appointments WHERE id = ?1",
+                [appointment.id],
+                |row| row.get(0),
+            )
+            .expect("appointment count");
+        assert_eq!(appointment_count, 0);
+        let link_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM google_calendar_event_links WHERE entity_type = 'appointment' AND entity_id = ?1",
+                [appointment.id],
+                |row| row.get(0),
+            )
+            .expect("link count");
+        assert_eq!(link_count, 0);
+        let job_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_jobs WHERE integration_type = 'google_calendar' AND entity_type = 'appointment' AND entity_id = ?1",
+                [appointment.id],
+                |row| row.get(0),
+            )
+            .expect("job count");
+        assert_eq!(job_count, 0);
+    }
+
+    #[test]
     fn google_calendar_second_account_remote_event_does_not_duplicate_local_appointment() {
         let db = Database::open(test_database_path(), EncryptionKey::for_tests())
             .expect("open encrypted db");
@@ -7661,14 +8284,6 @@ mod tests {
                 r#"{"access_token":"a","refresh_token":"r","expires_at":4102444800}"#,
             )
             .expect("first account");
-        let second_account = db
-            .store_google_calendar_account_token(
-                admin.id,
-                Some("second-sync@example.test"),
-                "primary",
-                r#"{"access_token":"b","refresh_token":"r","expires_at":4102444800}"#,
-            )
-            .expect("second account");
         db.store_google_calendar_event_link(
             admin.id,
             first_account.id,
@@ -7679,6 +8294,14 @@ mod tests {
         .expect("store first account link");
         db.complete_google_calendar_sync_job(1, appointment.id, "event-first-account")
             .expect("store legacy event id");
+        let second_account = db
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("second-sync@example.test"),
+                "primary",
+                r#"{"access_token":"b","refresh_token":"r","expires_at":4102444800}"#,
+            )
+            .expect("second account");
 
         let changed = db
             .upsert_google_calendar_remote_appointment(
@@ -8233,7 +8856,7 @@ mod tests {
     }
 
     #[test]
-    fn google_calendar_accounts_are_multi_account_and_drive_connected_status() {
+    fn google_calendar_accounts_are_single_account_and_can_be_removed() {
         let db = Database::open(test_database_path(), EncryptionKey::for_tests())
             .expect("open encrypted db");
         let admin = db
@@ -8264,7 +8887,11 @@ mod tests {
         let accounts = db
             .list_google_calendar_accounts(admin.id)
             .expect("calendar accounts");
-        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(
+            accounts[0].email.as_deref(),
+            Some("calendar-two@example.test")
+        );
         assert!(
             db.google_calendar_sync_status(admin.id)
                 .expect("connected sync status")
@@ -8274,8 +8901,20 @@ mod tests {
             db.active_google_calendar_tokens(admin.id)
                 .expect("active tokens")
                 .len(),
-            2
+            1
         );
+
+        db.remove_google_account(admin.id, accounts[0].id)
+            .expect("remove calendar account");
+        assert!(
+            !db.google_calendar_sync_status(admin.id)
+                .expect("disconnected sync status")
+                .connected
+        );
+        assert!(db
+            .active_google_calendar_tokens(admin.id)
+            .expect("active tokens after removal")
+            .is_empty());
     }
 
     fn test_database_path() -> PathBuf {
