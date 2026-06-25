@@ -3,7 +3,7 @@ use crate::{
     integrations::google,
     state::AppState,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tauri::Manager;
 
 const BACKGROUND_SYNC_LIMIT: i64 = 25;
@@ -328,6 +328,13 @@ async fn pull_remote_google_calendar_events(
         };
         match google::list_calendar_events(&access_token, &account.calendar_id).await {
             Ok(events) => {
+                let (events, duplicate_delete_failures) = remove_duplicate_velodent_google_events(
+                    &access_token,
+                    &account.calendar_id,
+                    events,
+                )
+                .await;
+                failed += duplicate_delete_failures;
                 for event in events {
                     if event.status.as_deref() == Some("cancelled") {
                         let changed = {
@@ -380,6 +387,66 @@ async fn pull_remote_google_calendar_events(
         }
     }
     Ok((processed, failed))
+}
+
+async fn remove_duplicate_velodent_google_events(
+    access_token: &str,
+    calendar_id: &str,
+    events: Vec<google::GoogleCalendarRemoteEvent>,
+) -> (Vec<google::GoogleCalendarRemoteEvent>, i64) {
+    let mut grouped: HashMap<String, Vec<google::GoogleCalendarRemoteEvent>> = HashMap::new();
+    let mut passthrough = Vec::new();
+
+    for event in events {
+        if let Some(key) = velodent_google_duplicate_key(&event) {
+            grouped.entry(key).or_default().push(event);
+        } else {
+            passthrough.push(event);
+        }
+    }
+
+    let mut failures = 0;
+    let mut deduplicated = passthrough;
+    for mut group in grouped.into_values() {
+        if group.len() <= 1 {
+            deduplicated.extend(group);
+            continue;
+        }
+
+        group.sort_by(|left, right| {
+            right
+                .updated
+                .cmp(&left.updated)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        let keep = group.remove(0);
+        for duplicate in group {
+            if google::delete_calendar_event(access_token, calendar_id, &duplicate.id)
+                .await
+                .is_err()
+            {
+                failures += 1;
+            }
+        }
+        deduplicated.push(keep);
+    }
+
+    (deduplicated, failures)
+}
+
+fn velodent_google_duplicate_key(event: &google::GoogleCalendarRemoteEvent) -> Option<String> {
+    if event.status.as_deref() == Some("cancelled") {
+        return None;
+    }
+    let summary = event.summary.as_deref()?.trim();
+    if !summary.ends_with("(VeloDent)") {
+        return None;
+    }
+    let starts_at = event.start.date_time.as_deref()?;
+    let ends_at = event.end.date_time.as_deref()?;
+    let starts_at = normalize_google_datetime_for_storage(starts_at)?;
+    let ends_at = normalize_google_datetime_for_storage(ends_at)?;
+    Some(format!("{summary}|{starts_at}|{ends_at}"))
 }
 
 async fn access_token_for_account(
@@ -795,5 +862,47 @@ mod tests {
             normalize_google_datetime_for_storage("2026-01-10T08:30:00Z").as_deref(),
             Some("2026-01-10T09:30:00+01:00")
         );
+    }
+
+    #[test]
+    fn velodent_duplicate_key_only_matches_identical_velodent_events() {
+        let event = google::GoogleCalendarRemoteEvent {
+            id: "event-1".to_owned(),
+            summary: Some("Rossi Mario - Visita di controllo (VeloDent)".to_owned()),
+            status: Some("confirmed".to_owned()),
+            updated: Some("2026-06-24T10:01:00Z".to_owned()),
+            start: google::GoogleCalendarRemoteEventTime {
+                date_time: Some("2026-06-24T10:00:00Z".to_owned()),
+            },
+            end: google::GoogleCalendarRemoteEventTime {
+                date_time: Some("2026-06-24T10:30:00Z".to_owned()),
+            },
+        };
+        let same_slot_with_local_offset = google::GoogleCalendarRemoteEvent {
+            id: "event-2".to_owned(),
+            summary: event.summary.clone(),
+            status: Some("confirmed".to_owned()),
+            updated: Some("2026-06-24T10:02:00Z".to_owned()),
+            start: google::GoogleCalendarRemoteEventTime {
+                date_time: Some("2026-06-24T12:00:00+02:00".to_owned()),
+            },
+            end: google::GoogleCalendarRemoteEventTime {
+                date_time: Some("2026-06-24T12:30:00+02:00".to_owned()),
+            },
+        };
+        let manual_event = google::GoogleCalendarRemoteEvent {
+            id: "event-3".to_owned(),
+            summary: Some("Rossi Mario - Visita di controllo".to_owned()),
+            status: Some("confirmed".to_owned()),
+            updated: None,
+            start: event.start.clone(),
+            end: event.end.clone(),
+        };
+
+        assert_eq!(
+            velodent_google_duplicate_key(&event),
+            velodent_google_duplicate_key(&same_slot_with_local_offset)
+        );
+        assert!(velodent_google_duplicate_key(&manual_event).is_none());
     }
 }

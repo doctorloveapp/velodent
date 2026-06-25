@@ -4260,7 +4260,73 @@ impl Database {
     ) -> DbResult<Vec<GoogleCalendarSyncJob>> {
         self.assert_admin(actor_user_id)?;
         let normalized_limit = limit.clamp(1, 25);
-        let mut statement = self.conn.prepare(
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.conn.execute(
+                r#"
+                UPDATE sync_jobs
+                SET
+                    status = 'queued',
+                    last_error = COALESCE(last_error, 'stale google calendar sync job reclaimed'),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE
+                    integration_type = 'google_calendar'
+                    AND entity_type = 'appointment'
+                    AND status = 'running'
+                    AND updated_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes')
+                "#,
+                [],
+            )?;
+            let job_ids = self
+                .conn
+                .prepare(
+                    r#"
+                    SELECT sync_jobs.id
+                    FROM sync_jobs
+                    INNER JOIN appointments ON appointments.id = sync_jobs.entity_id
+                    WHERE
+                        sync_jobs.integration_type = 'google_calendar'
+                        AND sync_jobs.entity_type = 'appointment'
+                        AND sync_jobs.status IN ('queued', 'failed')
+                        AND (sync_jobs.run_after IS NULL OR sync_jobs.run_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                    ORDER BY sync_jobs.created_at ASC
+                    LIMIT ?1
+                    "#,
+                )?
+                .query_map([normalized_limit], |row| row.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            if !job_ids.is_empty() {
+                let id_list = join_i64_list(&job_ids);
+                self.conn.execute(
+                    &format!(
+                        r#"
+                        UPDATE sync_jobs
+                        SET
+                            status = 'running',
+                            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                        WHERE id IN ({id_list})
+                        "#
+                    ),
+                    [],
+                )?;
+            }
+            self.conn.execute_batch("COMMIT")?;
+            Ok(job_ids)
+        })();
+
+        let job_ids = match result {
+            Ok(job_ids) => job_ids,
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        };
+
+        if job_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let id_list = join_i64_list(&job_ids);
+        let mut statement = self.conn.prepare(&format!(
             r#"
             SELECT
                 sync_jobs.id,
@@ -4283,18 +4349,13 @@ impl Database {
             FROM sync_jobs
             INNER JOIN appointments ON appointments.id = sync_jobs.entity_id
             LEFT JOIN patients ON patients.id = appointments.patient_id
-            WHERE
-                sync_jobs.integration_type = 'google_calendar'
-                AND sync_jobs.entity_type = 'appointment'
-                AND sync_jobs.status IN ('queued', 'failed')
-                AND (sync_jobs.run_after IS NULL OR sync_jobs.run_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            WHERE sync_jobs.id IN ({id_list})
             ORDER BY sync_jobs.created_at ASC
-            LIMIT ?1
-            "#,
-        )?;
+            "#
+        ))?;
 
         let jobs = statement
-            .query_map([normalized_limit], |row| {
+            .query_map([], |row| {
                 Ok(GoogleCalendarSyncJob {
                     job_id: row.get(0)?,
                     appointment: appointment_from_offset_row(row, 1)?,
@@ -4312,7 +4373,73 @@ impl Database {
     ) -> DbResult<Vec<AgendaBlockSyncJob>> {
         self.assert_admin(actor_user_id)?;
         let normalized_limit = limit.clamp(1, 25);
-        let mut statement = self.conn.prepare(
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.conn.execute(
+                r#"
+                UPDATE sync_jobs
+                SET
+                    status = 'queued',
+                    last_error = COALESCE(last_error, 'stale google calendar sync job reclaimed'),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE
+                    integration_type = 'google_calendar'
+                    AND entity_type = 'agenda_block'
+                    AND status = 'running'
+                    AND updated_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes')
+                "#,
+                [],
+            )?;
+            let job_ids = self
+                .conn
+                .prepare(
+                    r#"
+                    SELECT sync_jobs.id
+                    FROM sync_jobs
+                    INNER JOIN agenda_blocks ON agenda_blocks.id = sync_jobs.entity_id
+                    WHERE
+                        sync_jobs.integration_type = 'google_calendar'
+                        AND sync_jobs.entity_type = 'agenda_block'
+                        AND sync_jobs.status IN ('queued', 'failed')
+                        AND (sync_jobs.run_after IS NULL OR sync_jobs.run_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                    ORDER BY sync_jobs.created_at ASC
+                    LIMIT ?1
+                    "#,
+                )?
+                .query_map([normalized_limit], |row| row.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            if !job_ids.is_empty() {
+                let id_list = join_i64_list(&job_ids);
+                self.conn.execute(
+                    &format!(
+                        r#"
+                        UPDATE sync_jobs
+                        SET
+                            status = 'running',
+                            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                        WHERE id IN ({id_list})
+                        "#
+                    ),
+                    [],
+                )?;
+            }
+            self.conn.execute_batch("COMMIT")?;
+            Ok(job_ids)
+        })();
+
+        let job_ids = match result {
+            Ok(job_ids) => job_ids,
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        };
+
+        if job_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let id_list = join_i64_list(&job_ids);
+        let mut statement = self.conn.prepare(&format!(
             r#"
             SELECT
                 sync_jobs.id,
@@ -4328,18 +4455,13 @@ impl Database {
                 agenda_blocks.updated_at
             FROM sync_jobs
             INNER JOIN agenda_blocks ON agenda_blocks.id = sync_jobs.entity_id
-            WHERE
-                sync_jobs.integration_type = 'google_calendar'
-                AND sync_jobs.entity_type = 'agenda_block'
-                AND sync_jobs.status IN ('queued', 'failed')
-                AND (sync_jobs.run_after IS NULL OR sync_jobs.run_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            WHERE sync_jobs.id IN ({id_list})
             ORDER BY sync_jobs.created_at ASC
-            LIMIT ?1
-            "#,
-        )?;
+            "#
+        ))?;
 
         let jobs = statement
-            .query_map([normalized_limit], |row| {
+            .query_map([], |row| {
                 Ok(AgendaBlockSyncJob {
                     job_id: row.get(0)?,
                     block: agenda_block_from_offset_row(row, 1)?,
@@ -4356,6 +4478,18 @@ impl Database {
         appointment_id: i64,
         google_event_id: &str,
     ) -> DbResult<()> {
+        let resync_needed: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM appointments
+            INNER JOIN sync_jobs ON sync_jobs.id = ?1
+            WHERE
+                appointments.id = ?2
+                AND appointments.updated_at > sync_jobs.updated_at
+            "#,
+            params![job_id, appointment_id],
+            |row| row.get(0),
+        )?;
         self.conn.execute(
             r#"
             UPDATE appointments
@@ -4381,11 +4515,14 @@ impl Database {
                     integration_type = 'google_calendar'
                     AND entity_type = 'appointment'
                     AND entity_id = ?2
-                    AND status IN ('queued', 'failed')
+                    AND status IN ('queued', 'running', 'failed')
                 )
             "#,
             params![job_id, appointment_id],
         )?;
+        if resync_needed > 0 {
+            self.enqueue_google_calendar_sync_without_tx(appointment_id)?;
+        }
         Ok(())
     }
 
@@ -4426,7 +4563,7 @@ impl Database {
                     integration_type = 'google_calendar'
                     AND entity_type = 'appointment'
                     AND entity_id = ?2
-                    AND status IN ('queued', 'failed')
+                    AND status IN ('queued', 'running', 'failed')
                 )
             "#,
             params![job_id, appointment_id],
@@ -4440,6 +4577,18 @@ impl Database {
         block_id: i64,
         google_event_id: &str,
     ) -> DbResult<()> {
+        let resync_needed: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM agenda_blocks
+            INNER JOIN sync_jobs ON sync_jobs.id = ?1
+            WHERE
+                agenda_blocks.id = ?2
+                AND agenda_blocks.updated_at > sync_jobs.updated_at
+            "#,
+            params![job_id, block_id],
+            |row| row.get(0),
+        )?;
         self.conn.execute(
             r#"
             UPDATE agenda_blocks
@@ -4465,11 +4614,14 @@ impl Database {
                     integration_type = 'google_calendar'
                     AND entity_type = 'agenda_block'
                     AND entity_id = ?2
-                    AND status IN ('queued', 'failed')
+                    AND status IN ('queued', 'running', 'failed')
                 )
             "#,
             params![job_id, block_id],
         )?;
+        if resync_needed > 0 {
+            self.enqueue_google_calendar_block_sync_without_tx(block_id)?;
+        }
         Ok(())
     }
 
@@ -5952,6 +6104,14 @@ fn sanitize_sync_error(error_message: &str) -> String {
         .filter(|character| !character.is_control())
         .take(240)
         .collect()
+}
+
+fn join_i64_list(values: &[i64]) -> String {
+    values
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn tooth_state_for_clinical_status(status: &str) -> &'static str {
@@ -7589,14 +7749,13 @@ mod tests {
             .expect("sync jobs count");
         assert_eq!(queued_jobs, 2);
 
-        let first_job_id: i64 = db
-            .conn
-            .query_row(
-                "SELECT id FROM sync_jobs WHERE integration_type = 'google_calendar' AND entity_type = 'appointment' AND entity_id = ?1 ORDER BY id ASC LIMIT 1",
-                [second_chair.id],
-                |row| row.get(0),
-            )
-            .expect("first sync job id");
+        let first_job_id = db
+            .pending_google_calendar_sync_jobs(admin.id, 10)
+            .expect("claim sync jobs")
+            .into_iter()
+            .find(|job| job.appointment.id == second_chair.id)
+            .expect("first sync job for moved appointment")
+            .job_id;
         db.complete_google_calendar_sync_job(first_job_id, second_chair.id, "google-event-1")
             .expect("complete sync jobs for same appointment");
         let remaining_queued_for_moved: i64 = db
@@ -7825,6 +7984,64 @@ mod tests {
             )
             .expect("active job count");
         assert_eq!(active_jobs, 1);
+
+        let first_claim = db
+            .pending_google_calendar_sync_jobs(admin.id, 10)
+            .expect("first worker claim");
+        assert_eq!(first_claim.len(), 1);
+        assert_eq!(first_claim[0].appointment.id, appointment.id);
+
+        let second_claim = db
+            .pending_google_calendar_sync_jobs(admin.id, 10)
+            .expect("second worker claim");
+        assert!(second_claim.is_empty());
+
+        let running_jobs: i64 = db
+            .conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM sync_jobs
+                WHERE integration_type = 'google_calendar'
+                    AND entity_type = 'appointment'
+                    AND entity_id = ?1
+                    AND status = 'running'
+                "#,
+                [appointment.id],
+                |row| row.get(0),
+            )
+            .expect("running job count");
+        assert_eq!(running_jobs, 1);
+
+        db.conn
+            .execute(
+                r#"
+                UPDATE appointments
+                SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 minute')
+                WHERE id = ?1
+                "#,
+                [appointment.id],
+            )
+            .expect("mark appointment changed during running sync");
+        db.complete_google_calendar_sync_job(first_claim[0].job_id, appointment.id, "resync-event")
+            .expect("complete running sync");
+
+        let queued_resync_jobs: i64 = db
+            .conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM sync_jobs
+                WHERE integration_type = 'google_calendar'
+                    AND entity_type = 'appointment'
+                    AND entity_id = ?1
+                    AND status = 'queued'
+                "#,
+                [appointment.id],
+                |row| row.get(0),
+            )
+            .expect("queued resync job count");
+        assert_eq!(queued_resync_jobs, 1);
     }
 
     #[test]
