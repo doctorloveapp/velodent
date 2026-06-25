@@ -6,7 +6,6 @@ import {
   LogOut,
   Menu,
   UserPlus,
-  Wifi,
   X,
   type LucideIcon
 } from "lucide-react";
@@ -15,7 +14,6 @@ import { useState, type ReactNode } from "react";
 import type { L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
-import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 
 export type MobileRouteKey =
@@ -49,6 +47,7 @@ interface MobileShellProps {
   children: ReactNode;
   currentUser: User;
   headerAccessory?: ReactNode;
+  headerActions?: ReactNode;
   patientName?: string;
   title: string;
   onLogout: () => void;
@@ -61,6 +60,7 @@ export function MobileShell({
   children,
   currentUser,
   headerAccessory,
+  headerActions,
   patientName,
   title,
   onLogout,
@@ -102,11 +102,7 @@ export function MobileShell({
           </div>
 
           <div className="flex items-center gap-2">
-            <Badge variant="default" className="h-9 gap-1 px-2 font-mono text-[10px]" title={t("syncReadyHelp")}>
-              <Wifi aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
-              <span className="hidden min-[380px]:inline">{t("mobileLanReady")}</span>
-              <span className="min-[380px]:hidden">{t("mobileSyncReady")}</span>
-            </Badge>
+            {headerActions}
             <Button
               aria-label={t("mobileMenu")}
               className="h-12 w-12 justify-center p-0"

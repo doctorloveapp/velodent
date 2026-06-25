@@ -1,9 +1,9 @@
+#[cfg(feature = "mobile-tunnel")]
+use crate::tunnel::{self, MobileTunnelInfo, MobileTunnelProcess};
 use crate::{
     auth,
     db::{Database, DbError},
 };
-#[cfg(feature = "mobile-tunnel")]
-use crate::tunnel::{self, MobileTunnelInfo, MobileTunnelProcess};
 use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 use std::{

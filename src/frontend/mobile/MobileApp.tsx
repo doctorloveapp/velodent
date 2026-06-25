@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { ArrowLeft, FileText } from "lucide-react";
 import { useCallback, useState } from "react";
 import type { L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
@@ -60,6 +61,7 @@ const routeContent: Record<MobileRouteKey, RouteContent> = {
 export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
   const { t } = useL10n();
   const [clinicalAssetMode, setClinicalAssetMode] = useState<"rx" | "photo" | null>(null);
+  const [clinicalDiaryOpen, setClinicalDiaryOpen] = useState(false);
   const [activePatient, setActivePatient] = useState<Patient | null>(null);
   const [activeRoute, setActiveRoute] = useState<MobileRouteKey>("dashboard");
   const [selectedToothRecordInfo, setSelectedToothRecordInfo] = useState<SelectedToothRecordInfo | null>(null);
@@ -68,10 +70,43 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
   const activePatientName = activePatient ? `${activePatient.first_name} ${activePatient.last_name}` : undefined;
   const handleMissingPatient = useCallback(() => setActiveRoute("searchPatient"), []);
 
+  function changeRoute(route: MobileRouteKey) {
+    setClinicalDiaryOpen(false);
+    setClinicalAssetMode(null);
+    setSelectedToothRecordInfo(null);
+    setActiveRoute(route);
+  }
+
   return (
     <MobileShell
       activeRoute={activeRoute}
       currentUser={currentUser}
+      headerActions={
+        activeRoute === "clinical" && activePatient ? (
+          <div className="flex items-center gap-2">
+            {clinicalAssetMode ? (
+              <Button
+                aria-label={t("mobileBackToOdontogram")}
+                className="h-11 w-11 justify-center p-0"
+                type="button"
+                variant="secondary"
+                onClick={() => setClinicalAssetMode(null)}
+              >
+                <ArrowLeft aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
+              </Button>
+            ) : null}
+            <Button
+              aria-label={t("mobileOpenClinicalDiary")}
+              className="h-11 w-11 justify-center p-0"
+              type="button"
+              variant="secondary"
+              onClick={() => setClinicalDiaryOpen(true)}
+            >
+              <FileText aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
+            </Button>
+          </div>
+        ) : undefined
+      }
       headerAccessory={
         activeRoute === "clinical" ? (
           selectedToothRecordInfo ? (
@@ -110,7 +145,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
           setActivePatient(null);
         } : undefined
       }
-      onRouteChange={setActiveRoute}
+      onRouteChange={changeRoute}
     >
       <AnimatePresence mode="wait">
         <motion.div
@@ -121,7 +156,7 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
           transition={{ duration: 0.22 }}
         >
           {activeRoute === "dashboard" ? (
-            <MobileDashboard onRouteChange={setActiveRoute} />
+            <MobileDashboard onRouteChange={changeRoute} />
           ) : activeRoute === "agenda" ? (
             <MobileAgenda sessionToken={currentUser.session_token ?? ""} />
           ) : activeRoute === "newPatient" ? (
@@ -139,8 +174,10 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
               <MobileClinical
                 activePatientId={activePatient.id}
                 assetMode="rx"
+                diaryOpen={false}
                 mode="clinical"
                 onMissingPatient={handleMissingPatient}
+                onDiaryOpenChange={() => undefined}
                 onSelectedToothRecordInfo={setSelectedToothRecordInfo}
                 sessionToken={currentUser.session_token ?? ""}
               />
@@ -157,8 +194,10 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
             activePatient ? (
               <MobileClinical
                 activePatientId={activePatient.id}
+                diaryOpen={false}
                 mode="orthodontics"
                 onMissingPatient={handleMissingPatient}
+                onDiaryOpenChange={() => undefined}
                 onSelectedToothRecordInfo={setSelectedToothRecordInfo}
                 sessionToken={currentUser.session_token ?? ""}
               />
@@ -176,8 +215,10 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
               <MobileClinical
                 activePatientId={activePatient.id}
                 assetMode={clinicalAssetMode}
+                diaryOpen={clinicalDiaryOpen}
                 mode="clinical"
                 onMissingPatient={handleMissingPatient}
+                onDiaryOpenChange={setClinicalDiaryOpen}
                 onSelectedToothRecordInfo={setSelectedToothRecordInfo}
                 sessionToken={currentUser.session_token ?? ""}
               />

@@ -1,5 +1,5 @@
 use crate::{
-    db::{AgendaBlock, Appointment, GoogleCalendarTokenRecord},
+    db::{AgendaBlock, Appointment, GoogleCalendarEventLinkRecord, GoogleCalendarTokenRecord},
     integrations::google,
     state::AppState,
 };
@@ -31,6 +31,10 @@ pub async fn process_google_calendar_sync(
     if accounts.is_empty() {
         return Ok((0, 0));
     }
+    let outbound_account = accounts
+        .iter()
+        .min_by_key(|account| account.account_id)
+        .cloned();
     let use_legacy_google_event_id = accounts.len() == 1;
 
     let jobs = {
@@ -48,62 +52,97 @@ pub async fn process_google_calendar_sync(
 
     let mut processed = 0;
     let mut failed = 0;
+    let (remote_processed, remote_failed) =
+        pull_remote_google_calendar_events(&state, actor_user_id, &accounts).await?;
+    processed += remote_processed;
+    failed += remote_failed;
     let mut seen_appointments = HashSet::new();
 
     for job in jobs {
         if !seen_appointments.insert(job.appointment.id) {
             continue;
         }
+        if job.appointment.status == "cancelled" {
+            match delete_google_events_for_entity(
+                &state,
+                actor_user_id,
+                "appointment",
+                job.appointment.id,
+                job.appointment.google_calendar_event_id.as_deref(),
+                outbound_account.as_ref(),
+            )
+            .await
+            {
+                Ok(()) => {
+                    let database = state.database()?;
+                    database
+                        .complete_google_calendar_delete_sync_job(job.job_id, job.appointment.id)
+                        .map_err(|error| error.to_string())?;
+                    processed += 1;
+                }
+                Err(error) => {
+                    let database = state.database()?;
+                    database
+                        .retry_google_calendar_sync_job(job.job_id, &error)
+                        .map_err(|error| error.to_string())?;
+                    failed += 1;
+                }
+            }
+            continue;
+        }
         let payload = google_payload_for_appointment(&job.appointment);
         let mut last_event_id = None;
         let mut last_error = None;
 
-        for account in &accounts {
-            let access_token = match access_token_for_account(&state, actor_user_id, account).await {
+        if let Some(account) = outbound_account.as_ref() {
+            let access_token = match access_token_for_account(&state, actor_user_id, account).await
+            {
                 Ok(access_token) => access_token,
                 Err(error) => {
                     last_error = Some(error);
-                    continue;
+                    String::new()
                 }
             };
-            let existing_event_id = {
-                let database = state.database()?;
-                database
-                    .google_calendar_event_id_for(
-                        actor_user_id,
-                        account.account_id,
-                        "appointment",
-                        job.appointment.id,
-                    )
-                    .map_err(|error| error.to_string())?
-            }
-            .or_else(|| {
-                use_legacy_google_event_id
-                    .then(|| job.appointment.google_calendar_event_id.clone())
-                    .flatten()
-            });
-            let result = upsert_with_insert_fallback(
-                &access_token,
-                &account.calendar_id,
-                existing_event_id.as_deref(),
-                &payload,
-            )
-            .await;
-            match result {
-                Ok(event_id) => {
+            if !access_token.is_empty() {
+                let existing_event_id = {
                     let database = state.database()?;
                     database
-                        .store_google_calendar_event_link(
+                        .google_calendar_event_id_for(
                             actor_user_id,
                             account.account_id,
                             "appointment",
                             job.appointment.id,
-                            &event_id,
                         )
-                        .map_err(|error| error.to_string())?;
-                    last_event_id = Some(event_id);
+                        .map_err(|error| error.to_string())?
                 }
-                Err(error) => last_error = Some(error.to_string()),
+                .or_else(|| {
+                    use_legacy_google_event_id
+                        .then(|| job.appointment.google_calendar_event_id.clone())
+                        .flatten()
+                });
+                let result = upsert_with_insert_fallback(
+                    &access_token,
+                    &account.calendar_id,
+                    existing_event_id.as_deref(),
+                    &payload,
+                )
+                .await;
+                match result {
+                    Ok(event_id) => {
+                        let database = state.database()?;
+                        database
+                            .store_google_calendar_event_link(
+                                actor_user_id,
+                                account.account_id,
+                                "appointment",
+                                job.appointment.id,
+                                &event_id,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        last_event_id = Some(event_id);
+                    }
+                    Err(error) => last_error = Some(error.to_string()),
+                }
             }
         }
 
@@ -135,52 +174,55 @@ pub async fn process_google_calendar_sync(
         let mut last_event_id = None;
         let mut last_error = None;
 
-        for account in &accounts {
-            let access_token = match access_token_for_account(&state, actor_user_id, account).await {
+        if let Some(account) = outbound_account.as_ref() {
+            let access_token = match access_token_for_account(&state, actor_user_id, account).await
+            {
                 Ok(access_token) => access_token,
                 Err(error) => {
                     last_error = Some(error);
-                    continue;
+                    String::new()
                 }
             };
-            let existing_event_id = {
-                let database = state.database()?;
-                database
-                    .google_calendar_event_id_for(
-                        actor_user_id,
-                        account.account_id,
-                        "agenda_block",
-                        job.block.id,
-                    )
-                    .map_err(|error| error.to_string())?
-            }
-            .or_else(|| {
-                use_legacy_google_event_id
-                    .then(|| job.block.google_calendar_event_id.clone())
-                    .flatten()
-            });
-            let result = upsert_with_insert_fallback(
-                &access_token,
-                &account.calendar_id,
-                existing_event_id.as_deref(),
-                &payload,
-            )
-            .await;
-            match result {
-                Ok(event_id) => {
+            if !access_token.is_empty() {
+                let existing_event_id = {
                     let database = state.database()?;
                     database
-                        .store_google_calendar_event_link(
+                        .google_calendar_event_id_for(
                             actor_user_id,
                             account.account_id,
                             "agenda_block",
                             job.block.id,
-                            &event_id,
                         )
-                        .map_err(|error| error.to_string())?;
-                    last_event_id = Some(event_id);
+                        .map_err(|error| error.to_string())?
                 }
-                Err(error) => last_error = Some(error.to_string()),
+                .or_else(|| {
+                    use_legacy_google_event_id
+                        .then(|| job.block.google_calendar_event_id.clone())
+                        .flatten()
+                });
+                let result = upsert_with_insert_fallback(
+                    &access_token,
+                    &account.calendar_id,
+                    existing_event_id.as_deref(),
+                    &payload,
+                )
+                .await;
+                match result {
+                    Ok(event_id) => {
+                        let database = state.database()?;
+                        database
+                            .store_google_calendar_event_link(
+                                actor_user_id,
+                                account.account_id,
+                                "agenda_block",
+                                job.block.id,
+                                &event_id,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        last_event_id = Some(event_id);
+                    }
+                    Err(error) => last_error = Some(error.to_string()),
+                }
             }
         }
 
@@ -203,8 +245,18 @@ pub async fn process_google_calendar_sync(
         }
     }
 
-    for account in &accounts {
-        let access_token = match access_token_for_account(&state, actor_user_id, account).await {
+    Ok((processed, failed))
+}
+
+async fn pull_remote_google_calendar_events(
+    state: &AppState,
+    actor_user_id: i64,
+    accounts: &[GoogleCalendarTokenRecord],
+) -> Result<(i64, i64), String> {
+    let mut processed = 0;
+    let mut failed = 0;
+    for account in accounts {
+        let access_token = match access_token_for_account(state, actor_user_id, account).await {
             Ok(access_token) => access_token,
             Err(_) => {
                 failed += 1;
@@ -245,6 +297,7 @@ pub async fn process_google_calendar_sync(
                         database
                             .upsert_google_calendar_remote_appointment(
                                 actor_user_id,
+                                account.account_id,
                                 &event.id,
                                 event.summary.as_deref().unwrap_or("Google Calendar"),
                                 &starts_at,
@@ -263,7 +316,6 @@ pub async fn process_google_calendar_sync(
             }
         }
     }
-
     Ok((processed, failed))
 }
 
@@ -293,6 +345,93 @@ async fn access_token_for_account(
         .update_google_calendar_account_token(actor_user_id, account.account_id, &token_json)
         .map_err(|error| error.to_string())?;
     Ok(refreshed.access_token)
+}
+
+async fn access_token_for_event_link(
+    state: &AppState,
+    actor_user_id: i64,
+    link: &GoogleCalendarEventLinkRecord,
+) -> Result<String, String> {
+    let token = serde_json::from_str::<google::GoogleCalendarToken>(&link.token_json)
+        .map_err(|_| "stored google calendar token is not readable".to_owned())?;
+    if token.access_token.trim().is_empty() {
+        return Err("stored google calendar token is empty".to_owned());
+    }
+    if !token.should_refresh() {
+        return Ok(token.access_token);
+    }
+    let refreshed = google::refresh_access_token(&token)
+        .await
+        .map_err(|error| error.to_string())?;
+    if refreshed.access_token.trim().is_empty() {
+        return Err("refreshed google calendar token is empty".to_owned());
+    }
+    let token_json = serde_json::to_string(&refreshed).map_err(|error| error.to_string())?;
+    let database = state.database()?;
+    database
+        .update_google_calendar_account_token(actor_user_id, link.account_id, &token_json)
+        .map_err(|error| error.to_string())?;
+    Ok(refreshed.access_token)
+}
+
+async fn delete_google_events_for_entity(
+    state: &AppState,
+    actor_user_id: i64,
+    entity_type: &str,
+    entity_id: i64,
+    legacy_event_id: Option<&str>,
+    fallback_account: Option<&GoogleCalendarTokenRecord>,
+) -> Result<(), String> {
+    let links = {
+        let database = state.database()?;
+        database
+            .google_calendar_event_links_for(actor_user_id, entity_type, entity_id)
+            .map_err(|error| error.to_string())?
+    };
+    let mut last_error = None;
+    for link in &links {
+        let access_token = match access_token_for_event_link(state, actor_user_id, link).await {
+            Ok(access_token) => access_token,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
+        if let Err(error) =
+            google::delete_calendar_event(&access_token, &link.calendar_id, &link.google_event_id)
+                .await
+        {
+            last_error = Some(format!(
+                "account {} calendar delete failed: {error}",
+                link.account_id
+            ));
+        }
+    }
+    if links.is_empty() {
+        if let (Some(event_id), Some(account)) = (
+            legacy_event_id.and_then(|event_id| {
+                let trimmed = event_id.trim();
+                (!trimmed.is_empty()).then_some(trimmed)
+            }),
+            fallback_account,
+        ) {
+            let access_token = access_token_for_account(state, actor_user_id, account).await?;
+            google::delete_calendar_event(&access_token, &account.calendar_id, event_id)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    if let Some(error) = last_error {
+        if links.is_empty() {
+            return Ok(());
+        }
+        return Err(error);
+    }
+    let database = state.database()?;
+    database
+        .delete_google_calendar_event_links_for(actor_user_id, entity_type, entity_id)
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 async fn upsert_with_insert_fallback(
@@ -394,9 +533,15 @@ fn parse_rfc3339_datetime(value: &str) -> Option<ParsedRfc3339DateTime> {
     let (time_part, offset_minutes) = if let Some(time) = time_part.strip_suffix('Z') {
         (time, 0)
     } else if let Some(index) = time_part.rfind('+') {
-        (&time_part[..index], parse_offset_minutes(&time_part[index..])?)
+        (
+            &time_part[..index],
+            parse_offset_minutes(&time_part[index..])?,
+        )
     } else if let Some(index) = time_part.rfind('-') {
-        (&time_part[..index], parse_offset_minutes(&time_part[index..])?)
+        (
+            &time_part[..index],
+            parse_offset_minutes(&time_part[index..])?,
+        )
     } else {
         return None;
     };
@@ -527,7 +672,10 @@ mod tests {
 
         let payload = google_payload_for_appointment(&appointment);
 
-        assert_eq!(payload.summary, "Rossi Mario - Visita di controllo (VeloDent)");
+        assert_eq!(
+            payload.summary,
+            "Rossi Mario - Visita di controllo (VeloDent)"
+        );
         assert_eq!(payload.description, "VeloDent agenda sync");
     }
 

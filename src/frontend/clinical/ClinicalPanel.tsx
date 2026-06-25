@@ -238,6 +238,15 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
     setStatusMessage(t("clinicalQuoteFlagUpdated"));
   }
 
+  async function handleDeleteDiaryRecord(record: ClinicalRecord) {
+    await deleteClinicalRecord(sessionToken, record.id);
+    setSelectedTeeth([]);
+    setSelectionMode(false);
+    setActiveAction(null);
+    setStatusMessage(t("mobileClearTooth"));
+    await refreshClinicalData();
+  }
+
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -404,7 +413,11 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
             {t("clinicalApplyFilters")}
           </Button>
         </div>
-        <ClinicalDiary records={records} onToggleQuote={(record) => void handleToggleQuote(record)} />
+        <ClinicalDiary
+          records={records}
+          onDelete={(record) => void handleDeleteDiaryRecord(record).catch(() => setStatusMessage(t("clinicalGenericError")))}
+          onToggleQuote={(record) => void handleToggleQuote(record)}
+        />
       </section>
     </div>
   );
@@ -629,7 +642,15 @@ function ClinicalAssetsViewer({
   );
 }
 
-function ClinicalDiary({ onToggleQuote, records }: { onToggleQuote: (record: ClinicalRecord) => void; records: ClinicalRecord[] }) {
+function ClinicalDiary({
+  onDelete,
+  onToggleQuote,
+  records
+}: {
+  onDelete: (record: ClinicalRecord) => void;
+  onToggleQuote: (record: ClinicalRecord) => void;
+  records: ClinicalRecord[];
+}) {
   const { t } = useL10n();
   return (
     <div className="mt-4 overflow-hidden rounded-md border border-alabaster-grey-500/20">
@@ -642,12 +663,13 @@ function ClinicalDiary({ onToggleQuote, records }: { onToggleQuote: (record: Cli
             <th className="px-3 py-2">{t("clinicalStatus")}</th>
             <th className="px-3 py-2">{t("clinicalOperator")}</th>
             <th className="px-3 py-2">{t("clinicalQuote")}</th>
+            <th className="px-3 py-2 text-right">{t("rxDeleteAction")}</th>
           </tr>
         </thead>
         <tbody>
           {records.length === 0 ? (
             <tr>
-              <td className="px-3 py-4 text-alabaster-grey-500" colSpan={6}>{t("clinicalDiaryEmpty")}</td>
+              <td className="px-3 py-4 text-alabaster-grey-500" colSpan={7}>{t("clinicalDiaryEmpty")}</td>
             </tr>
           ) : (
             records.map((record) => (
@@ -665,6 +687,17 @@ function ClinicalDiary({ onToggleQuote, records }: { onToggleQuote: (record: Cli
                   ) : (
                     <Badge variant="default">{t(quoteEligibilityStatusKey(record.status))}</Badge>
                   )}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <Button
+                    aria-label={t("clinicalDeleteRecord")}
+                    className="h-8 w-8 justify-center border-red-500/35 p-0 text-red-300 hover:bg-red-500/15 hover:text-red-100"
+                    type="button"
+                    variant="secondary"
+                    onClick={() => onDelete(record)}
+                  >
+                    <X aria-hidden="true" className="h-4 w-4" strokeWidth={2} />
+                  </Button>
                 </td>
               </tr>
             ))

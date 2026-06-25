@@ -43,15 +43,19 @@ impl Drop for MobileTunnelProcess {
     }
 }
 
-pub fn start_cloudflare_quick_tunnel(app: &tauri::AppHandle) -> Result<MobileTunnelProcess, String> {
+pub fn start_cloudflare_quick_tunnel(
+    app: &tauri::AppHandle,
+) -> Result<MobileTunnelProcess, String> {
     let sidecar = app
         .shell()
         .sidecar("cloudflared")
-        .map_err(|error| format!("sidecar cloudflared non risolto dal pacchetto VeloDent: {error}"))?
+        .map_err(|error| {
+            format!("sidecar cloudflared non risolto dal pacchetto VeloDent: {error}")
+        })?
         .args(["tunnel", "--url", FRONTEND_LOCAL_URL]);
-    let (mut events, child) = sidecar
-        .spawn()
-        .map_err(|error| format!("sidecar cloudflared non avviato dal pacchetto VeloDent: {error}"))?;
+    let (mut events, child) = sidecar.spawn().map_err(|error| {
+        format!("sidecar cloudflared non avviato dal pacchetto VeloDent: {error}")
+    })?;
     let (tx, rx) = mpsc::channel::<String>();
 
     tauri::async_runtime::spawn(async move {
@@ -73,7 +77,10 @@ pub fn start_cloudflare_quick_tunnel(app: &tauri::AppHandle) -> Result<MobileTun
         Ok(url) => url,
         Err(_) => {
             let _ = child.kill();
-            return Err("sidecar cloudflared avviato ma nessun URL trycloudflare ricevuto entro 25 secondi".to_owned());
+            return Err(
+                "sidecar cloudflared avviato ma nessun URL trycloudflare ricevuto entro 25 secondi"
+                    .to_owned(),
+            );
         }
     };
 
@@ -90,9 +97,11 @@ pub fn start_cloudflare_quick_tunnel(app: &tauri::AppHandle) -> Result<MobileTun
 
 fn extract_trycloudflare_url(line: &str) -> Option<String> {
     line.split_whitespace()
-        .map(|part| part.trim_matches(|character: char| {
-            matches!(character, '"' | '\'' | ',' | ';' | ')' | '(' | '[' | ']')
-        }))
+        .map(|part| {
+            part.trim_matches(|character: char| {
+                matches!(character, '"' | '\'' | ',' | ';' | ')' | '(' | '[' | ']')
+            })
+        })
         .find(|part| part.starts_with("https://") && part.contains(".trycloudflare.com"))
         .map(str::to_owned)
 }

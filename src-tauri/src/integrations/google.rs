@@ -300,7 +300,9 @@ pub async fn refresh_access_token(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| GoogleApiError::Request("stored google refresh token is missing".to_owned()))?;
+        .ok_or_else(|| {
+            GoogleApiError::Request("stored google refresh token is missing".to_owned())
+        })?;
     let config = load_oauth_config()?;
     let client = reqwest::Client::new();
     let body = format!(
@@ -342,7 +344,9 @@ pub async fn refresh_access_token(
         refresh_token: token
             .refresh_token
             .or_else(|| existing_token.refresh_token.clone()),
-        token_type: token.token_type.unwrap_or_else(|| existing_token.token_type.clone()),
+        token_type: token
+            .token_type
+            .unwrap_or_else(|| existing_token.token_type.clone()),
         scope: token.scope.or_else(|| existing_token.scope.clone()),
         expires_at_epoch_seconds,
     })
@@ -437,6 +441,47 @@ pub async fn upsert_calendar_event(
     } else {
         Ok(event.id)
     }
+}
+
+pub async fn delete_calendar_event(
+    access_token: &str,
+    calendar_id: &str,
+    event_id: &str,
+) -> Result<(), GoogleApiError> {
+    let calendar_id = if calendar_id.trim().is_empty() {
+        "primary"
+    } else {
+        calendar_id.trim()
+    };
+    let event_id = event_id.trim();
+    if event_id.is_empty() {
+        return Ok(());
+    }
+    let url = format!(
+        "{GOOGLE_CALENDAR_EVENTS_URI}/{}/events/{}",
+        encode_url_component(calendar_id),
+        encode_url_component(event_id),
+    );
+    let response = reqwest::Client::new()
+        .delete(url)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|error| GoogleApiError::Request(error.to_string()))?;
+    let status = response.status();
+
+    if status.is_success() || status.as_u16() == 404 || status.as_u16() == 410 {
+        return Ok(());
+    }
+
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "redacted google error".to_owned());
+    Err(GoogleApiError::HttpStatus(
+        status.as_u16(),
+        sanitize_google_error(&body),
+    ))
 }
 
 pub async fn list_calendar_events(

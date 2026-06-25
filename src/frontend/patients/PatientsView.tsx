@@ -452,7 +452,7 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
   const [discount, setDiscount] = useState("0.00");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
-  const [depositMethod, setDepositMethod] = useState<"cash" | "bank_transfer">("cash");
+  const [depositMethod, setDepositMethod] = useState<"cash" | "bank_transfer" | "sumup_pos">("cash");
   const [statusMessage, setStatusMessage] = useState("");
 
   async function refreshBilling() {
@@ -484,6 +484,7 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
     : [];
   const depositTotalCents = depositInvoices.reduce((total, invoice) => total + invoice.total_cents, 0);
   const selectedQuoteBalanceCents = selectedQuote ? Math.max(0, selectedQuote.net_total_cents - depositTotalCents) : 0;
+  const depositAmountCents = euroInputToCents(depositAmount);
 
   async function handleCreateQuote() {
     if (!currentUser?.session_token) {
@@ -556,7 +557,7 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
     setStatusMessage(`${t("billingPdfGenerated")}: ${document.relative_path}`);
   }
 
-  async function handlePayment(invoice: Invoice, method: "cash" | "bank_transfer") {
+  async function handlePayment(invoice: Invoice, method: "cash" | "bank_transfer" | "sumup_pos") {
     if (!currentUser?.session_token) {
       return;
     }
@@ -659,13 +660,14 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                     className="h-10 min-w-0 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 px-3 text-sm text-white outline-none focus:border-powder-blue-500"
                     disabled={selectedQuote.status !== "accepted" || selectedQuoteBalanceCents <= 0}
                     value={depositMethod}
-                    onChange={(event) => setDepositMethod(event.target.value as "cash" | "bank_transfer")}
+                    onChange={(event) => setDepositMethod(event.target.value as "cash" | "bank_transfer" | "sumup_pos")}
                   >
                     <option value="cash">{t("billingCash")}</option>
                     <option value="bank_transfer">{t("billingBankTransfer")}</option>
+                    <option value="sumup_pos">{t("billingPos")}</option>
                   </select>
                   <Button disabled={selectedQuote.status !== "accepted" || !depositAmount.trim() || selectedQuoteBalanceCents <= 0} type="button" variant="secondary" onClick={() => void handleDepositInvoice().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
-                    {t("billingCreateDeposit")}
+                    {t(depositAmountCents >= selectedQuoteBalanceCents && selectedQuoteBalanceCents > 0 ? "billingCreateBalance" : "billingCreateDeposit")}
                   </Button>
                 </div>
               </div>
@@ -678,8 +680,8 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                   <span className="font-semibold text-powder-blue-100">{t("billingBalanceDue")}: {formatCents(selectedQuoteBalanceCents)}</span>
                 </div>
                 <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 2xl:justify-end">
-                  <Input className="w-28 shrink-0" disabled={selectedQuote.status !== "draft"} type="number" min={0} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} />
-                  <Button disabled={selectedQuote.status !== "draft"} type="button" variant="secondary" size="sm" onClick={() => void handleDiscount().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                  <Input className="w-28 shrink-0" disabled={selectedQuote.status === "rejected"} type="number" min={0} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} />
+                  <Button disabled={selectedQuote.status === "rejected"} type="button" variant="secondary" size="sm" onClick={() => void handleDiscount().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
                     {t("billingSaveDiscount")}
                   </Button>
                   <Button disabled={selectedQuote.status !== "draft"} type="button" variant="secondary" size="sm" onClick={() => void handleQuoteStatus("rejected").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
@@ -732,6 +734,9 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                       </Button>
                       <Button type="button" variant="secondary" size="sm" onClick={() => void handlePayment(invoice, "bank_transfer").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
                         {t("billingBankTransfer")}
+                      </Button>
+                      <Button type="button" variant="secondary" size="sm" onClick={() => void handlePayment(invoice, "sumup_pos").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                        {t("billingPos")}
                       </Button>
                       <Button type="button" variant="secondary" size="sm" onClick={() => void handleSumup(invoice).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
                         {t("billingSumup")}

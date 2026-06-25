@@ -1,4 +1,4 @@
-import { Check, Plus, Trash2 } from "lucide-react";
+import { Check, Plus, Trash2, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -58,8 +58,10 @@ const toothStateClasses: Partial<Record<ToothState, string>> = {
 interface MobileClinicalProps {
   activePatientId: number | null;
   assetMode?: "rx" | "photo" | null;
+  diaryOpen?: boolean;
   mode: ClinicalMobileMode;
   onMissingPatient: () => void;
+  onDiaryOpenChange?: (open: boolean) => void;
   onSelectedToothRecordInfo: (info: SelectedToothRecordInfo | null) => void;
   sessionToken: string;
 }
@@ -90,7 +92,9 @@ interface ProsthesisGroup {
 export function MobileClinical({
   activePatientId,
   assetMode = null,
+  diaryOpen = false,
   mode,
+  onDiaryOpenChange,
   onMissingPatient,
   onSelectedToothRecordInfo,
   sessionToken
@@ -124,6 +128,23 @@ export function MobileClinical({
     [clinicalRecords, selectedTeeth]
   );
 
+  async function refreshClinicalData() {
+    if (!activePatientId || !sessionToken || services.length === 0) {
+      setClinicalRecords([]);
+      setRecordedToothRecords({});
+      setToothStates({});
+      return;
+    }
+    const [records, statuses] = await Promise.all([
+      listClinicalRecords(sessionToken, activePatientId, {}),
+      getToothStatuses(sessionToken, activePatientId)
+    ]);
+    const nextRecordedToothRecords = clinicalRecordsToToothRecords(records, services);
+    setClinicalRecords(records);
+    setRecordedToothRecords(nextRecordedToothRecords);
+    setToothStates(normalizeToothStates(statuses, nextRecordedToothRecords));
+  }
+
   useEffect(() => {
     if (!activePatientId) {
       onSelectedToothRecordInfo(null);
@@ -148,16 +169,7 @@ export function MobileClinical({
       return;
     }
 
-    void Promise.all([
-      listClinicalRecords(sessionToken, activePatientId, {}),
-      getToothStatuses(sessionToken, activePatientId)
-    ])
-      .then(([records, statuses]) => {
-        const nextRecordedToothRecords = clinicalRecordsToToothRecords(records, services);
-        setClinicalRecords(records);
-        setRecordedToothRecords(nextRecordedToothRecords);
-        setToothStates(normalizeToothStates(statuses, nextRecordedToothRecords));
-      })
+    void refreshClinicalData()
       .catch(() => {
         setClinicalRecords([]);
         setRecordedToothRecords({});
@@ -170,17 +182,7 @@ export function MobileClinical({
       return;
     }
     const interval = window.setInterval(() => {
-      Promise.all([
-        listClinicalRecords(sessionToken, activePatientId, {}),
-        getToothStatuses(sessionToken, activePatientId)
-      ])
-        .then(([records, statuses]) => {
-          const nextRecordedToothRecords = clinicalRecordsToToothRecords(records, services);
-          setClinicalRecords(records);
-          setRecordedToothRecords(nextRecordedToothRecords);
-          setToothStates(normalizeToothStates(statuses, nextRecordedToothRecords));
-        })
-        .catch(() => undefined);
+      void refreshClinicalData().catch(() => undefined);
     }, 1500);
     return () => window.clearInterval(interval);
   }, [activePatientId, services, sessionToken]);
@@ -326,12 +328,25 @@ export function MobileClinical({
         return next;
       });
       setClinicalRecords((current) => current.filter((record) => !selectedRecordIds.includes(record.id)));
+      await refreshClinicalData();
     }
     setSelectedTeeth([]);
     setSelectionMode(false);
     setActiveAction(null);
     setStatusMessage("");
     onSelectedToothRecordInfo(null);
+  }
+
+  async function handleDeleteDiaryRecord(recordId: number) {
+    if (!sessionToken) {
+      return;
+    }
+    await deleteClinicalRecord(sessionToken, recordId);
+    setSelectedTeeth([]);
+    setSelectionMode(false);
+    setActiveAction(null);
+    onSelectedToothRecordInfo(null);
+    await refreshClinicalData();
   }
 
   async function handleGeneralServiceSelect(service: ClinicalService) {
@@ -502,6 +517,13 @@ export function MobileClinical({
           </Button>
         </div>
       ) : null}
+      {diaryOpen ? (
+        <MobileClinicalDiaryModal
+          records={clinicalRecords}
+          onClose={() => onDiaryOpenChange?.(false)}
+          onDelete={(recordId) => void handleDeleteDiaryRecord(recordId).catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
+        />
+      ) : null}
     </section>
   );
 }
@@ -605,6 +627,78 @@ function QuickActions({
             {action.label}
           </Button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function MobileClinicalDiaryModal({
+  onClose,
+  onDelete,
+  records
+}: {
+  onClose: () => void;
+  onDelete: (recordId: number) => void;
+  records: ClinicalRecord[];
+}) {
+  const { t } = useL10n();
+  return (
+    <div className="fixed inset-0 z-50 grid bg-ink-black-950/90 p-3 backdrop-blur-xl">
+      <div
+        className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950"
+        style={{ paddingTop: "env(safe-area-inset-top)" }}
+      >
+        <div className="flex items-center justify-between border-b border-alabaster-grey-500/20 p-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
+              {t("clinicalDiaryTitle")}
+            </p>
+            <h2 className="text-base font-semibold text-white">{t("mobileClinicalTitle")}</h2>
+          </div>
+          <Button
+            aria-label={t("mobileCloseMenu")}
+            className="h-11 w-11 justify-center p-0"
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+          >
+            <X aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
+          </Button>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-3">
+          {records.length ? (
+            <div className="grid gap-2">
+              {records.map((record) => (
+                <article
+                  key={record.id}
+                  className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-alabaster-grey-500/15 bg-ink-black-950 p-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">
+                      {record.service_name ?? record.pathology_description ?? t("clinicalNoService")}
+                    </p>
+                    <p className="mt-1 font-mono text-[11px] text-alabaster-grey-500">
+                      {record.created_at} - {record.tooth_number ?? t("clinicalArch")} - {t(recordStatusKey(record.status))}
+                    </p>
+                  </div>
+                  <Button
+                    aria-label={t("clinicalDeleteRecord")}
+                    className="h-10 w-10 justify-center border-red-500/35 p-0 text-red-300 hover:bg-red-500/15 hover:text-red-100"
+                    type="button"
+                    variant="secondary"
+                    onClick={() => onDelete(record.id)}
+                  >
+                    <X aria-hidden="true" className="h-4 w-4" strokeWidth={2} />
+                  </Button>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-xl border border-alabaster-grey-500/20 bg-ink-black-950 p-4 text-sm text-alabaster-grey-500">
+              {t("clinicalDiaryEmpty")}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -799,6 +893,16 @@ function quickActionLabel(action: QuickAction, useBridge: boolean, t: ReturnType
     periodontics: t("mobileVarious")
   };
   return labels[action];
+}
+
+function recordStatusKey(status: ClinicalRecord["status"]): L10nKey {
+  if (status === "in_quote") {
+    return "clinicalStatusInQuote";
+  }
+  if (status === "performed") {
+    return "clinicalStatusPerformed";
+  }
+  return "clinicalStatusDiagnosed";
 }
 
 function clinicalRecordsToToothRecords(

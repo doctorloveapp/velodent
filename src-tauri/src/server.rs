@@ -120,11 +120,7 @@ pub mod lan {
         let _ = stream.write_all(&response);
     }
 
-    fn route_request(
-        request: &str,
-        peer: Option<SocketAddr>,
-        app: &AppHandle,
-    ) -> Vec<u8> {
+    fn route_request(request: &str, peer: Option<SocketAddr>, app: &AppHandle) -> Vec<u8> {
         let Some((head, body)) = request.split_once("\r\n\r\n") else {
             return json_response(
                 400,
@@ -228,6 +224,11 @@ pub mod lan {
                 with_device_user(&headers, remote_ip, app, |state, user| {
                     let starts_from = query.get("from").ok_or_else(|| "missing from".to_owned())?;
                     let starts_to = query.get("to").ok_or_else(|| "missing to".to_owned())?;
+                    if query.get("sync").map(String::as_str) == Some("1") {
+                        let _ = tauri::async_runtime::block_on(
+                            agenda::process_google_calendar_sync(app, user.id),
+                        );
+                    }
                     let appointments = state
                         .database()?
                         .list_appointments(user.id, starts_from, starts_to)
@@ -368,7 +369,9 @@ pub mod lan {
                         .clone()
                         .unwrap_or_else(|| "application/octet-stream".to_owned());
                     if !mime_type.starts_with("image/") {
-                        return Err("clinical file preview is available only for image assets".to_owned());
+                        return Err(
+                            "clinical file preview is available only for image assets".to_owned()
+                        );
                     }
                     let bytes = files::read_patient_file(&asset.relative_path)?;
                     Ok(json!({
@@ -625,5 +628,4 @@ mod tests {
     fn lan_server_uses_expected_port() {
         assert_eq!(LAN_SERVER_PORT, 1422);
     }
-
 }

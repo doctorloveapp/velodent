@@ -61,7 +61,7 @@ export async function getChairConfig(session_token: string) {
 
 export async function listAppointments(session_token: string, starts_from: string, starts_to: string) {
   if (isLanSessionToken(session_token)) {
-    const params = new URLSearchParams({ from: starts_from, to: starts_to });
+    const params = new URLSearchParams({ from: starts_from, to: starts_to, sync: "1" });
     return lanFetch<Appointment[]>(`/api/agenda/appointments?${params.toString()}`, fromLanSessionToken(session_token));
   }
   return invoke<Appointment[]>("list_appointments", { request: { session_token, starts_from, starts_to } });

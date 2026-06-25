@@ -81,7 +81,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     }
 
     if (currentUser.role === "admin") {
-      void processGoogleCalendarSync(currentUser.session_token).catch(() => undefined);
+      await processGoogleCalendarSync(currentUser.session_token).catch(() => undefined);
     }
 
     const [chairs, rows, blocks, sync, patientRows] = await Promise.all([

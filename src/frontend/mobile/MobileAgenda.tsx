@@ -157,17 +157,17 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
         {appointments.length ? (
           appointments.map((appointment) => (
             <article key={appointment.id} className="min-h-16 rounded-xl border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
-              <div className="flex items-start justify-between gap-3">
+              <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-3">
+                <div className="rounded-lg border border-powder-blue-500/25 bg-glaucous-950 px-2 py-2 text-center">
+                  <CalendarClock aria-hidden="true" className="mx-auto h-4 w-4 text-powder-blue-500" strokeWidth={1.5} />
+                  <p className="mt-1 whitespace-nowrap font-mono text-sm text-powder-blue-100">{appointment.starts_at.slice(11, 16)}</p>
+                </div>
                 <div className="min-w-0">
                   <p className="truncate text-base font-semibold text-white">{appointment.title}</p>
                   <p className="mt-1 truncate text-sm text-alabaster-grey-500">{appointment.patient_name ?? t("agendaNoPatient")}</p>
-                </div>
-                <div className="shrink-0 text-right">
-                  <CalendarClock aria-hidden="true" className="ml-auto h-5 w-5 text-powder-blue-500" strokeWidth={1.5} />
-                  <p className="mt-1 font-mono text-xs text-powder-blue-100">{appointment.starts_at.slice(11, 16)}</p>
+                  <p className="mt-2 text-xs text-alabaster-grey-500">{t("agendaChair")} {String(appointment.chair_number)}</p>
                 </div>
               </div>
-              <p className="mt-2 text-xs text-alabaster-grey-500">{t("agendaChair")} {String(appointment.chair_number)}</p>
             </article>
           ))
         ) : (

@@ -124,7 +124,7 @@ export async function createDepositInvoice(
   session_token: string,
   quote_id: number,
   amount_cents: number,
-  method: "cash" | "bank_transfer"
+  method: "cash" | "bank_transfer" | "sumup_pos"
 ) {
   return invoke<Invoice>("create_deposit_invoice", { request: { session_token, quote_id, amount_cents, method } });
 }
@@ -136,7 +136,7 @@ export async function generateInvoicePdf(session_token: string, invoice_id: numb
 export async function registerPayment(
   session_token: string,
   invoice_id: number,
-  method: "cash" | "bank_transfer",
+  method: "cash" | "bank_transfer" | "sumup_pos",
   amount_cents: number
 ) {
   return invoke<Payment>("register_payment", {

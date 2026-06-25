@@ -8,9 +8,9 @@ use crate::{
         AuthorizedGoogleAccount, BootstrapStatus, ChairConfig, ClinicalRecord,
         ClinicalRecordFilters, ClinicalService, CreateUserInput, DatabaseStatus,
         DeviceAuthorization, GeneratedDocument, GoogleCalendarAccount, GoogleCalendarSyncStatus,
-        Invoice, LicenseStatus, NewAgendaBlock, NewClinicalRecord, NewPatient, NewRxAsset,
-        Patient, PatientTimelineEvent, Payment, Quote, RxAsset, StudioSettings,
-        StudioSettingsUpdate, ToothStatus, User,
+        Invoice, LicenseStatus, NewAgendaBlock, NewClinicalRecord, NewPatient, NewRxAsset, Patient,
+        PatientTimelineEvent, Payment, Quote, RxAsset, StudioSettings, StudioSettingsUpdate,
+        ToothStatus, User,
     },
     dicom_meta, files,
     integrations::{
@@ -919,7 +919,12 @@ pub async fn start_google_calendar_account_link(
     let token_json = serde_json::to_string(&token).map_err(|error| error.to_string())?;
     let account = state
         .database()?
-        .store_google_calendar_account_token(actor.id, Some(&user_info.email), "primary", &token_json)
+        .store_google_calendar_account_token(
+            actor.id,
+            Some(&user_info.email),
+            "primary",
+            &token_json,
+        )
         .map_err(|error| error.to_string())?;
     agenda::trigger_google_calendar_sync(&app, actor.id);
     Ok(account)
@@ -1350,7 +1355,12 @@ pub fn create_deposit_invoice(
     let actor = require_session(&state, &request.session_token)?;
     state
         .database()?
-        .create_deposit_invoice(actor.id, request.quote_id, request.amount_cents, request.method.trim())
+        .create_deposit_invoice(
+            actor.id,
+            request.quote_id,
+            request.amount_cents,
+            request.method.trim(),
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -1789,7 +1799,12 @@ fn collect_supported_rx_files(root: &Path, limit: usize) -> Result<Vec<PathBuf>,
 fn is_supported_rx_path(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
-        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png" | "dcm" | "dicom"))
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "jpg" | "jpeg" | "png" | "dcm" | "dicom"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -1806,10 +1821,15 @@ fn infer_rx_type(path: &Path, requested: Option<&str>) -> String {
     }
 
     let name = path.to_string_lossy().to_ascii_lowercase();
-    if name.contains("cbct") || name.contains("cone") || name.contains("tac") || name.contains("ct") {
+    if name.contains("cbct") || name.contains("cone") || name.contains("tac") || name.contains("ct")
+    {
         return "cbct".to_owned();
     }
-    if name.contains("pano") || name.contains("opg") || name.contains("ortop") || name.contains("panoram") {
+    if name.contains("pano")
+        || name.contains("opg")
+        || name.contains("ortop")
+        || name.contains("panoram")
+    {
         return "panoramic".to_owned();
     }
     if name.contains("foto") || name.contains("photo") || name.contains("camera") {
@@ -1824,10 +1844,18 @@ fn infer_rx_sub_type(path: &Path, requested: Option<&str>, rx_type: &str) -> Str
     }
 
     let name = path.to_string_lossy().to_ascii_lowercase();
-    if rx_type == "photo" || name.contains("foto") || name.contains("photo") || name.contains("camera") {
+    if rx_type == "photo"
+        || name.contains("foto")
+        || name.contains("photo")
+        || name.contains("camera")
+    {
         return "PHOTO".to_owned();
     }
-    if rx_type == "endoral" || name.contains("endor") || name.contains("periap") || name.contains("bite") {
+    if rx_type == "endoral"
+        || name.contains("endor")
+        || name.contains("periap")
+        || name.contains("bite")
+    {
         return "ENDORALE".to_owned();
     }
     "ORTOPANTOMOGRAFIA".to_owned()

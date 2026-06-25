@@ -6,6 +6,7 @@ use crate::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -347,6 +348,14 @@ pub struct GoogleCalendarTokenRecord {
     pub account_id: i64,
     pub calendar_id: String,
     pub token_json: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GoogleCalendarEventLinkRecord {
+    pub account_id: i64,
+    pub calendar_id: String,
+    pub token_json: String,
+    pub google_event_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1541,7 +1550,10 @@ impl Database {
         Ok(services)
     }
 
-    pub fn list_clinical_services_catalog(&self, actor_user_id: i64) -> DbResult<Vec<ClinicalService>> {
+    pub fn list_clinical_services_catalog(
+        &self,
+        actor_user_id: i64,
+    ) -> DbResult<Vec<ClinicalService>> {
         self.assert_admin(actor_user_id)?;
         let mut statement = self.conn.prepare(
             r#"
@@ -1609,7 +1621,9 @@ impl Database {
         let code = code.trim();
         let name = name.trim();
         if code.is_empty() || name.is_empty() || base_price_cents < 0 {
-            return Err(DbError::Sql("clinical service input is not valid".to_owned()));
+            return Err(DbError::Sql(
+                "clinical service input is not valid".to_owned(),
+            ));
         }
         self.conn.execute(
             r#"
@@ -1623,7 +1637,13 @@ impl Database {
             )
             VALUES (?1, ?2, ?3, ?4, ?5, 1)
             "#,
-            params![code, name, category.map(str::trim), base_price_cents, sort_order],
+            params![
+                code,
+                name,
+                category.map(str::trim),
+                base_price_cents,
+                sort_order
+            ],
         )?;
         let service_id = self.conn.last_insert_rowid();
         self.insert_audit(
@@ -1653,7 +1673,9 @@ impl Database {
         let code = code.trim();
         let name = name.trim();
         if code.is_empty() || name.is_empty() || base_price_cents < 0 {
-            return Err(DbError::Sql("clinical service input is not valid".to_owned()));
+            return Err(DbError::Sql(
+                "clinical service input is not valid".to_owned(),
+            ));
         }
         let affected = self.conn.execute(
             r#"
@@ -1717,8 +1739,12 @@ impl Database {
             let target = self
                 .get_clinical_service_any(target_service_id)?
                 .ok_or(DbError::NotFound)?;
-            if clinical_service_group_key(service.category.as_deref()) != clinical_service_group_key(target.category.as_deref()) {
-                return Err(DbError::Sql("services must belong to the same clinical group".to_owned()));
+            if clinical_service_group_key(service.category.as_deref())
+                != clinical_service_group_key(target.category.as_deref())
+            {
+                return Err(DbError::Sql(
+                    "services must belong to the same clinical group".to_owned(),
+                ));
             }
             let group = clinical_service_group_key(service.category.as_deref());
             let mut ordered_ids = {
@@ -1730,7 +1756,9 @@ impl Database {
                     "#,
                 )?;
                 let ids = statement
-                    .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)))?
+                    .query_map([], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+                    })?
                     .collect::<Result<Vec<_>, _>>()?
                     .into_iter()
                     .filter_map(|(id, category)| {
@@ -2012,7 +2040,11 @@ impl Database {
             ));
         }
         let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
-        self.assert_quote_editable(&quote)?;
+        if quote.status == "rejected" {
+            return Err(DbError::InvalidFinancialState(
+                "rejected quotes cannot be discounted".to_owned(),
+            ));
+        }
         if discount_cents > quote.gross_total_cents {
             return Err(DbError::InvalidFinancialState(
                 "discount cannot exceed gross total".to_owned(),
@@ -2279,7 +2311,8 @@ impl Database {
 
         let result = (|| {
             self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
-            let remaining = self.quote_remaining_cents_without_tx(quote.id, quote.net_total_cents)?;
+            let remaining =
+                self.quote_remaining_cents_without_tx(quote.id, quote.net_total_cents)?;
             if amount_cents > remaining {
                 return Err(DbError::InvalidFinancialState(
                     "deposit exceeds quote remaining balance".to_owned(),
@@ -2396,7 +2429,11 @@ impl Database {
             .map_err(DbError::from)
     }
 
-    fn quote_remaining_cents_without_tx(&self, quote_id: i64, quote_total_cents: i64) -> DbResult<i64> {
+    fn quote_remaining_cents_without_tx(
+        &self,
+        quote_id: i64,
+        quote_total_cents: i64,
+    ) -> DbResult<i64> {
         Ok(quote_total_cents - self.quote_deposit_total_without_tx(quote_id)?)
     }
 
@@ -2804,7 +2841,10 @@ impl Database {
         let record = self
             .get_clinical_record(record_id)?
             .ok_or(DbError::NotFound)?;
-        if !matches!(record.status.as_str(), "diagnosed" | "in_quote" | "performed") {
+        if !matches!(
+            record.status.as_str(),
+            "diagnosed" | "in_quote" | "performed"
+        ) {
             return Err(DbError::InvalidClinicalStatus(record.status));
         }
 
@@ -2827,28 +2867,12 @@ impl Database {
                     .collect::<Result<Vec<_>, _>>()?;
                 rows
             };
-            let draft_quote_ids: Vec<i64> = quote_links
-                .iter()
-                .filter_map(|(quote_id, status)| (status == "draft").then_some(*quote_id))
-                .collect();
-            let locked_quote_ids: Vec<i64> = quote_links
-                .iter()
-                .filter_map(|(quote_id, status)| (status != "draft").then_some(*quote_id))
-                .collect();
+            let linked_quote_ids: Vec<i64> =
+                quote_links.iter().map(|(quote_id, _)| *quote_id).collect();
 
-            for quote_id in &draft_quote_ids {
+            for quote_id in &linked_quote_ids {
                 self.conn.execute(
                     "DELETE FROM quote_lines WHERE clinical_record_id = ?1 AND quote_id = ?2",
-                    params![record_id, quote_id],
-                )?;
-            }
-            for quote_id in &locked_quote_ids {
-                self.conn.execute(
-                    r#"
-                    UPDATE quote_lines
-                    SET clinical_record_id = NULL
-                    WHERE clinical_record_id = ?1 AND quote_id = ?2
-                    "#,
                     params![record_id, quote_id],
                 )?;
             }
@@ -2856,7 +2880,7 @@ impl Database {
             self.conn
                 .execute("DELETE FROM clinical_records WHERE id = ?1", [record_id])?;
 
-            for quote_id in draft_quote_ids {
+            for quote_id in linked_quote_ids {
                 self.recalculate_quote_totals(quote_id)?;
             }
 
@@ -2907,7 +2931,7 @@ impl Database {
                 record.patient_id,
                 "clinical.record_deleted",
                 &format!(
-                    r#"{{"record_id":{record_id},"tooth_number":{},"service_id":{},"detached_locked_quote_lines":{}}}"#,
+                    r#"{{"record_id":{record_id},"tooth_number":{},"service_id":{},"removed_quote_links":{}}}"#,
                     record
                         .tooth_number
                         .map(|value| value.to_string())
@@ -2916,7 +2940,7 @@ impl Database {
                         .service_id
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "null".to_owned()),
-                    locked_quote_ids.len()
+                    quote_links.len()
                 ),
             )?;
 
@@ -3252,6 +3276,7 @@ impl Database {
         starts_to: &str,
     ) -> DbResult<Vec<Appointment>> {
         self.assert_active_user(actor_user_id)?;
+        self.repair_google_calendar_duplicate_appointments()?;
         let mut statement = self.conn.prepare(
             r#"
             SELECT
@@ -3730,9 +3755,67 @@ impl Database {
         Ok(())
     }
 
+    pub fn google_calendar_event_links_for(
+        &self,
+        actor_user_id: i64,
+        entity_type: &str,
+        entity_id: i64,
+    ) -> DbResult<Vec<GoogleCalendarEventLinkRecord>> {
+        self.assert_admin(actor_user_id)?;
+        let entity_type = normalize_google_calendar_link_entity_type(entity_type)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                google_calendar_event_links.account_id,
+                google_calendar_accounts.calendar_id,
+                google_calendar_accounts.token_json,
+                google_calendar_event_links.google_event_id
+            FROM google_calendar_event_links
+            INNER JOIN google_calendar_accounts
+                ON google_calendar_accounts.id = google_calendar_event_links.account_id
+            WHERE
+                google_calendar_event_links.entity_type = ?1
+                AND google_calendar_event_links.entity_id = ?2
+                AND google_calendar_accounts.active = 1
+            ORDER BY google_calendar_event_links.account_id ASC
+            "#,
+        )?;
+        let links = statement
+            .query_map(params![entity_type, entity_id], |row| {
+                Ok(GoogleCalendarEventLinkRecord {
+                    account_id: row.get(0)?,
+                    calendar_id: row.get(1)?,
+                    token_json: row.get(2)?,
+                    google_event_id: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(links)
+    }
+
+    pub fn delete_google_calendar_event_links_for(
+        &self,
+        actor_user_id: i64,
+        entity_type: &str,
+        entity_id: i64,
+    ) -> DbResult<()> {
+        self.assert_admin(actor_user_id)?;
+        let entity_type = normalize_google_calendar_link_entity_type(entity_type)?;
+        self.conn.execute(
+            r#"
+            DELETE FROM google_calendar_event_links
+            WHERE entity_type = ?1 AND entity_id = ?2
+            "#,
+            params![entity_type, entity_id],
+        )?;
+        Ok(())
+    }
+
     pub fn upsert_google_calendar_remote_appointment(
         &self,
         actor_user_id: i64,
+        account_id: i64,
         google_event_id: &str,
         title: &str,
         starts_at: &str,
@@ -3754,12 +3837,19 @@ impl Database {
         } else {
             normalized_title
         };
-        let existing: Option<(i64, String)> = self
+        let existing: Option<(i64, String, Option<String>)> = self
             .conn
             .query_row(
                 r#"
-                SELECT appointments.id, appointments.updated_at
+                SELECT
+                    appointments.id,
+                    appointments.updated_at,
+                    CASE
+                        WHEN patients.id IS NULL THEN NULL
+                        ELSE patients.last_name || ' ' || patients.first_name
+                    END AS patient_name
                 FROM appointments
+                LEFT JOIN patients ON patients.id = appointments.patient_id
                 LEFT JOIN google_calendar_event_links ON
                     google_calendar_event_links.entity_type = 'appointment'
                     AND google_calendar_event_links.entity_id = appointments.id
@@ -3770,14 +3860,25 @@ impl Database {
                 LIMIT 1
                 "#,
                 [event_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
 
-        if let Some((appointment_id, local_updated_at)) = existing {
-            if !google_updated_at.trim().is_empty() && local_updated_at.as_str() >= google_updated_at.trim() {
+        if let Some((appointment_id, local_updated_at, patient_name)) = existing {
+            self.store_google_calendar_event_link(
+                actor_user_id,
+                account_id,
+                "appointment",
+                appointment_id,
+                event_id,
+            )?;
+            if !google_updated_at.trim().is_empty()
+                && local_updated_at.as_str() >= google_updated_at.trim()
+            {
                 return Ok(false);
             }
+            let local_title =
+                appointment_title_without_patient_prefix(patient_name.as_deref(), normalized_title);
             let affected = self.conn.execute(
                 r#"
                 UPDATE appointments
@@ -3790,7 +3891,7 @@ impl Database {
                 WHERE id = ?4
                 "#,
                 params![
-                    normalized_title,
+                    local_title,
                     starts_at.trim(),
                     ends_at.trim(),
                     appointment_id
@@ -3807,8 +3908,7 @@ impl Database {
                 FROM appointments
                 LEFT JOIN patients ON patients.id = appointments.patient_id
                 WHERE
-                    appointments.google_calendar_event_id IS NULL
-                    AND appointments.starts_at = ?1
+                    appointments.starts_at = ?1
                     AND appointments.ends_at = ?2
                     AND appointments.status != 'cancelled'
                     AND (
@@ -3826,6 +3926,13 @@ impl Database {
             )
             .optional()?;
         if let Some(appointment_id) = matching_local_id {
+            self.store_google_calendar_event_link(
+                actor_user_id,
+                account_id,
+                "appointment",
+                appointment_id,
+                event_id,
+            )?;
             let affected = self.conn.execute(
                 r#"
                 UPDATE appointments
@@ -3858,6 +3965,13 @@ impl Database {
             params![normalized_title, starts_at.trim(), ends_at.trim(), event_id],
         )?;
         let appointment_id = self.conn.last_insert_rowid();
+        self.store_google_calendar_event_link(
+            actor_user_id,
+            account_id,
+            "appointment",
+            appointment_id,
+            event_id,
+        )?;
         self.insert_audit(
             Some(actor_user_id),
             None,
@@ -3898,7 +4012,9 @@ impl Database {
         let Some((appointment_id, local_updated_at)) = existing else {
             return Ok(false);
         };
-        if !google_updated_at.trim().is_empty() && local_updated_at.as_str() >= google_updated_at.trim() {
+        if !google_updated_at.trim().is_empty()
+            && local_updated_at.as_str() >= google_updated_at.trim()
+        {
             return Ok(false);
         }
         let affected = self.conn.execute(
@@ -4028,6 +4144,51 @@ impl Database {
             WHERE id = ?2
             "#,
             params![google_event_id, appointment_id],
+        )?;
+        self.conn.execute(
+            r#"
+            UPDATE sync_jobs
+            SET
+                status = 'completed',
+                attempts = attempts + 1,
+                last_error = NULL,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE
+                id = ?1
+                OR (
+                    integration_type = 'google_calendar'
+                    AND entity_type = 'appointment'
+                    AND entity_id = ?2
+                    AND status IN ('queued', 'failed')
+                )
+            "#,
+            params![job_id, appointment_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn complete_google_calendar_delete_sync_job(
+        &self,
+        job_id: i64,
+        appointment_id: i64,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            UPDATE appointments
+            SET
+                google_calendar_event_id = NULL,
+                last_google_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?1
+            "#,
+            [appointment_id],
+        )?;
+        self.conn.execute(
+            r#"
+            DELETE FROM google_calendar_event_links
+            WHERE entity_type = 'appointment' AND entity_id = ?1
+            "#,
+            [appointment_id],
         )?;
         self.conn.execute(
             r#"
@@ -4541,20 +4702,17 @@ impl Database {
             [quote_id],
             |row| row.get(0),
         )?;
-        if discount_cents > gross_total_cents {
-            return Err(DbError::InvalidFinancialState(
-                "discount cannot exceed gross total".to_owned(),
-            ));
-        }
+        let normalized_discount_cents = discount_cents.min(gross_total_cents);
         self.conn.execute(
             r#"
             UPDATE quotes
             SET
                 gross_total_cents = ?1,
+                discount_cents = ?2,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?2
+            WHERE id = ?3
             "#,
-            params![gross_total_cents, quote_id],
+            params![gross_total_cents, normalized_discount_cents, quote_id],
         )?;
         Ok(())
     }
@@ -4907,6 +5065,80 @@ impl Database {
             )
             .optional()
             .map_err(DbError::from)
+    }
+
+    fn repair_google_calendar_duplicate_appointments(&self) -> DbResult<usize> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                appointments.id,
+                appointments.patient_id,
+                CASE
+                    WHEN patients.id IS NULL THEN NULL
+                    ELSE patients.last_name || ' ' || patients.first_name
+                END AS patient_name,
+                appointments.title,
+                appointments.starts_at,
+                appointments.ends_at,
+                appointments.created_at
+            FROM appointments
+            LEFT JOIN patients ON patients.id = appointments.patient_id
+            WHERE appointments.status != 'cancelled'
+            ORDER BY appointments.starts_at ASC, appointments.ends_at ASC, appointments.created_at ASC, appointments.id ASC
+            "#,
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+
+        let mut keepers: HashMap<(String, String, String), (i64, bool)> = HashMap::new();
+        let mut duplicates = Vec::new();
+        for (id, patient_id, patient_name, title, starts_at, ends_at, _created_at) in rows {
+            let key = (
+                starts_at,
+                ends_at,
+                canonical_calendar_appointment_title(patient_name.as_deref(), &title),
+            );
+            let has_patient = patient_id.is_some();
+            match keepers.get(&key).copied() {
+                None => {
+                    keepers.insert(key, (id, has_patient));
+                }
+                Some((kept_id, kept_has_patient)) if has_patient && !kept_has_patient => {
+                    duplicates.push(kept_id);
+                    keepers.insert(key, (id, true));
+                }
+                Some(_) => {
+                    duplicates.push(id);
+                }
+            }
+        }
+
+        for duplicate_id in &duplicates {
+            self.conn.execute(
+                r#"
+                UPDATE appointments
+                SET
+                    status = 'cancelled',
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?1 AND status != 'cancelled'
+                "#,
+                [duplicate_id],
+            )?;
+        }
+
+        Ok(duplicates.len())
     }
 
     fn validate_appointment_input(
@@ -5353,6 +5585,38 @@ fn normalize_google_calendar_link_entity_type(entity_type: &str) -> DbResult<&'s
             "invalid google calendar link entity type: {value}"
         ))),
     }
+}
+
+fn canonical_calendar_appointment_title(patient_name: Option<&str>, title: &str) -> String {
+    let title = title
+        .trim()
+        .strip_suffix(" (VeloDent)")
+        .unwrap_or(title.trim())
+        .trim();
+    let value = patient_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| {
+            let prefix = format!("{name} - ");
+            if title.starts_with(&prefix) {
+                title.to_owned()
+            } else {
+                format!("{prefix}{title}")
+            }
+        })
+        .unwrap_or_else(|| title.to_owned());
+    value.to_lowercase()
+}
+
+fn appointment_title_without_patient_prefix(patient_name: Option<&str>, title: &str) -> String {
+    let title = title.trim();
+    patient_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .and_then(|name| title.strip_prefix(&format!("{name} - ")))
+        .unwrap_or(title)
+        .trim()
+        .to_owned()
 }
 
 fn normalize_quote_status(status: &str) -> DbResult<&'static str> {
@@ -6442,7 +6706,11 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn service_ids_for_group(db: &Database, actor_user_id: i64, category: Option<&str>) -> Vec<i64> {
+    fn service_ids_for_group(
+        db: &Database,
+        actor_user_id: i64,
+        category: Option<&str>,
+    ) -> Vec<i64> {
         let group = clinical_service_group_key(category);
         db.list_clinical_services_catalog(actor_user_id)
             .expect("catalog services")
@@ -7127,10 +7395,19 @@ mod tests {
                 },
             )
             .expect("create appointment");
+        let account = db
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("agenda@example.test"),
+                "primary",
+                r#"{"access_token":"a","refresh_token":"r","expires_at":4102444800}"#,
+            )
+            .expect("calendar account");
 
         let changed = db
             .upsert_google_calendar_remote_appointment(
                 admin.id,
+                account.id,
                 "google-event-matching-local",
                 "Agenda Marta - Visita di controllo",
                 "2026-06-20T09:00:00+02:00",
@@ -7153,7 +7430,10 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("linked event id");
-        assert_eq!(linked_event_id.as_deref(), Some("google-event-matching-local"));
+        assert_eq!(
+            linked_event_id.as_deref(),
+            Some("google-event-matching-local")
+        );
     }
 
     #[test]
@@ -7251,6 +7531,194 @@ mod tests {
     }
 
     #[test]
+    fn google_calendar_delete_sync_clears_event_links() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Paola",
+                    last_name: "Delete",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let appointment = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Visita di controllo",
+                    starts_at: "2026-06-20T15:00:00+02:00",
+                    ends_at: "2026-06-20T15:30:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: None,
+                },
+            )
+            .expect("create appointment");
+        let account = db
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("delete@example.test"),
+                "primary",
+                r#"{"access_token":"a","refresh_token":"r","expires_at":4102444800}"#,
+            )
+            .expect("calendar account");
+        db.store_google_calendar_event_link(
+            admin.id,
+            account.id,
+            "appointment",
+            appointment.id,
+            "event-to-delete",
+        )
+        .expect("store event link");
+        db.complete_google_calendar_sync_job(1, appointment.id, "event-to-delete")
+            .expect("legacy event");
+        let cancelled = db
+            .update_appointment_status(admin.id, appointment.id, "cancelled")
+            .expect("cancel appointment");
+        let job = db
+            .pending_google_calendar_sync_jobs(admin.id, 10)
+            .expect("pending jobs")
+            .into_iter()
+            .find(|job| job.appointment.id == cancelled.id)
+            .expect("cancel job");
+
+        db.complete_google_calendar_delete_sync_job(job.job_id, cancelled.id)
+            .expect("complete delete sync");
+
+        let legacy_event_id: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT google_calendar_event_id FROM appointments WHERE id = ?1",
+                [cancelled.id],
+                |row| row.get(0),
+            )
+            .expect("legacy id");
+        assert!(legacy_event_id.is_none());
+        let link_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM google_calendar_event_links WHERE entity_type = 'appointment' AND entity_id = ?1",
+                [cancelled.id],
+                |row| row.get(0),
+            )
+            .expect("link count");
+        assert_eq!(link_count, 0);
+    }
+
+    #[test]
+    fn google_calendar_second_account_remote_event_does_not_duplicate_local_appointment() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Mario",
+                    last_name: "Sync",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-12-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let appointment = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: Some(patient.id),
+                    chair_number: 1,
+                    title: "Visita di controllo",
+                    starts_at: "2026-06-20T12:30:00+02:00",
+                    ends_at: "2026-06-20T13:00:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: None,
+                },
+            )
+            .expect("create appointment");
+        let first_account = db
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("first-sync@example.test"),
+                "primary",
+                r#"{"access_token":"a","refresh_token":"r","expires_at":4102444800}"#,
+            )
+            .expect("first account");
+        let second_account = db
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("second-sync@example.test"),
+                "primary",
+                r#"{"access_token":"b","refresh_token":"r","expires_at":4102444800}"#,
+            )
+            .expect("second account");
+        db.store_google_calendar_event_link(
+            admin.id,
+            first_account.id,
+            "appointment",
+            appointment.id,
+            "event-first-account",
+        )
+        .expect("store first account link");
+        db.complete_google_calendar_sync_job(1, appointment.id, "event-first-account")
+            .expect("store legacy event id");
+
+        let changed = db
+            .upsert_google_calendar_remote_appointment(
+                admin.id,
+                second_account.id,
+                "event-second-account",
+                "Sync Mario - Visita di controllo",
+                "2026-06-20T12:30:00+02:00",
+                "2026-06-20T13:00:00+02:00",
+                "2099-01-01T00:00:00.000Z",
+            )
+            .expect("upsert second account event");
+        assert!(changed);
+
+        let appointments_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM appointments", [], |row| row.get(0))
+            .expect("appointment count");
+        assert_eq!(appointments_count, 1);
+        let second_link = db
+            .google_calendar_event_id_for(
+                admin.id,
+                second_account.id,
+                "appointment",
+                appointment.id,
+            )
+            .expect("second account link");
+        assert_eq!(second_link.as_deref(), Some("event-second-account"));
+        let title: String = db
+            .conn
+            .query_row(
+                "SELECT title FROM appointments WHERE id = ?1",
+                [appointment.id],
+                |row| row.get(0),
+            )
+            .expect("appointment title");
+        assert_eq!(title, "Visita di controllo");
+    }
+
+    #[test]
     fn deleting_clinical_record_linked_to_draft_quote_recalculates_totals() {
         let db = Database::open(test_database_path(), EncryptionKey::for_tests())
             .expect("open encrypted db");
@@ -7316,7 +7784,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_clinical_record_linked_to_accepted_quote_detaches_financial_line() {
+    fn deleting_clinical_record_linked_to_accepted_quote_recalculates_totals() {
         let db = Database::open(test_database_path(), EncryptionKey::for_tests())
             .expect("open encrypted db");
         let admin = db
@@ -7370,18 +7838,9 @@ mod tests {
         let updated_quote = db
             .get_quote_for_document(admin.id, accepted.id)
             .expect("quote after clinical delete");
-        assert_eq!(updated_quote.lines.len(), 1);
-        assert_eq!(updated_quote.gross_total_cents, service.base_price_cents);
-        assert_eq!(updated_quote.net_total_cents, service.base_price_cents);
-        let linked_record_id: Option<i64> = db
-            .conn
-            .query_row(
-                "SELECT clinical_record_id FROM quote_lines WHERE quote_id = ?1 LIMIT 1",
-                [accepted.id],
-                |row| row.get(0),
-            )
-            .expect("quote line clinical link");
-        assert!(linked_record_id.is_none());
+        assert!(updated_quote.lines.is_empty());
+        assert_eq!(updated_quote.gross_total_cents, 0);
+        assert_eq!(updated_quote.net_total_cents, 0);
         let records_after_delete = db
             .list_clinical_records(
                 admin.id,
@@ -7535,6 +7994,10 @@ mod tests {
             .update_quote_status(admin.id, quote.id, "accepted")
             .expect("accept quote");
         assert_eq!(accepted.status, "accepted");
+        let accepted = db
+            .update_quote_discount(admin.id, accepted.id, 600)
+            .expect("accepted quote discount");
+        assert_eq!(accepted.discount_cents, 600);
         assert!(matches!(
             db.add_quote_line(admin.id, accepted.id, service.id, 1),
             Err(DbError::InvalidFinancialState(_))
@@ -7603,7 +8066,10 @@ mod tests {
             .create_invoice_from_quote(admin.id, deposit_quote.id)
             .expect("final invoice after deposit");
         assert_eq!(final_invoice.invoice_kind, "final");
-        assert_eq!(final_invoice.total_cents, deposit_quote.net_total_cents - 5_000);
+        assert_eq!(
+            final_invoice.total_cents,
+            deposit_quote.net_total_cents - 5_000
+        );
 
         db.register_payment(
             admin.id,
@@ -7734,8 +8200,14 @@ mod tests {
             .reorder_clinical_service(admin.id, surgery.id, oral_surgery.id)
             .expect("swap related surgery categories");
         assert_eq!(surgery_after_swap.category.as_deref(), Some("chirurgia"));
-        assert_eq!(oral_surgery_after_swap.category.as_deref(), Some("chirurgia orale"));
-        assert_ne!(surgery_after_swap.sort_order, oral_surgery_after_swap.sort_order);
+        assert_eq!(
+            oral_surgery_after_swap.category.as_deref(),
+            Some("chirurgia orale")
+        );
+        assert_ne!(
+            surgery_after_swap.sort_order,
+            oral_surgery_after_swap.sort_order
+        );
 
         db.update_clinical_service(
             admin.id,

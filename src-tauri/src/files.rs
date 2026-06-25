@@ -174,9 +174,17 @@ fn sanitize_download_filename(filename: &str) -> String {
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| value.chars().all(|character| character.is_ascii_alphanumeric()))
+        .filter(|value| {
+            value
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric())
+        })
         .unwrap_or_else(|| "pdf".to_owned());
-    format!("{}.{}", sanitize_filename_component(stem).replace('_', "-"), extension)
+    format!(
+        "{}.{}",
+        sanitize_filename_component(stem).replace('_', "-"),
+        extension
+    )
 }
 
 pub fn sanitize_filename_component(value: &str) -> String {
