@@ -2,9 +2,12 @@ import { RotateCcw, Save } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MutableRefObject, type PointerEvent } from "react";
 import {
   listConsentTemplates,
+  listPatientConsents,
+  patientConsentDocumentDataUrl,
   renderConsentTemplate,
   signPatientConsent,
   type ConsentTemplate,
+  type PatientConsent,
   type RenderedConsent
 } from "@/frontend/consents/consentsApi";
 import type { Patient } from "@/frontend/patients/patientsApi";
@@ -20,11 +23,13 @@ interface MobileConsentsProps {
 export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
   const { t } = useL10n();
   const [templates, setTemplates] = useState<ConsentTemplate[]>([]);
+  const [signedConsents, setSignedConsents] = useState<PatientConsent[]>([]);
   const [rendered, setRendered] = useState<RenderedConsent | null>(null);
   const [checks, setChecks] = useState<boolean[]>([]);
   const [signatureReady, setSignatureReady] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [viewer, setViewer] = useState<{ title: string; dataUrl: string } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
 
@@ -35,10 +40,9 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
   const canSign = Boolean(rendered && requiredChecksDone && signatureReady && !saving);
 
   useEffect(() => {
-    void listConsentTemplates(sessionToken)
-      .then((nextTemplates) => setTemplates(nextTemplates))
+    void refreshConsentData()
       .catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("mobileConsentGenericError")));
-  }, [sessionToken, t]);
+  }, [patient.id, sessionToken, t]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -49,11 +53,52 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
     setSignatureReady(false);
   }, [rendered?.template.id]);
 
+  useEffect(() => {
+    if (!rendered) {
+      return;
+    }
+    const handleResize = () => {
+      window.setTimeout(() => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          resizeSignatureCanvas(canvas);
+          setSignatureReady(false);
+        }
+      }, 140);
+    };
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("orientationchange", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleResize);
+    };
+  }, [rendered]);
+
+  async function refreshConsentData() {
+    const [nextTemplates, nextSignedConsents] = await Promise.all([
+      listConsentTemplates(sessionToken),
+      listPatientConsents(sessionToken, patient.id)
+    ]);
+    setTemplates(nextTemplates);
+    setSignedConsents(nextSignedConsents);
+  }
+
   async function selectTemplate(templateId: number) {
+    const template = templates.find((candidate) => candidate.id === templateId);
+    const signedConsent = template ? signedConsentForTemplate(template, signedConsents) : undefined;
+    if (signedConsent) {
+      await openSignedConsent(signedConsent);
+      return;
+    }
     const nextRendered = await renderConsentTemplate(sessionToken, patient.id, templateId);
     setRendered(nextRendered);
     setChecks(Array.from({ length: nextRendered.required_checkbox_count }, () => false));
     setStatusMessage("");
+  }
+
+  async function openSignedConsent(consent: PatientConsent) {
+    const document = await patientConsentDocumentDataUrl(sessionToken, consent.id);
+    setViewer({ title: consent.template_title, dataUrl: document.data_url });
   }
 
   function clearSignature() {
@@ -82,6 +127,7 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
         checkbox_confirmations: checks,
         signature_data_url: canvas.toDataURL("image/png")
       });
+      await refreshConsentData();
       setStatusMessage(t("mobileConsentSigned"));
       setRendered(null);
       clearSignature();
@@ -107,20 +153,32 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
 
         <div className="grid gap-2">
           {activeTemplates.map((template) => (
+            (() => {
+              const signedConsent = signedConsentForTemplate(template, signedConsents);
+              return (
             <button
               key={template.id}
               className={[
                 "min-h-16 rounded-xl border px-4 py-3 text-left transition-colors",
                 rendered?.template.id === template.id
                   ? "border-powder-blue-500/60 bg-powder-blue-950 text-white"
-                  : "border-alabaster-grey-500/20 bg-glaucous-950 text-alabaster-grey-500"
+                  : signedConsent
+                    ? "border-emerald-400/40 bg-emerald-400/10 text-white"
+                    : "border-alabaster-grey-500/20 bg-glaucous-950 text-alabaster-grey-500"
               ].join(" ")}
               type="button"
               onClick={() => void selectTemplate(template.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("mobileConsentGenericError")))}
             >
-              <span className="block text-base font-semibold">{template.title}</span>
-              <span className="mt-1 block font-mono text-[11px] uppercase tracking-widest">{template.template_key}</span>
+              <span className="flex items-center justify-between gap-3">
+                <span className="block text-base font-semibold">{template.title}</span>
+                {signedConsent ? <Badge variant="success">{t("mobileConsentSignedBadge")}</Badge> : null}
+              </span>
+              <span className="mt-1 block font-mono text-[11px] uppercase tracking-widest">
+                {signedConsent ? t("mobileConsentTapToView") : template.template_key}
+              </span>
             </button>
+              );
+            })()
           ))}
           {activeTemplates.length === 0 ? (
             <p className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4 text-sm text-alabaster-grey-500">
@@ -141,21 +199,27 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
               onCheck={(index, checked) => setChecks((current) => current.map((value, valueIndex) => (valueIndex === index ? checked : value)))}
             />
             <div className="rounded-xl border border-powder-blue-500/25 bg-ink-black-950 p-3">
-              <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
                     {t("mobileConsentSignatureTitle")}
                   </p>
                   <p className="mt-1 text-xs text-alabaster-grey-500 sm:hidden">{t("mobileConsentRotatePhone")}</p>
                 </div>
-                <Button type="button" variant="secondary" size="sm" onClick={clearSignature}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="h-10 shrink-0 justify-center whitespace-nowrap px-3 text-xs"
+                  onClick={clearSignature}
+                >
                   <RotateCcw aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
                   {t("mobileConsentClearSignature")}
                 </Button>
               </div>
               <canvas
                 ref={canvasRef}
-                className="h-44 w-full touch-none rounded-lg border border-alabaster-grey-500/20 bg-white"
+                className="h-[42dvh] min-h-44 w-full touch-none rounded-lg border border-alabaster-grey-500/20 bg-white landscape:h-[52dvh]"
                 onPointerDown={(event) => startDrawing(event, canvasRef.current, drawingRef)}
                 onPointerLeave={() => {
                   drawingRef.current = false;
@@ -185,8 +249,23 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
           )}
         </Button>
       </div>
+      {viewer ? (
+        <div className="fixed inset-0 z-50 grid bg-ink-black-950">
+          <div className="flex items-center justify-between border-b border-alabaster-grey-500/20 px-4 py-3">
+            <p className="truncate text-sm font-semibold text-white">{viewer.title}</p>
+            <Button type="button" variant="secondary" size="sm" onClick={() => setViewer(null)}>
+              {t("rxViewerClose")}
+            </Button>
+          </div>
+          <iframe className="h-full w-full bg-white" src={viewer.dataUrl} title={viewer.title} />
+        </div>
+      ) : null}
     </section>
   );
+}
+
+function signedConsentForTemplate(template: ConsentTemplate, signedConsents: PatientConsent[]) {
+  return signedConsents.find((consent) => consent.template_id === template.id || consent.consent_type === template.template_key);
 }
 
 function ConsentBody({

@@ -32,6 +32,12 @@ export interface PatientConsent {
   updated_at: string;
 }
 
+export interface PatientConsentDocumentDataUrl {
+  consent_id: number;
+  mime_type: string;
+  data_url: string;
+}
+
 export async function listConsentTemplates(session_token: string) {
   if (isLanSessionToken(session_token)) {
     return lanFetch<ConsentTemplate[]>("/api/consents/templates", fromLanSessionToken(session_token));
@@ -86,4 +92,22 @@ export async function listPatientConsents(session_token: string, patient_id: num
     return lanFetch<PatientConsent[]>(`/api/consents/patient?${params.toString()}`, fromLanSessionToken(session_token));
   }
   return invoke<PatientConsent[]>("list_patient_consents", { request: { session_token, patient_id } });
+}
+
+export async function openPatientConsentDocument(session_token: string, consent_id: number) {
+  return invoke<string>("open_patient_consent_document", { request: { session_token, consent_id } });
+}
+
+export async function patientConsentDocumentDataUrl(session_token: string, consent_id: number) {
+  if (isLanSessionToken(session_token)) {
+    const params = new URLSearchParams({ consent_id: String(consent_id) });
+    return lanFetch<PatientConsentDocumentDataUrl>(`/api/consents/document-data?${params.toString()}`, fromLanSessionToken(session_token));
+  }
+  return invoke<PatientConsentDocumentDataUrl>("patient_consent_document_data_url", {
+    request: { session_token, consent_id }
+  });
+}
+
+export async function deletePatientConsentDocument(session_token: string, consent_id: number) {
+  return invoke<PatientConsent>("delete_patient_consent_document", { request: { session_token, consent_id } });
 }

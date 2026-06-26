@@ -157,6 +157,10 @@ export async function createUser(request: {
   return invoke<BackendUser>("create_user", { request });
 }
 
+export async function deleteUser(request: { session_token: string; user_id: number }) {
+  return invoke<BackendUser>("delete_user", { request });
+}
+
 export async function changeAdminPassword(request: {
   session_token: string;
   old_password: string;

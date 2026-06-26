@@ -6,7 +6,12 @@ import { Input } from "@/frontend/shared/ui/input";
 import { useL10n, type L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
 import { ClinicalPanel } from "@/frontend/clinical/ClinicalPanel";
-import { listPatientConsents, type PatientConsent } from "@/frontend/consents/consentsApi";
+import {
+  deletePatientConsentDocument,
+  listPatientConsents,
+  openPatientConsentDocument,
+  type PatientConsent
+} from "@/frontend/consents/consentsApi";
 import {
   createDepositInvoice,
   createInvoiceFromQuote,
@@ -802,18 +807,40 @@ function PatientConsentsPanel({ currentUser, patient }: { currentUser: User | nu
   const [consents, setConsents] = useState<PatientConsent[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
 
-  useEffect(() => {
+  async function refreshConsents() {
     if (!currentUser?.session_token) {
       setStatusMessage(t("patientsLoginRequired"));
       return;
     }
-    void listPatientConsents(currentUser.session_token, patient.id)
-      .then((nextConsents) => {
-        setConsents(nextConsents);
-        setStatusMessage("");
-      })
-      .catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")));
+    const nextConsents = await listPatientConsents(currentUser.session_token, patient.id);
+    setConsents(nextConsents);
+    setStatusMessage("");
+  }
+
+  useEffect(() => {
+    void refreshConsents().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")));
   }, [currentUser?.session_token, patient.id, t]);
+
+  async function handleOpenConsent(consentId: number) {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+    await openPatientConsentDocument(currentUser.session_token, consentId);
+  }
+
+  async function handleDeleteConsent(consentId: number) {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+    if (!window.confirm(t("patientsConsentDeleteConfirm"))) {
+      return;
+    }
+    await deletePatientConsentDocument(currentUser.session_token, consentId);
+    setStatusMessage(t("patientsConsentDeleted"));
+    await refreshConsents();
+  }
 
   if (statusMessage) {
     return <EmptyTab icon={<FileText aria-hidden="true" className="h-5 w-5" />} text={statusMessage} />;
@@ -832,7 +859,13 @@ function PatientConsentsPanel({ currentUser, patient }: { currentUser: User | nu
       {consents.map((consent) => (
         <div key={consent.id} className="grid gap-2 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 md:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-white">{consent.template_title}</p>
+            <button
+              className="block max-w-full truncate text-left text-sm font-semibold text-white transition-colors hover:text-powder-blue-500"
+              type="button"
+              onClick={() => void handleOpenConsent(consent.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
+            >
+              {consent.template_title}
+            </button>
             <p className="mt-1 font-mono text-[11px] text-alabaster-grey-500">
               {t("patientsConsentSignedAt")}: {consent.signed_at ?? consent.created_at}
             </p>
@@ -842,7 +875,19 @@ function PatientConsentsPanel({ currentUser, patient }: { currentUser: User | nu
               </p>
             ) : null}
           </div>
-          <Badge variant="default">{consent.consent_type}</Badge>
+          <div className="flex flex-wrap items-center gap-2 md:justify-end">
+            <Badge variant="default">{consent.consent_type}</Badge>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="border-red-500/35 bg-red-500/10 text-red-200 hover:bg-red-500/20"
+              onClick={() => void handleDeleteConsent(consent.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
+            >
+              <Trash2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+              {t("patientsConsentDelete")}
+            </Button>
+          </div>
         </div>
       ))}
     </div>

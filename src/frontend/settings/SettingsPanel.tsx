@@ -14,6 +14,7 @@ import {
 import {
   changeAdminPassword,
   createUser,
+  deleteUser,
   getPairingCode,
   getStudioSettings,
   isTauriRuntime,
@@ -71,6 +72,11 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     confirmPassword: ""
   });
   const activeDevices = devices.filter((device) => !device.revoked_at);
+  const activeUsers = users.filter((user) => user.active);
+  const principalAdminId = activeUsers
+    .filter((user) => user.role === "admin")
+    .map((user) => user.id)
+    .sort((left, right) => left - right)[0];
 
   async function refresh() {
     if (!backendAvailable) {
@@ -220,6 +226,19 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     await refresh();
   }
 
+  async function handleDeleteUser(userId: number) {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+    if (!window.confirm(t("settingsDeleteUserConfirm"))) {
+      return;
+    }
+    await deleteUser({ session_token: currentUser.session_token, user_id: userId });
+    setStatusMessage(t("settingsUserDeleted"));
+    await refresh();
+  }
+
   async function handleChangeAdminPassword() {
     if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
@@ -336,8 +355,6 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             </SettingsActionButton>
           </div>
           <Input placeholder={t("settingsChairCount")} type="number" min={1} value={studioForm.chairCount} onChange={(event) => setStudioForm({ ...studioForm, chairCount: event.target.value })} />
-          <Input placeholder={t("settingsDataDirectory")} value={studioForm.dataDirectory} onChange={(event) => setStudioForm({ ...studioForm, dataDirectory: event.target.value })} />
-          <Input placeholder={t("settingsHolidayJson")} value={studioForm.holidayPeriodsJson} onChange={(event) => setStudioForm({ ...studioForm, holidayPeriodsJson: event.target.value })} />
           <SettingsActionButton onClick={() => void handleUpdateStudio()}>
             <Save aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
             {t("settingsSaveStudio")}
@@ -345,8 +362,6 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
         </DenseForm>
         <div className="mt-3 grid gap-1 text-xs leading-5 text-alabaster-grey-500">
           <p>{t("settingsLogoHelp")}</p>
-          <p>{t("settingsDataDirectoryHelp")}</p>
-          <p>{t("settingsHolidayJsonHelp")}</p>
         </div>
         {settings ? <p className="mt-3 text-xs text-alabaster-grey-500">{t("settingsCurrentChairs")}: {settings.chair_count}</p> : null}
       </SettingsSurface>
@@ -367,8 +382,25 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             </SettingsActionButton>
           </DenseForm>
           <DenseTable
-            headers={[t("settingsUsername"), t("settingsRole"), t("settingsStatus")]}
-            rows={users.map((user) => [user.username, user.role, user.active ? t("settingsActive") : t("settingsInactive")])}
+            headers={[t("settingsUsername"), t("settingsRole"), t("settingsStatus"), t("settingsAction")]}
+            rows={activeUsers.map((user) => [
+              user.username,
+              user.role,
+              user.active ? t("settingsActive") : t("settingsInactive"),
+              user.id === currentUser?.id || user.id === principalAdminId ? (
+                <span key={user.id} className="text-xs text-alabaster-grey-500">-</span>
+              ) : (
+                <SettingsActionButton
+                  key={user.id}
+                  size="sm"
+                  tone="danger"
+                  onClick={() => void handleDeleteUser(user.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}
+                >
+                  <Trash2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+                  {t("settingsDeleteUser")}
+                </SettingsActionButton>
+              )
+            ])}
           />
         </SettingsSurface>
 

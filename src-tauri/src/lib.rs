@@ -45,6 +45,7 @@ pub fn run() {
             commands::exchange_google_login_code,
             commands::start_google_login,
             commands::create_user,
+            commands::delete_user,
             commands::change_admin_password,
             commands::list_users,
             commands::add_authorized_google_account,
@@ -116,7 +117,10 @@ pub fn run() {
             commands::update_consent_template,
             commands::render_consent_template,
             commands::sign_patient_consent,
-            commands::list_patient_consents
+            commands::list_patient_consents,
+            commands::open_patient_consent_document,
+            commands::patient_consent_document_data_url,
+            commands::delete_patient_consent_document
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VeloDent");

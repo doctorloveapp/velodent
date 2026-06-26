@@ -483,6 +483,17 @@ pub mod lan {
                     Ok(json!(consents))
                 })
             }
+            ("GET", "/api/consents/document-data") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let consent_id = query
+                        .get("consent_id")
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .ok_or_else(|| "missing consent_id".to_owned())?;
+                    let document =
+                        commands::consent_document_data_url_for_actor(state, user.id, consent_id)?;
+                    Ok(json!(document))
+                })
+            }
             ("POST", "/api/consents/sign") => {
                 with_device_context(&headers, remote_ip, app, |state, user, device_id| {
                     let request = serde_json::from_str::<ConsentSignRequest>(body.trim())

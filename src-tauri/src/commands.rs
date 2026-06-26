@@ -138,6 +138,12 @@ pub struct ChangeAdminPasswordRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DeleteUserRequest {
+    session_token: String,
+    user_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AddGoogleAccountRequest {
     session_token: String,
     email: String,
@@ -223,6 +229,19 @@ pub struct SignConsentRequest {
     template_id: i64,
     checkbox_confirmations: Vec<bool>,
     signature_data_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConsentIdRequest {
+    session_token: String,
+    consent_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PatientConsentDocumentDataUrl {
+    consent_id: i64,
+    mime_type: String,
+    data_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -721,6 +740,15 @@ pub fn create_user(state: State<'_, AppState>, request: CreateUserRequest) -> Re
                 role: request.role,
             },
         )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn delete_user(state: State<'_, AppState>, request: DeleteUserRequest) -> Result<User, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .delete_user(actor.id, request.user_id)
         .map_err(|error| error.to_string())
 }
 
@@ -1337,6 +1365,80 @@ pub fn list_patient_consents(
         .database()?
         .list_patient_consents(actor.id, request.patient_id)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn open_patient_consent_document(
+    state: State<'_, AppState>,
+    request: ConsentIdRequest,
+) -> Result<String, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let consent = state
+        .database()?
+        .patient_consent_for_access(actor.id, request.consent_id)
+        .map_err(|error| error.to_string())?;
+    let relative_path = consent
+        .relative_path
+        .as_deref()
+        .ok_or_else(|| "consent document file is missing".to_owned())?;
+    let filename = relative_path
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("consenso-velodent.pdf");
+    let opened = files::export_patient_file_to_downloads_and_open(relative_path, filename)?;
+    Ok(opened.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn patient_consent_document_data_url(
+    state: State<'_, AppState>,
+    request: ConsentIdRequest,
+) -> Result<PatientConsentDocumentDataUrl, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    consent_document_data_url_for_actor(state.inner(), actor.id, request.consent_id)
+}
+
+#[tauri::command]
+pub fn delete_patient_consent_document(
+    state: State<'_, AppState>,
+    request: ConsentIdRequest,
+) -> Result<PatientConsent, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    let consent = state
+        .database()?
+        .delete_patient_consent_document(actor.id, request.consent_id)
+        .map_err(|error| error.to_string())?;
+    if let Some(relative_path) = consent.relative_path.as_deref() {
+        files::delete_patient_file(relative_path)?;
+    }
+    Ok(consent)
+}
+
+pub(crate) fn consent_document_data_url_for_actor(
+    state: &AppState,
+    actor_user_id: i64,
+    consent_id: i64,
+) -> Result<PatientConsentDocumentDataUrl, String> {
+    let consent = state
+        .database()?
+        .patient_consent_for_access(actor_user_id, consent_id)
+        .map_err(|error| error.to_string())?;
+    let relative_path = consent
+        .relative_path
+        .as_deref()
+        .ok_or_else(|| "consent document file is missing".to_owned())?;
+    let bytes = files::read_patient_file(relative_path)?;
+    let mime_type = "application/pdf".to_owned();
+    Ok(PatientConsentDocumentDataUrl {
+        consent_id: consent.id,
+        data_url: format!(
+            "data:{};base64,{}",
+            mime_type,
+            general_purpose::STANDARD.encode(bytes)
+        ),
+        mime_type,
+    })
 }
 
 pub(crate) fn sign_consent_for_actor(

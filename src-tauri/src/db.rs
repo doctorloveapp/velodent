@@ -1081,6 +1081,92 @@ impl Database {
         Ok(users)
     }
 
+    pub fn delete_user(&self, actor_user_id: i64, target_user_id: i64) -> DbResult<User> {
+        self.assert_admin(actor_user_id)?;
+        if actor_user_id == target_user_id {
+            return Err(DbError::Forbidden);
+        }
+
+        let target = self.get_user(target_user_id)?.ok_or(DbError::NotFound)?;
+        if !target.active {
+            return Err(DbError::NotFound);
+        }
+
+        let principal_admin_id: Option<i64> = self
+            .conn
+            .query_row(
+                r#"
+                SELECT id
+                FROM users
+                WHERE role = 'admin'
+                ORDER BY id ASC
+                LIMIT 1
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if principal_admin_id == Some(target_user_id) {
+            return Err(DbError::Forbidden);
+        }
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            let affected = self.conn.execute(
+                r#"
+                UPDATE users
+                SET active = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?1 AND active = 1
+                "#,
+                [target_user_id],
+            )?;
+            if affected == 0 {
+                return Err(DbError::NotFound);
+            }
+            self.conn.execute(
+                r#"
+                UPDATE user_sessions
+                SET revoked_at = COALESCE(revoked_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE user_id = ?1 AND revoked_at IS NULL
+                "#,
+                [target_user_id],
+            )?;
+            self.conn.execute(
+                r#"
+                UPDATE authorized_devices
+                SET revoked_at = COALESCE(revoked_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE user_id = ?1 AND revoked_at IS NULL
+                "#,
+                [target_user_id],
+            )?;
+            self.insert_audit(
+                Some(actor_user_id),
+                None,
+                "settings.user_deleted",
+                Some("users"),
+                Some(target_user_id),
+                &serde_json::json!({
+                    "username": target.username.as_str(),
+                    "role": target.role.as_db_value(),
+                })
+                .to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => self.get_user(target_user_id)?.ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     pub fn add_authorized_google_account(
         &self,
         actor_user_id: i64,
@@ -3014,6 +3100,97 @@ impl Database {
             )
             .optional()
             .map_err(DbError::from)
+    }
+
+    pub fn patient_consent_for_access(
+        &self,
+        actor_user_id: i64,
+        consent_id: i64,
+    ) -> DbResult<PatientConsent> {
+        self.assert_active_user(actor_user_id)?;
+        let consent = self
+            .get_patient_consent(consent_id)?
+            .ok_or(DbError::NotFound)?;
+        self.insert_patient_audit(
+            actor_user_id,
+            consent.patient_id,
+            "CONSENT_DOCUMENT_VIEW",
+            &serde_json::json!({
+                "consent_id": consent.id,
+                "file_asset_id": consent.file_asset_id,
+                "template_id": consent.template_id,
+            })
+            .to_string(),
+        )?;
+        Ok(consent)
+    }
+
+    pub fn delete_patient_consent_document(
+        &self,
+        actor_user_id: i64,
+        consent_id: i64,
+    ) -> DbResult<PatientConsent> {
+        self.assert_active_user(actor_user_id)?;
+        let consent = self
+            .get_patient_consent(consent_id)?
+            .ok_or(DbError::NotFound)?;
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            let affected = self
+                .conn
+                .execute("DELETE FROM patient_consents WHERE id = ?1", [consent_id])?;
+            if affected == 0 {
+                return Err(DbError::NotFound);
+            }
+            if let Some(file_asset_id) = consent.file_asset_id {
+                self.conn
+                    .execute("DELETE FROM file_assets WHERE id = ?1", [file_asset_id])?;
+            }
+            if consent.consent_type == "gdpr_2026" {
+                let remaining: i64 = self.conn.query_row(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM patient_consents
+                    WHERE patient_id = ?1 AND consent_type = 'gdpr_2026'
+                    "#,
+                    [consent.patient_id],
+                    |row| row.get(0),
+                )?;
+                if remaining == 0 {
+                    self.conn.execute(
+                        r#"
+                        UPDATE patients
+                        SET privacy_consent_signed = 0,
+                            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                        WHERE id = ?1
+                        "#,
+                        [consent.patient_id],
+                    )?;
+                }
+            }
+            self.insert_patient_audit(
+                actor_user_id,
+                consent.patient_id,
+                "CONSENT_DOCUMENT_DELETE",
+                &serde_json::json!({
+                    "consent_id": consent.id,
+                    "file_asset_id": consent.file_asset_id,
+                    "template_id": consent.template_id,
+                    "consent_type": consent.consent_type.as_str(),
+                })
+                .to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => Ok(consent),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
     }
 
     pub fn get_tooth_statuses(
@@ -7937,6 +8114,28 @@ mod tests {
             )
             .expect("audit count");
         assert_eq!(audit_count, 1);
+
+        let accessed = db
+            .patient_consent_for_access(admin.id, consent.id)
+            .expect("access consent document");
+        assert_eq!(accessed.id, consent.id);
+        let deleted = db
+            .delete_patient_consent_document(admin.id, consent.id)
+            .expect("delete consent document");
+        assert_eq!(deleted.id, consent.id);
+        assert!(db
+            .list_patient_consents(admin.id, patient.id)
+            .expect("list after delete")
+            .is_empty());
+        let delete_audit_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE action = 'CONSENT_DOCUMENT_DELETE' AND patient_id = ?1",
+                [patient.id],
+                |row| row.get(0),
+            )
+            .expect("delete audit count");
+        assert_eq!(delete_audit_count, 1);
     }
 
     #[test]
@@ -8060,6 +8259,16 @@ mod tests {
             .revoke_device(admin.id, authorization.device.id)
             .expect("revoke device");
         assert!(revoked.revoked_at.is_some());
+        assert!(matches!(
+            db.delete_user(admin.id, admin.id),
+            Err(DbError::Forbidden)
+        ));
+        let deleted_user = db.delete_user(admin.id, aso.id).expect("delete aso");
+        assert!(!deleted_user.active);
+        assert!(matches!(
+            db.delete_user(admin.id, aso.id),
+            Err(DbError::NotFound)
+        ));
 
         let audit_count: i64 = db
             .conn
