@@ -157,6 +157,14 @@ export async function createUser(request: {
   return invoke<BackendUser>("create_user", { request });
 }
 
+export async function changeAdminPassword(request: {
+  session_token: string;
+  old_password: string;
+  new_password: string;
+}) {
+  return invoke<void>("change_admin_password", { request });
+}
+
 export async function listAuthorizedGoogleAccounts(session_token: string) {
   return invoke<AuthorizedGoogleAccount[]>("list_authorized_google_accounts", { request: { session_token } });
 }

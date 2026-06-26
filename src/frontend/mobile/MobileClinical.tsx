@@ -398,6 +398,14 @@ export function MobileClinical({
             ))}
           </div>
         </div>
+        {statusMessage ? <p className="text-xs text-powder-blue-500">{statusMessage}</p> : null}
+        {diaryOpen ? (
+          <MobileClinicalDiaryModal
+            records={clinicalRecords}
+            onClose={() => onDiaryOpenChange?.(false)}
+            onDelete={(recordId) => void handleDeleteDiaryRecord(recordId).catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
+          />
+        ) : null}
       </section>
     );
   }
@@ -417,7 +425,7 @@ export function MobileClinical({
       <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
+            <p className="rounded-full border border-powder-blue-500/45 bg-powder-blue-500/15 px-3 py-1 text-xs font-bold uppercase tracking-widest text-powder-blue-100 shadow-[0_0_18px_rgba(56,142,216,0.18)]">
               {arch === "upper" ? t("mobileUpperArch") : t("mobileLowerArch")}
             </p>
             <Button

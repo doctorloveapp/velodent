@@ -129,6 +129,13 @@ pub struct CreateUserRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ChangeAdminPasswordRequest {
+    session_token: String,
+    old_password: String,
+    new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AddGoogleAccountRequest {
     session_token: String,
     email: String,
@@ -691,6 +698,18 @@ pub fn create_user(state: State<'_, AppState>, request: CreateUserRequest) -> Re
 }
 
 #[tauri::command]
+pub fn change_admin_password(
+    state: State<'_, AppState>,
+    request: ChangeAdminPasswordRequest,
+) -> Result<(), String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .change_admin_password(actor.id, &request.old_password, &request.new_password)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn list_users(
     state: State<'_, AppState>,
     request: GoogleOAuthStatusRequest,
@@ -1065,15 +1084,12 @@ pub fn create_appointment(
     request: CreateAppointmentRequest,
 ) -> Result<Appointment, String> {
     let actor = require_session(&state, &request.session_token)?;
-    let patient_id = request
-        .patient_id
-        .ok_or_else(|| "appointment patient is required".to_owned())?;
     let appointment = state
         .database()?
         .create_appointment(
             actor.id,
             &AppointmentInput {
-                patient_id: Some(patient_id),
+                patient_id: request.patient_id,
                 chair_number: request.chair_number,
                 title: request.title.trim(),
                 starts_at: request.starts_at.trim(),

@@ -75,6 +75,8 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   const range = useMemo(() => agendaRange(anchorDate, mode), [anchorDate, mode]);
   const visibleDays = useMemo(() => daysInRange(range.startDate, mode === "week" ? 7 : 1), [mode, range.startDate]);
   const chairNumbers = useMemo(() => Array.from({ length: chairCount }, (_, index) => index + 1), [chairCount]);
+  const freePatientName = patientQuery.trim();
+  const canCreateAppointment = Boolean(form.patientId || freePatientName);
 
   async function refreshAgenda() {
     if (!currentUser?.session_token) {
@@ -162,8 +164,8 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     if (appointmentSaving) {
       return;
     }
-    if (!form.patientId) {
-      setStatusMessage(t("agendaPatientRequired"));
+    if (!canCreateAppointment) {
+      setStatusMessage(t("agendaPatientOrNameRequired"));
       return;
     }
 
@@ -174,11 +176,12 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
       await createAppointment(currentUser.session_token, {
         patient_id: form.patientId ? Number(form.patientId) : undefined,
         chair_number: Number(form.chairNumber) || 1,
-        title: form.title.trim(),
+        title: form.patientId ? form.title.trim() || t("agendaDefaultAppointmentTitle") : `${freePatientName} - ${t("agendaFirstVisitTitle")}`,
         starts_at: startsAt,
         ends_at: endsAt,
         status: "booked",
-        color_tag: "powder_blue"
+        color_tag: "powder_blue",
+        notes: form.patientId ? undefined : t("agendaFirstVisitTitle")
       });
       setStatusMessage(t("agendaAppointmentCreated"));
       setForm({ ...form, title: t("agendaDefaultAppointmentTitle") });
@@ -294,6 +297,11 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
             />
             {patientSuggestionsOpen && patients.length > 0 ? (
               <div className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-powder-blue-500/30 bg-ink-black-950 shadow-[0_20px_44px_rgba(0,0,0,0.42)]">
+                {freePatientName && !patients.some((patient) => `${patient.last_name} ${patient.first_name}`.toLowerCase() === freePatientName.toLowerCase()) ? (
+                  <div className="border-b border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-100">
+                    {t("agendaUnregisteredPatientHint")}
+                  </div>
+                ) : null}
                 {patients.map((patient) => (
                   <button
                     key={patient.id}
@@ -342,8 +350,8 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
           </select>
         </div>
         <Button
-          disabled={!form.patientId || appointmentSaving}
-          title={!form.patientId ? t("agendaPatientRequiredTooltip") : undefined}
+          disabled={!canCreateAppointment || appointmentSaving}
+          title={!canCreateAppointment ? t("agendaPatientOrNameTooltip") : undefined}
           type="button"
           className="h-10 whitespace-nowrap"
           onClick={() => void handleCreateAppointment()}

@@ -83,9 +83,9 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
       activeRoute={activeRoute}
       currentUser={currentUser}
       headerActions={
-        activeRoute === "clinical" && activePatient ? (
+        (activeRoute === "clinical" || activeRoute === "orthodontics") && activePatient ? (
           <div className="flex items-center gap-2">
-            {clinicalAssetMode ? (
+            {activeRoute === "clinical" && clinicalAssetMode ? (
               <Button
                 aria-label={t("mobileBackToOdontogram")}
                 className="h-11 w-11 justify-center p-0"
@@ -199,10 +199,10 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
             activePatient ? (
               <MobileClinical
                 activePatientId={activePatient.id}
-                diaryOpen={false}
+                diaryOpen={clinicalDiaryOpen}
                 mode="orthodontics"
                 onMissingPatient={handleMissingPatient}
-                onDiaryOpenChange={() => undefined}
+                onDiaryOpenChange={setClinicalDiaryOpen}
                 onClinicalDiaryCountChange={setClinicalDiaryCount}
                 onSelectedToothRecordInfo={setSelectedToothRecordInfo}
                 sessionToken={currentUser.session_token ?? ""}

@@ -971,6 +971,66 @@ impl Database {
             .ok_or_else(|| DbError::Sql("created user was not found".to_owned()))
     }
 
+    pub fn change_admin_password(
+        &self,
+        actor_user_id: i64,
+        old_password: &str,
+        new_password: &str,
+    ) -> DbResult<()> {
+        self.assert_admin(actor_user_id)?;
+        if new_password.trim().is_empty() {
+            return Err(DbError::Sql("new password is required".to_owned()));
+        }
+
+        let current_hash = self
+            .conn
+            .query_row(
+                r#"
+                SELECT password_hash
+                FROM users
+                WHERE id = ?1 AND role = 'admin' AND active = 1
+                "#,
+                [actor_user_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .ok_or(DbError::InvalidCredentials)?;
+
+        if !auth::verify_password(old_password, &current_hash) {
+            self.insert_audit(
+                Some(actor_user_id),
+                None,
+                "settings.admin_password_change_failed",
+                Some("users"),
+                Some(actor_user_id),
+                "{}",
+            )?;
+            return Err(DbError::InvalidCredentials);
+        }
+
+        let next_hash = auth::hash_password(new_password).map_err(DbError::Sql)?;
+        self.conn.execute(
+            r#"
+            UPDATE users
+            SET
+                password_hash = ?1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?2 AND role = 'admin' AND active = 1
+            "#,
+            params![next_hash, actor_user_id],
+        )?;
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.admin_password_changed",
+            Some("users"),
+            Some(actor_user_id),
+            "{}",
+        )?;
+        Ok(())
+    }
+
     pub fn list_users(&self) -> DbResult<Vec<User>> {
         let mut statement = self.conn.prepare(
             r#"
@@ -7361,6 +7421,40 @@ mod tests {
             db.login("second", "wrong-password"),
             Err(DbError::InvalidCredentials)
         ));
+        assert!(matches!(
+            db.change_admin_password(admin.id, "wrong-password", "new-admin-password"),
+            Err(DbError::InvalidCredentials)
+        ));
+        db.change_admin_password(admin.id, "change-me-now", "new-admin-password")
+            .expect("change admin password");
+        assert!(matches!(
+            db.login("second", "change-me-now"),
+            Err(DbError::InvalidCredentials)
+        ));
+        assert_eq!(
+            db.login("second", "new-admin-password")
+                .expect("login with new admin password")
+                .id,
+            admin.id
+        );
+
+        let first_visit = db
+            .create_appointment(
+                admin.id,
+                &AppointmentInput {
+                    patient_id: None,
+                    chair_number: 1,
+                    title: "Mario Rossi - Prima visita",
+                    starts_at: "2026-06-26T09:00:00+02:00",
+                    ends_at: "2026-06-26T09:30:00+02:00",
+                    status: "booked",
+                    color_tag: Some("powder_blue"),
+                    notes: None,
+                },
+            )
+            .expect("create first visit without patient");
+        assert_eq!(first_visit.patient_id, None);
+        assert_eq!(first_visit.title, "Mario Rossi - Prima visita");
 
         let aso = db
             .create_user(

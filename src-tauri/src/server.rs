@@ -58,6 +58,17 @@ pub mod lan {
     }
 
     #[derive(Debug, Deserialize)]
+    struct AppointmentStatusRequest {
+        appointment_id: i64,
+        status: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DeleteAppointmentRequest {
+        appointment_id: i64,
+    }
+
+    #[derive(Debug, Deserialize)]
     struct ClinicalRecordRequest {
         patient_id: i64,
         service_id: Option<i64>,
@@ -249,15 +260,12 @@ pub mod lan {
                 with_device_user(&headers, remote_ip, app, |state, user| {
                     let request = serde_json::from_str::<AppointmentRequest>(body.trim())
                         .map_err(|_| "invalid appointment body".to_owned())?;
-                    let patient_id = request
-                        .patient_id
-                        .ok_or_else(|| "appointment patient is required".to_owned())?;
                     let appointment = state
                         .database()?
                         .create_appointment(
                             user.id,
                             &AppointmentInput {
-                                patient_id: Some(patient_id),
+                                patient_id: request.patient_id,
                                 chair_number: request.chair_number,
                                 title: &request.title,
                                 starts_at: &request.starts_at,
@@ -270,6 +278,40 @@ pub mod lan {
                         .map_err(|error| error.to_string())?;
                     agenda::trigger_google_calendar_sync(app, user.id);
                     Ok(json!(appointment))
+                })
+            }
+            ("PATCH", "/api/agenda/appointments/status") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = serde_json::from_str::<AppointmentStatusRequest>(body.trim())
+                        .map_err(|_| "invalid appointment status body".to_owned())?;
+                    let appointment = state
+                        .database()?
+                        .update_appointment_status(user.id, request.appointment_id, &request.status)
+                        .map_err(|error| error.to_string())?;
+                    agenda::trigger_google_calendar_sync(app, user.id);
+                    Ok(json!(appointment))
+                })
+            }
+            ("DELETE", "/api/agenda/appointments") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = serde_json::from_str::<DeleteAppointmentRequest>(body.trim())
+                        .map_err(|_| "invalid appointment delete body".to_owned())?;
+                    let appointment = state
+                        .database()?
+                        .appointment_for_actor(user.id, request.appointment_id)
+                        .map_err(|error| error.to_string())?;
+                    tauri::async_runtime::block_on(
+                        agenda::delete_google_calendar_events_for_appointment(
+                            app,
+                            user.id,
+                            &appointment,
+                        ),
+                    )?;
+                    let deleted = state
+                        .database()?
+                        .delete_appointment(user.id, request.appointment_id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(deleted))
                 })
             }
             ("GET", "/api/clinical/services") => {

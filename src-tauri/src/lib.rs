@@ -44,6 +44,7 @@ pub fn run() {
             commands::exchange_google_login_code,
             commands::start_google_login,
             commands::create_user,
+            commands::change_admin_password,
             commands::list_users,
             commands::add_authorized_google_account,
             commands::list_authorized_google_accounts,

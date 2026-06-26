@@ -7,6 +7,7 @@ import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { googleCalendarSyncStatus, type GoogleCalendarSyncStatus } from "@/frontend/agenda/agendaApi";
 import {
+  changeAdminPassword,
   createUser,
   getPairingCode,
   getStudioSettings,
@@ -56,6 +57,11 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     username: "",
     password: "",
     role: "aso" as Role
+  });
+  const [passwordForm, setPasswordForm] = useState({
+    oldPassword: "",
+    newPassword: "",
+    confirmPassword: ""
   });
   const activeDevices = devices.filter((device) => !device.revoked_at);
 
@@ -201,6 +207,29 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     await refresh();
   }
 
+  async function handleChangeAdminPassword() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+    if (!passwordForm.oldPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+      setStatusMessage(t("settingsPasswordRequired"));
+      return;
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setStatusMessage(t("settingsPasswordMismatch"));
+      return;
+    }
+
+    await changeAdminPassword({
+      session_token: currentUser.session_token,
+      old_password: passwordForm.oldPassword,
+      new_password: passwordForm.newPassword
+    });
+    setPasswordForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
+    setStatusMessage(t("settingsPasswordChanged"));
+  }
+
   async function handleLinkGoogleCalendar() {
     if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
@@ -307,6 +336,40 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             headers={[t("settingsUsername"), t("settingsRole"), t("settingsStatus")]}
             rows={users.map((user) => [user.username, user.role, user.active ? t("settingsActive") : t("settingsInactive")])}
           />
+        </SettingsSurface>
+
+        <SettingsSurface
+          icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+          title={t("settingsAdminPasswordTitle")}
+          eyebrow={t("settingsAdminPasswordEyebrow")}
+        >
+          <DenseForm>
+            <Input
+              autoComplete="current-password"
+              placeholder={t("settingsOldPassword")}
+              type="password"
+              value={passwordForm.oldPassword}
+              onChange={(event) => setPasswordForm({ ...passwordForm, oldPassword: event.target.value })}
+            />
+            <Input
+              autoComplete="new-password"
+              placeholder={t("settingsNewPassword")}
+              type="password"
+              value={passwordForm.newPassword}
+              onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })}
+            />
+            <Input
+              autoComplete="new-password"
+              placeholder={t("settingsConfirmPassword")}
+              type="password"
+              value={passwordForm.confirmPassword}
+              onChange={(event) => setPasswordForm({ ...passwordForm, confirmPassword: event.target.value })}
+            />
+            <SettingsActionButton onClick={() => void handleChangeAdminPassword().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+              <ShieldCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+              {t("settingsChangePassword")}
+            </SettingsActionButton>
+          </DenseForm>
         </SettingsSurface>
       </div>
 

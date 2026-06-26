@@ -1,7 +1,16 @@
-import { CalendarClock, Plus } from "lucide-react";
+import { CalendarClock, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { createAppointment, getChairConfig, listAppointments, type Appointment } from "@/frontend/agenda/agendaApi";
+import {
+  createAppointment,
+  deleteAppointment,
+  getChairConfig,
+  listAppointments,
+  updateAppointmentStatus,
+  type Appointment,
+  type AppointmentStatus
+} from "@/frontend/agenda/agendaApi";
 import { searchPatients, type Patient } from "@/frontend/patients/patientsApi";
+import type { L10nKey } from "@/frontend/shared/i18n/translations";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
@@ -11,6 +20,7 @@ interface MobileAgendaProps {
 }
 
 const DEFAULT_DURATION_MINUTES = 30;
+const STATUS_OPTIONS: AppointmentStatus[] = ["booked", "arrived", "waiting", "in_chair", "completed", "cancelled"];
 
 export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
   const { t } = useL10n();
@@ -21,6 +31,7 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientQuery, setPatientQuery] = useState("");
   const [patientSuggestionsOpen, setPatientSuggestionsOpen] = useState(false);
+  const [statusTarget, setStatusTarget] = useState<Appointment | null>(null);
   const [timeTouched, setTimeTouched] = useState(false);
   const [form, setForm] = useState({
     patientId: "",
@@ -34,6 +45,8 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
     to: `${shiftDate(date, 1)}T00:00:00${localOffset(shiftDate(date, 1), "00:00")}`
   }), [date]);
   const chairNumbers = useMemo(() => Array.from({ length: chairCount }, (_, index) => index + 1), [chairCount]);
+  const freePatientName = patientQuery.trim();
+  const canCreateAppointment = Boolean(form.patientId || freePatientName);
 
   async function refresh() {
     if (!sessionToken) {
@@ -76,24 +89,44 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
   }, [appointments, date, form.chairNumber, form.duration, timeTouched]);
 
   async function handleCreateAppointment() {
-    if (!form.patientId) {
-      setStatusMessage(t("agendaPatientRequired"));
+    if (!canCreateAppointment) {
+      setStatusMessage(t("agendaPatientOrNameRequired"));
       return;
     }
     const startsAt = localDateTimeWithOffset(date, form.time);
     const endsAt = addMinutesLocalDateTime(date, form.time, Number(form.duration) || DEFAULT_DURATION_MINUTES);
     await createAppointment(sessionToken, {
-      patient_id: Number(form.patientId),
+      patient_id: form.patientId ? Number(form.patientId) : undefined,
       chair_number: Number(form.chairNumber) || 1,
       color_tag: "powder_blue",
       ends_at: endsAt,
       starts_at: startsAt,
       status: "booked",
-      title: form.title.trim() || t("agendaDefaultAppointmentTitle")
+      title: form.patientId ? form.title.trim() || t("agendaDefaultAppointmentTitle") : `${freePatientName} - ${t("agendaFirstVisitTitle")}`,
+      notes: form.patientId ? undefined : t("agendaFirstVisitTitle")
     });
     setForm((current) => ({ ...current, title: t("agendaDefaultAppointmentTitle") }));
     setTimeTouched(false);
     setStatusMessage(t("agendaAppointmentCreated"));
+    await refresh();
+  }
+
+  async function handleStatusChange(appointment: Appointment, status: AppointmentStatus) {
+    if (!sessionToken) {
+      return;
+    }
+    if (status === "cancelled") {
+      await deleteAppointment(sessionToken, appointment.id);
+      setAppointments((current) => current.filter((item) => item.id !== appointment.id));
+      setStatusMessage(t("agendaAppointmentDeleted"));
+      setStatusTarget(null);
+      await refresh();
+      return;
+    }
+    const updated = await updateAppointmentStatus(sessionToken, appointment.id, status);
+    setAppointments((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setStatusMessage(t("agendaStatusUpdated"));
+    setStatusTarget(null);
     await refresh();
   }
 
@@ -118,6 +151,11 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
             />
             {patientSuggestionsOpen && patients.length > 0 ? (
               <div className="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-md border border-powder-blue-500/30 bg-ink-black-950 shadow-[0_20px_44px_rgba(0,0,0,0.42)]">
+                {freePatientName && !patients.some((patient) => `${patient.last_name} ${patient.first_name}`.toLowerCase() === freePatientName.toLowerCase()) ? (
+                  <div className="border-b border-amber-400/20 bg-amber-400/10 px-3 py-3 text-sm font-semibold text-amber-100">
+                    {t("agendaUnregisteredPatientHint")}
+                  </div>
+                ) : null}
                 {patients.map((patient) => (
                   <button
                     key={patient.id}
@@ -163,8 +201,8 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
           <Button
             type="button"
             className="h-14 justify-center text-base"
-            disabled={!form.patientId}
-            title={!form.patientId ? t("agendaPatientRequiredTooltip") : undefined}
+            disabled={!canCreateAppointment}
+            title={!canCreateAppointment ? t("agendaPatientOrNameTooltip") : undefined}
             onClick={() => void handleCreateAppointment().catch(() => setStatusMessage(t("agendaGenericError")))}
           >
             <Plus aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
@@ -176,7 +214,11 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
       <div className="grid gap-2">
         {appointments.length ? (
           appointments.map((appointment) => (
-            <article key={appointment.id} className="min-h-16 rounded-xl border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
+            <article
+              key={appointment.id}
+              className="min-h-16 rounded-xl border border-alabaster-grey-500/20 bg-ink-black-950 p-4"
+              onClick={() => setStatusTarget(appointment)}
+            >
               <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-3">
                 <div className="rounded-lg border border-powder-blue-500/25 bg-glaucous-950 px-2 py-2 text-center">
                   <CalendarClock aria-hidden="true" className="mx-auto h-4 w-4 text-powder-blue-500" strokeWidth={1.5} />
@@ -196,6 +238,40 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
           </p>
         )}
       </div>
+      {statusTarget ? (
+        <div className="fixed inset-0 z-50 grid content-end bg-ink-black-950/72 p-3 backdrop-blur-sm">
+          <div className="rounded-t-2xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4 shadow-[0_-18px_44px_rgba(0,0,0,0.42)]">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("agendaChangeStatus")}</p>
+                <p className="mt-1 truncate text-base font-semibold text-white">{statusTarget.title}</p>
+              </div>
+              <Button
+                aria-label={t("agendaCloseStatusMenu")}
+                className="h-10 w-10 justify-center p-0"
+                type="button"
+                variant="secondary"
+                onClick={() => setStatusTarget(null)}
+              >
+                <X aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
+              </Button>
+            </div>
+            <div className="grid gap-2">
+              {STATUS_OPTIONS.map((status) => (
+                <Button
+                  key={status}
+                  type="button"
+                  variant={statusTarget.status === status ? "navActive" : "secondary"}
+                  className="h-12 justify-center text-base"
+                  onClick={() => void handleStatusChange(statusTarget, status).catch(() => setStatusMessage(t("agendaGenericError")))}
+                >
+                  {t(appointmentStatusLabelKey(status))}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
       {statusMessage ? <p className="text-sm text-powder-blue-500">{statusMessage}</p> : null}
     </section>
   );
@@ -256,4 +332,21 @@ function localOffset(dateInput: string, timeInput: string) {
   const sign = offsetMinutes >= 0 ? "+" : "-";
   const absolute = Math.abs(offsetMinutes);
   return `${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+}
+
+function appointmentStatusLabelKey(status: AppointmentStatus): L10nKey {
+  switch (status) {
+    case "arrived":
+      return "agendaStatusArrived";
+    case "waiting":
+      return "agendaStatusWaiting";
+    case "in_chair":
+      return "agendaStatusInChair";
+    case "completed":
+      return "agendaStatusCompleted";
+    case "cancelled":
+      return "agendaStatusCancelled";
+    default:
+      return "agendaStatusBooked";
+  }
 }

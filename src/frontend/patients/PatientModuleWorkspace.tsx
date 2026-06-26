@@ -1,8 +1,17 @@
 import { Braces, CircleDollarSign, Images, Search } from "lucide-react";
 import { useEffect, useState } from "react";
+import {
+  createClinicalRecord,
+  listClinicalRecords,
+  listClinicalServices,
+  type ClinicalRecord,
+  type ClinicalService
+} from "@/frontend/clinical/clinicalApi";
+import { clinicalServiceGroupKey } from "@/frontend/clinical/serviceCategories";
 import { BillingPanel, RxPanel } from "@/frontend/patients/PatientsView";
 import { openPatientRecord, searchPatients, type Patient } from "@/frontend/patients/patientsApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
+import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import type { User } from "@/frontend/settings/settingsApi";
 
@@ -92,7 +101,7 @@ export function PatientModuleWorkspace({ currentUser, module, onPatientSelected,
             module === "rx" ? (
               <RxPanel currentUser={currentUser} patient={selectedPatient} />
             ) : module === "orthodontics" ? (
-              <OrthodonticsPanel patient={selectedPatient} />
+              <OrthodonticsPanel currentUser={currentUser} patient={selectedPatient} />
             ) : (
               <BillingPanel currentUser={currentUser} patient={selectedPatient} />
             )
@@ -105,15 +114,102 @@ export function PatientModuleWorkspace({ currentUser, module, onPatientSelected,
   );
 }
 
-function OrthodonticsPanel({ patient }: { patient: Patient }) {
+function OrthodonticsPanel({ currentUser, patient }: { currentUser: User; patient: Patient }) {
   const { t } = useL10n();
+  const [services, setServices] = useState<ClinicalService[]>([]);
+  const [records, setRecords] = useState<ClinicalRecord[]>([]);
+  const [statusMessage, setStatusMessage] = useState("");
+  const sessionToken = currentUser.session_token ?? "";
+  const orthodonticServiceIds = new Set(services.map((service) => service.id));
+  const orthodonticRecords = records.filter((record) => record.service_id !== null && orthodonticServiceIds.has(record.service_id));
+
+  async function refreshOrthodontics() {
+    if (!sessionToken) {
+      return;
+    }
+    const [allServices, allRecords] = await Promise.all([
+      listClinicalServices(sessionToken),
+      listClinicalRecords(sessionToken, patient.id, {})
+    ]);
+    setServices(
+      allServices
+        .filter((service) => service.active && clinicalServiceGroupKey(service.category) === "orthodontics")
+        .sort((first, second) => first.sort_order - second.sort_order || first.name.localeCompare(second.name))
+    );
+    setRecords(allRecords);
+  }
+
+  async function handleServiceSelect(service: ClinicalService) {
+    if (!sessionToken) {
+      return;
+    }
+    await createClinicalRecord(sessionToken, {
+      patient_id: patient.id,
+      service_id: service.id,
+      pathology_description: service.name,
+      status: "diagnosed",
+      ready_for_quote: true
+    });
+    setStatusMessage(t("orthodonticsServiceRegistered"));
+    await refreshOrthodontics();
+  }
+
+  useEffect(() => {
+    void refreshOrthodontics().catch(() => setStatusMessage(t("patientsGenericError")));
+  }, [patient.id, sessionToken]);
+
   return (
     <div className="grid gap-4">
       <div className="rounded-md border border-powder-blue-500/20 bg-powder-blue-950/35 p-4">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("orthodonticsFolderEyebrow")}</p>
         <h2 className="mt-2 text-lg font-semibold text-white">{patient.last_name} {patient.first_name}</h2>
         <p className="mt-3 text-sm leading-6 text-alabaster-grey-500">{t("orthodonticsFolderBody")}</p>
+        {statusMessage ? <p className="mt-3 text-sm text-powder-blue-500">{statusMessage}</p> : null}
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("mobileOrthodonticCatalog")}</p>
+          <div className="mt-3 grid gap-2">
+            {services.length ? services.map((service) => (
+              <Button
+                key={service.id}
+                type="button"
+                variant="secondary"
+                className="min-h-12 justify-between border-powder-blue-500/25 bg-glaucous-950 px-3 text-left hover:border-powder-blue-500/55"
+                onClick={() => void handleServiceSelect(service).catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
+              >
+                <span className="min-w-0 truncate text-sm font-semibold text-white">{service.name}</span>
+                <span className="font-mono text-xs text-powder-blue-100">{formatCents(service.base_price_cents)}</span>
+              </Button>
+            )) : (
+              <p className="rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-3 text-sm text-alabaster-grey-500">
+                {t("orthodonticsServicesEmpty")}
+              </p>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("orthodonticsRecordsTitle")}</p>
+          <div className="mt-3 grid gap-2">
+            {orthodonticRecords.length ? orthodonticRecords.map((record) => (
+              <div key={record.id} className="rounded-md border border-alabaster-grey-500/15 bg-glaucous-950 p-3">
+                <p className="text-sm font-semibold text-white">{record.service_name ?? record.pathology_description ?? t("clinicalNoService")}</p>
+                <p className="mt-1 font-mono text-[11px] text-alabaster-grey-500">{record.created_at}</p>
+              </div>
+            )) : (
+              <p className="rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-3 text-sm text-alabaster-grey-500">
+                {t("clinicalDiaryEmpty")}
+              </p>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );
+}
+
+function formatCents(cents: number) {
+  return new Intl.NumberFormat("it-IT", { currency: "EUR", style: "currency" }).format(cents / 100);
 }

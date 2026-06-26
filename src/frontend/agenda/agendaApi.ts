@@ -109,10 +109,24 @@ export async function moveAppointment(
 }
 
 export async function updateAppointmentStatus(session_token: string, appointment_id: number, status: AppointmentStatus) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<Appointment>("/api/agenda/appointments/status", fromLanSessionToken(session_token), {
+      body: JSON.stringify({ appointment_id, status }),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH"
+    });
+  }
   return invoke<Appointment>("update_appointment_status", { request: { session_token, appointment_id, status } });
 }
 
 export async function deleteAppointment(session_token: string, appointment_id: number) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<Appointment>("/api/agenda/appointments", fromLanSessionToken(session_token), {
+      body: JSON.stringify({ appointment_id }),
+      headers: { "Content-Type": "application/json" },
+      method: "DELETE"
+    });
+  }
   return invoke<Appointment>("delete_appointment", { request: { session_token, appointment_id } });
 }
 
