@@ -1,4 +1,7 @@
-use printpdf::{BuiltinFont, Mm, PdfDocument};
+use printpdf::{
+    image_crate::{self, Rgb, RgbImage},
+    BuiltinFont, ColorBits, ColorSpace, Image, ImageTransform, ImageXObject, Mm, PdfDocument, Px,
+};
 use std::io::BufWriter;
 
 pub mod repository {}
@@ -23,6 +26,7 @@ pub struct FinancialPdf {
     pub document_number: String,
     pub studio: PdfParty,
     pub patient: PdfParty,
+    pub logo_bytes: Option<Vec<u8>>,
     pub lines: Vec<PdfLine>,
     pub gross_total_cents: i64,
     pub discount_cents: i64,
@@ -44,9 +48,14 @@ pub fn render_financial_pdf(input: &FinancialPdf) -> Result<Vec<u8>, String> {
         .add_builtin_font(BuiltinFont::HelveticaBold)
         .map_err(|error| error.to_string())?;
 
-    write_text(&layer, &bold_font, 18.0, 15.0, 280.0, "VeloDent");
-    write_text(&layer, &bold_font, 14.0, 15.0, 268.0, &input.document_title);
-    write_text(&layer, &font, 10.0, 15.0, 260.0, &input.document_number);
+    let header_x = if add_logo(&layer, input.logo_bytes.as_deref())? {
+        55.0
+    } else {
+        15.0
+    };
+    write_text(&layer, &bold_font, 18.0, header_x, 280.0, "VeloDent");
+    write_text(&layer, &bold_font, 14.0, header_x, 268.0, &input.document_title);
+    write_text(&layer, &font, 10.0, header_x, 260.0, &input.document_number);
 
     write_text(&layer, &bold_font, 10.0, 15.0, 246.0, &input.studio.title);
     let mut y = 239.0;
@@ -143,6 +152,78 @@ fn write_text(
     text: &str,
 ) {
     layer.use_text(text, size, Mm(x), Mm(y), font);
+}
+
+fn add_logo(layer: &printpdf::PdfLayerReference, bytes: Option<&[u8]>) -> Result<bool, String> {
+    let Some(bytes) = bytes else {
+        return Ok(false);
+    };
+    if bytes.is_empty() {
+        return Ok(false);
+    }
+
+    let (logo, width, height) = flattened_logo(bytes)?;
+    if width == 0 || height == 0 {
+        return Ok(false);
+    }
+
+    let natural_width_mm = width as f32 * 25.4 / 300.0;
+    let natural_height_mm = height as f32 * 25.4 / 300.0;
+    if natural_width_mm <= 0.0 || natural_height_mm <= 0.0 {
+        return Ok(false);
+    }
+
+    let max_width_mm = 34.0_f32;
+    let max_height_mm = 20.0_f32;
+    let scale = (max_width_mm / natural_width_mm).min(max_height_mm / natural_height_mm);
+    let rendered_height_mm = natural_height_mm * scale;
+
+    Image::from(logo).add_to_layer(
+        layer.clone(),
+        ImageTransform {
+            translate_x: Some(Mm(15.0)),
+            translate_y: Some(Mm(280.0 - rendered_height_mm)),
+            scale_x: Some(scale),
+            scale_y: Some(scale),
+            ..Default::default()
+        },
+    );
+    Ok(true)
+}
+
+fn flattened_logo(bytes: &[u8]) -> Result<(ImageXObject, usize, usize), String> {
+    let image = image_crate::load_from_memory(bytes)
+        .map_err(|error| format!("logo studio non leggibile: {error}"))?
+        .to_rgba8();
+    let width = image.width();
+    let height = image.height();
+    let mut flattened = RgbImage::new(width, height);
+
+    for (x, y, pixel) in image.enumerate_pixels() {
+        let [red, green, blue, alpha] = pixel.0;
+        let alpha = u16::from(alpha);
+        let inverse_alpha = 255_u16.saturating_sub(alpha);
+        let blend = |channel: u8| -> u8 {
+            (((u16::from(channel) * alpha) + (255 * inverse_alpha) + 127) / 255) as u8
+        };
+        flattened.put_pixel(x, y, Rgb([blend(red), blend(green), blend(blue)]));
+    }
+
+    Ok((
+        ImageXObject {
+            width: Px(width as usize),
+            height: Px(height as usize),
+            color_space: ColorSpace::Rgb,
+            bits_per_component: ColorBits::Bit8,
+            interpolate: true,
+            image_data: flattened.into_raw(),
+            image_filter: None,
+            clipping_bbox: None,
+            smask: None,
+        },
+        width as usize,
+        height as usize,
+    ))
 }
 
 fn format_cents(value: i64) -> String {

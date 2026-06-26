@@ -867,7 +867,7 @@ function PatientConsentsPanel({ currentUser, patient }: { currentUser: User | nu
               {consent.template_title}
             </button>
             <p className="mt-1 font-mono text-[11px] text-alabaster-grey-500">
-              {t("patientsConsentSignedAt")}: {consent.signed_at ?? consent.created_at}
+              {t("patientsConsentSignedAt")}: {formatShortDocumentDate(consent.signed_at ?? consent.created_at)}
             </p>
             {consent.relative_path ? (
               <p className="mt-1 truncate font-mono text-[11px] text-powder-blue-500">
@@ -892,6 +892,37 @@ function PatientConsentsPanel({ currentUser, patient }: { currentUser: User | nu
       ))}
     </div>
   );
+}
+
+function formatShortDocumentDate(value: string | null | undefined) {
+  if (!value) {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (/^\d{2}\/\d{2}\/\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    const timestamp = Number(trimmed);
+    const millis = timestamp > 9_999_999_999 ? timestamp : timestamp * 1000;
+    return formatDateObject(new Date(millis));
+  }
+  const isoDate = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoDate) {
+    return `${isoDate[3]}/${isoDate[2]}/${isoDate[1].slice(-2)}`;
+  }
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) {
+    return formatDateObject(parsed);
+  }
+  return trimmed;
+}
+
+function formatDateObject(date: Date) {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = String(date.getFullYear()).slice(-2);
+  return `${day}/${month}/${year}`;
 }
 
 function PatientSurface({ children, eyebrow, icon, title }: { children: ReactNode; eyebrow: string; icon: ReactNode; title: string }) {

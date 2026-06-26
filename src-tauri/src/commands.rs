@@ -1470,7 +1470,7 @@ pub(crate) fn sign_consent_for_actor(
     }
     let signature_png = decode_signature_png(signature_data_url)?;
     let signature_sha256_hex = sha256_hex(&signature_png);
-    let signed_at = current_unix_timestamp_string()?;
+    let signed_at = current_short_date_string()?;
     let patient = database
         .get_patient(patient_id)
         .map_err(|error| error.to_string())?
@@ -1525,12 +1525,28 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn current_unix_timestamp_string() -> Result<String, String> {
+fn current_short_date_string() -> Result<String, String> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_secs();
-    Ok(format!("{seconds}"))
+    let days = i64::try_from(seconds / 86_400).map_err(|error| error.to_string())?;
+    let (year, month, day) = civil_date_from_unix_days(days);
+    Ok(format!("{day:02}/{month:02}/{:02}", year.rem_euclid(100)))
+}
+
+fn civil_date_from_unix_days(days_since_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + i64::from(month <= 2);
+    (year as i32, month as u32, day as u32)
 }
 
 #[tauri::command]
@@ -2342,6 +2358,7 @@ fn render_quote_pdf(
         document_number: format!("Preventivo #{} - {}", quote.id, quote.status),
         studio: studio_pdf_party(settings),
         patient: patient_pdf_party(patient),
+        logo_bytes: studio_logo_bytes(settings),
         lines,
         gross_total_cents: quote.gross_total_cents,
         discount_cents: quote.discount_cents,
@@ -2372,6 +2389,7 @@ fn render_invoice_pdf(
         ),
         studio: studio_pdf_party(settings),
         patient: patient_pdf_party(patient),
+        logo_bytes: studio_logo_bytes(settings),
         lines,
         gross_total_cents: invoice.total_cents,
         discount_cents: 0,
@@ -2393,6 +2411,14 @@ fn studio_pdf_party(settings: &StudioSettings) -> PdfParty {
                 .unwrap_or_else(|| "Directory dati locale".to_owned()),
         ],
     }
+}
+
+fn studio_logo_bytes(settings: &StudioSettings) -> Option<Vec<u8>> {
+    let path = settings.logo_relative_path.as_deref()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    fs::read(Path::new(path)).ok()
 }
 
 fn patient_pdf_party(patient: &Patient) -> PdfParty {
