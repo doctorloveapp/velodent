@@ -1,4 +1,4 @@
-import { RotateCcw, Save } from "lucide-react";
+import { ArrowLeft, ExternalLink, FileText, RotateCcw, Save } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type PointerEvent, type SetStateAction } from "react";
 import {
   listConsentTemplates,
@@ -272,14 +272,55 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
         </Button>
       </div>
       {viewer ? (
-        <div className="fixed inset-0 z-50 grid bg-ink-black-950">
-          <div className="flex items-center justify-between border-b border-alabaster-grey-500/20 px-4 py-3">
-            <p className="truncate text-sm font-semibold text-white">{viewer.title}</p>
-            <Button type="button" variant="secondary" size="sm" onClick={() => replaceViewer(null, setViewer, viewerObjectUrlRef)}>
-              {t("rxViewerClose")}
-            </Button>
+        <div className="fixed inset-0 z-50 flex flex-col bg-ink-black-950 text-white">
+          <div
+            className="shrink-0 border-b border-alabaster-grey-500/20 px-4 pb-3"
+            style={{ paddingTop: "calc(0.75rem + env(safe-area-inset-top))" }}
+          >
+            <div className="mx-auto flex w-full max-w-md items-center justify-between gap-3">
+              <button
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 text-powder-blue-500"
+                type="button"
+                onClick={() => replaceViewer(null, setViewer, viewerObjectUrlRef)}
+              >
+                <ArrowLeft aria-hidden="true" className="h-5 w-5" strokeWidth={1.8} />
+                <span className="sr-only">{t("mobileConsentBackToApp")}</span>
+              </button>
+              <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-white">{viewer.title}</p>
+              <div className="h-11 w-11 shrink-0" aria-hidden="true" />
+            </div>
           </div>
-          <iframe className="h-full w-full bg-white" src={viewer.objectUrl} title={viewer.title} />
+
+          <div className="grid min-h-0 flex-1 place-items-center overflow-y-auto px-4 py-6">
+            <div className="mx-auto grid w-full max-w-[22rem] gap-5 rounded-xl border border-powder-blue-500/25 bg-glaucous-950 p-5 text-center shadow-[0_0_28px_rgba(47,127,208,0.12)]">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-xl border border-powder-blue-500/30 bg-powder-blue-950 text-powder-blue-500">
+                <FileText aria-hidden="true" className="h-7 w-7" strokeWidth={1.6} />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-white">{t("mobileConsentPdfReadyTitle")}</h2>
+                <p className="mt-2 text-sm leading-6 text-alabaster-grey-500">{t("mobileConsentPdfReadyBody")}</p>
+              </div>
+              <div className="grid gap-3">
+                <Button asChild className="h-14 w-full justify-center text-base">
+                  <a href={viewer.objectUrl} target="_blank" rel="noreferrer" download={pdfFileName(viewer.title)}>
+                    <ExternalLink aria-hidden="true" className="h-5 w-5" strokeWidth={1.6} />
+                    {t("mobileConsentOpenPdf")}
+                  </a>
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-12 w-full justify-center"
+                  onClick={() => replaceViewer(null, setViewer, viewerObjectUrlRef)}
+                >
+                  <ArrowLeft aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+                  {t("mobileConsentBackToApp")}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <div className="shrink-0" style={{ paddingBottom: "env(safe-area-inset-bottom)" }} />
         </div>
       ) : null}
     </section>
@@ -424,6 +465,16 @@ function dataUrlToObjectUrl(dataUrl: string, mimeType: string) {
     bytes[index] = binary.charCodeAt(index);
   }
   return URL.createObjectURL(new Blob([bytes], { type: mimeType || "application/pdf" }));
+}
+
+function pdfFileName(title: string) {
+  const slug = title
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `${slug || "consenso-firmato"}.pdf`;
 }
 
 function replaceViewer(

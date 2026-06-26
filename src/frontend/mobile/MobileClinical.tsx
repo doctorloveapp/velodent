@@ -425,7 +425,7 @@ export function MobileClinical({
       <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            <p className="rounded-full border border-powder-blue-500/45 bg-powder-blue-500/15 px-3 py-1 text-xs font-bold uppercase tracking-widest text-powder-blue-100 shadow-[0_0_18px_rgba(56,142,216,0.18)]">
+            <p className="inline-flex min-h-14 items-center justify-center rounded-full border border-powder-blue-500/45 bg-powder-blue-500/15 px-4 py-1 text-center text-xs font-bold uppercase leading-tight tracking-widest text-powder-blue-100 shadow-[0_0_18px_rgba(56,142,216,0.18)]">
               {arch === "upper" ? t("mobileUpperArch") : t("mobileLowerArch")}
             </p>
             <Button
