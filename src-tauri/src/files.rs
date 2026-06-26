@@ -152,6 +152,24 @@ pub fn export_patient_file_to_downloads_and_open(
     Ok(destination)
 }
 
+pub fn export_document_bytes_to_downloads_and_open(
+    bytes: &[u8],
+    filename: &str,
+) -> Result<PathBuf, String> {
+    if bytes.is_empty() {
+        return Err("document is empty".to_owned());
+    }
+    let userprofile = env::var("USERPROFILE")
+        .map(PathBuf::from)
+        .map_err(|_| "%USERPROFILE% is not available".to_owned())?;
+    let downloads = userprofile.join("Downloads");
+    fs::create_dir_all(&downloads).map_err(|error| error.to_string())?;
+    let destination = downloads.join(sanitize_download_filename(filename));
+    fs::write(&destination, bytes).map_err(|error| error.to_string())?;
+    opener::open(&destination).map_err(|error| error.to_string())?;
+    Ok(destination)
+}
+
 fn absolute_patient_file_path(relative_path: &str) -> Result<PathBuf, String> {
     let relative = relative_path.replace('\\', "/");
     if relative.contains("..") || relative.starts_with('/') || relative.starts_with('\\') {

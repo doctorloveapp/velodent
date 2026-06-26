@@ -1,5 +1,5 @@
 import { RotateCcw, Save } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type MutableRefObject, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type PointerEvent, type SetStateAction } from "react";
 import {
   listConsentTemplates,
   listPatientConsents,
@@ -29,9 +29,11 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
   const [signatureReady, setSignatureReady] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  const [viewer, setViewer] = useState<{ title: string; dataUrl: string } | null>(null);
+  const [viewer, setViewer] = useState<{ title: string; objectUrl: string } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
+  const signatureReadyRef = useRef(false);
+  const viewerObjectUrlRef = useRef<string | null>(null);
 
   const activeTemplates = useMemo(() => templates.filter((template) => template.active), [templates]);
   const requiredChecksDone = rendered
@@ -45,11 +47,20 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
   }, [patient.id, sessionToken, t]);
 
   useEffect(() => {
+    signatureReadyRef.current = signatureReady;
+  }, [signatureReady]);
+
+  useEffect(() => () => replaceViewer(null, setViewer, viewerObjectUrlRef), []);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !rendered) {
       return;
     }
-    resizeSignatureCanvas(canvas);
+    void resizeSignatureCanvas(canvas, false).then(() => {
+      signatureReadyRef.current = false;
+      setSignatureReady(false);
+    });
     setSignatureReady(false);
   }, [rendered?.template.id]);
 
@@ -61,8 +72,11 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
       window.setTimeout(() => {
         const canvas = canvasRef.current;
         if (canvas) {
-          resizeSignatureCanvas(canvas);
-          setSignatureReady(false);
+          const shouldPreserveSignature = signatureReadyRef.current;
+          void resizeSignatureCanvas(canvas, shouldPreserveSignature).then((signatureRestored) => {
+            signatureReadyRef.current = signatureRestored;
+            setSignatureReady(signatureRestored);
+          });
         }
       }, 140);
     };
@@ -98,7 +112,11 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
 
   async function openSignedConsent(consent: PatientConsent) {
     const document = await patientConsentDocumentDataUrl(sessionToken, consent.id);
-    setViewer({ title: consent.template_title, dataUrl: document.data_url });
+    replaceViewer(
+      { title: consent.template_title, objectUrl: dataUrlToObjectUrl(document.data_url, document.mime_type) },
+      setViewer,
+      viewerObjectUrlRef
+    );
   }
 
   function clearSignature() {
@@ -111,6 +129,7 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
       return;
     }
     context.clearRect(0, 0, canvas.width, canvas.height);
+    signatureReadyRef.current = false;
     setSignatureReady(false);
   }
 
@@ -224,7 +243,10 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
                 onPointerLeave={() => {
                   drawingRef.current = false;
                 }}
-                onPointerMove={(event) => drawSignature(event, canvasRef.current, drawingRef, () => setSignatureReady(true))}
+                onPointerMove={(event) => drawSignature(event, canvasRef.current, drawingRef, () => {
+                  signatureReadyRef.current = true;
+                  setSignatureReady(true);
+                })}
                 onPointerUp={() => {
                   drawingRef.current = false;
                 }}
@@ -253,11 +275,11 @@ export function MobileConsents({ patient, sessionToken }: MobileConsentsProps) {
         <div className="fixed inset-0 z-50 grid bg-ink-black-950">
           <div className="flex items-center justify-between border-b border-alabaster-grey-500/20 px-4 py-3">
             <p className="truncate text-sm font-semibold text-white">{viewer.title}</p>
-            <Button type="button" variant="secondary" size="sm" onClick={() => setViewer(null)}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => replaceViewer(null, setViewer, viewerObjectUrlRef)}>
               {t("rxViewerClose")}
             </Button>
           </div>
-          <iframe className="h-full w-full bg-white" src={viewer.dataUrl} title={viewer.title} />
+          <iframe className="h-full w-full bg-white" src={viewer.objectUrl} title={viewer.title} />
         </div>
       ) : null}
     </section>
@@ -303,11 +325,24 @@ function ConsentBody({
   );
 }
 
-function resizeSignatureCanvas(canvas: HTMLCanvasElement) {
+async function resizeSignatureCanvas(canvas: HTMLCanvasElement, preserveSignature: boolean) {
   const rect = canvas.getBoundingClientRect();
+  if (rect.width < 16 || rect.height < 16) {
+    return preserveSignature;
+  }
+  const previousSignature =
+    preserveSignature && canvas.width > 1 && canvas.height > 1 ? canvas.toDataURL("image/png") : null;
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(rect.width * ratio));
   canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+  configureSignatureContext(canvas, ratio);
+  if (!previousSignature) {
+    return false;
+  }
+  return restoreSignatureCanvas(canvas, previousSignature, rect.width, rect.height);
+}
+
+function configureSignatureContext(canvas: HTMLCanvasElement, ratio: number) {
   const context = canvas.getContext("2d");
   if (context) {
     context.scale(ratio, ratio);
@@ -318,6 +353,23 @@ function resizeSignatureCanvas(canvas: HTMLCanvasElement) {
   }
 }
 
+function restoreSignatureCanvas(canvas: HTMLCanvasElement, dataUrl: string, width: number, height: number) {
+  return new Promise<boolean>((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const context = canvas.getContext("2d");
+      if (!context) {
+        resolve(false);
+        return;
+      }
+      context.drawImage(image, 0, 0, width, height);
+      resolve(true);
+    };
+    image.onerror = () => resolve(false);
+    image.src = dataUrl;
+  });
+}
+
 function startDrawing(
   event: PointerEvent<HTMLCanvasElement>,
   canvas: HTMLCanvasElement | null,
@@ -326,6 +378,7 @@ function startDrawing(
   if (!canvas) {
     return;
   }
+  event.currentTarget.setPointerCapture(event.pointerId);
   drawingRef.current = true;
   const point = pointerPoint(event, canvas);
   const context = canvas.getContext("2d");
@@ -361,4 +414,26 @@ function pointerPoint(event: PointerEvent<HTMLCanvasElement>, canvas: HTMLCanvas
     x: event.clientX - rect.left,
     y: event.clientY - rect.top
   };
+}
+
+function dataUrlToObjectUrl(dataUrl: string, mimeType: string) {
+  const [, payload = ""] = dataUrl.split(",");
+  const binary = window.atob(payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return URL.createObjectURL(new Blob([bytes], { type: mimeType || "application/pdf" }));
+}
+
+function replaceViewer(
+  nextViewer: { title: string; objectUrl: string } | null,
+  setViewer: Dispatch<SetStateAction<{ title: string; objectUrl: string } | null>>,
+  objectUrlRef: MutableRefObject<string | null>
+) {
+  if (objectUrlRef.current) {
+    URL.revokeObjectURL(objectUrlRef.current);
+  }
+  objectUrlRef.current = nextViewer?.objectUrl ?? null;
+  setViewer(nextViewer);
 }

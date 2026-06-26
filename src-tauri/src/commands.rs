@@ -1386,7 +1386,10 @@ pub fn open_patient_consent_document(
         .next()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("consenso-velodent.pdf");
-    let opened = files::export_patient_file_to_downloads_and_open(relative_path, filename)?;
+    let bytes = files::read_patient_file(relative_path)?;
+    let normalized_bytes =
+        consents::normalize_consent_pdf_bytes(&bytes).unwrap_or_else(|_| bytes.clone());
+    let opened = files::export_document_bytes_to_downloads_and_open(&normalized_bytes, filename)?;
     Ok(opened.to_string_lossy().to_string())
 }
 
@@ -1429,6 +1432,7 @@ pub(crate) fn consent_document_data_url_for_actor(
         .as_deref()
         .ok_or_else(|| "consent document file is missing".to_owned())?;
     let bytes = files::read_patient_file(relative_path)?;
+    let bytes = consents::normalize_consent_pdf_bytes(&bytes).unwrap_or(bytes);
     let mime_type = "application/pdf".to_owned();
     Ok(PatientConsentDocumentDataUrl {
         consent_id: consent.id,
