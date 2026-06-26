@@ -9,6 +9,7 @@ import type { Patient } from "@/frontend/patients/patientsApi";
 import { MobileShell, type MobileRouteKey } from "./MobileShell";
 import { MobileAgenda } from "./MobileAgenda";
 import { MobileClinical, type SelectedToothRecordInfo } from "./MobileClinical";
+import { MobileConsents } from "./MobileConsents";
 import { MobileDashboard } from "./MobileDashboard";
 import { MobilePatientRegistration } from "./MobilePatientRegistration";
 import { MobilePatientSearch } from "./MobilePatientSearch";
@@ -139,11 +140,11 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
           )
         ) : undefined
       }
-      patientName={(activeRoute === "clinical" || activeRoute === "rx" || activeRoute === "orthodontics") ? activePatientName : undefined}
+      patientName={(activeRoute === "clinical" || activeRoute === "rx" || activeRoute === "orthodontics" || activeRoute === "consents") ? activePatientName : undefined}
       title={title}
       onLogout={onLogout}
       onPatientNameClick={
-        (activeRoute === "clinical" || activeRoute === "rx" || activeRoute === "orthodontics") && activePatient ? () => {
+        (activeRoute === "clinical" || activeRoute === "rx" || activeRoute === "orthodontics" || activeRoute === "consents") && activePatient ? () => {
           setClinicalAssetMode(null);
           setSelectedToothRecordInfo(null);
           setActivePatient(null);
@@ -235,6 +236,18 @@ export function MobileApp({ currentUser, onLogout }: MobileAppProps) {
                 onPatientSelect={(patient) => {
                   setActivePatient(patient);
                   setActiveRoute("clinical");
+                }}
+              />
+            )
+          ) : activeRoute === "consents" ? (
+            activePatient ? (
+              <MobileConsents patient={activePatient} sessionToken={currentUser.session_token ?? ""} />
+            ) : (
+              <MobilePatientSearch
+                sessionToken={currentUser.session_token ?? ""}
+                onPatientSelect={(patient) => {
+                  setActivePatient(patient);
+                  setActiveRoute("consents");
                 }}
               />
             )

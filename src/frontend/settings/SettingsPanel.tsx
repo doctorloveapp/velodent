@@ -1,4 +1,4 @@
-import { CalendarCheck, Laptop, Save, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, UsersRound, Wifi } from "lucide-react";
+import { CalendarCheck, FileText, Laptop, Save, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, UsersRound, Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
@@ -6,6 +6,11 @@ import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { googleCalendarSyncStatus, type GoogleCalendarSyncStatus } from "@/frontend/agenda/agendaApi";
+import {
+  listConsentTemplates,
+  updateConsentTemplate,
+  type ConsentTemplate
+} from "@/frontend/consents/consentsApi";
 import {
   changeAdminPassword,
   createUser,
@@ -41,6 +46,8 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [calendarAccounts, setCalendarAccounts] = useState<GoogleCalendarAccount[]>([]);
   const [calendarSyncStatus, setCalendarSyncStatus] = useState<GoogleCalendarSyncStatus | null>(null);
   const [devices, setDevices] = useState<AuthorizedDevice[]>([]);
+  const [consentTemplates, setConsentTemplates] = useState<ConsentTemplate[]>([]);
+  const [consentDrafts, setConsentDrafts] = useState<Record<number, { title: string; body: string; active: boolean }>>({});
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [pairingCode, setPairingCode] = useState<PairingCodeInfo | null>(null);
@@ -74,18 +81,24 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       return;
     }
 
-    const [nextUsers, nextCalendarAccounts, nextDevices, nextSettings, nextCalendarSyncStatus] = await Promise.all([
+    const [nextUsers, nextCalendarAccounts, nextDevices, nextSettings, nextCalendarSyncStatus, nextConsentTemplates] = await Promise.all([
       listUsers(currentUser.session_token),
       listGoogleCalendarAccounts(currentUser.session_token),
       listDevices(currentUser.session_token),
       getStudioSettings(currentUser.session_token),
-      googleCalendarSyncStatus(currentUser.session_token)
+      googleCalendarSyncStatus(currentUser.session_token),
+      listConsentTemplates(currentUser.session_token)
     ]);
 
     setUsers(nextUsers);
     setCalendarAccounts(nextCalendarAccounts);
     setCalendarSyncStatus(nextCalendarSyncStatus);
     setDevices(nextDevices);
+    setConsentTemplates(nextConsentTemplates);
+    setConsentDrafts(Object.fromEntries(nextConsentTemplates.map((template) => [
+      template.id,
+      { title: template.title, body: template.body, active: template.active }
+    ])));
     setSettings(nextSettings);
     setStudioForm({
       clinicName: nextSettings.clinic_name ?? "",
@@ -273,6 +286,27 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     await refresh();
   }
 
+  async function handleUpdateConsentTemplate(templateId: number) {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+    const draft = consentDrafts[templateId];
+    if (!draft) {
+      setStatusMessage(t("settingsGenericError"));
+      return;
+    }
+    await updateConsentTemplate({
+      session_token: currentUser.session_token,
+      template_id: templateId,
+      title: draft.title,
+      body: draft.body,
+      active: draft.active
+    });
+    setStatusMessage(t("settingsConsentTemplateSaved"));
+    await refresh();
+  }
+
   return (
     <div className="grid gap-4">
       <SettingsSurface
@@ -412,6 +446,68 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             </SettingsActionButton>
           ])}
         />
+      </SettingsSurface>
+
+      <SettingsSurface
+        icon={<FileText aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+        title={t("settingsLegalTextsTitle")}
+        eyebrow={t("settingsLegalTextsEyebrow")}
+      >
+        <details className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-white">
+            {t("settingsLegalTextsSummary")}
+          </summary>
+          <div className="grid gap-3 border-t border-alabaster-grey-500/20 p-3">
+            <p className="text-sm leading-6 text-alabaster-grey-500">{t("settingsLegalTextsHelp")}</p>
+            {consentTemplates.map((template) => {
+              const draft = consentDrafts[template.id] ?? { title: template.title, body: template.body, active: template.active };
+              return (
+                <details key={template.id} className="rounded-md border border-alabaster-grey-500/20 bg-glaucous-950">
+                  <summary className="cursor-pointer px-3 py-3 text-sm font-semibold text-white">
+                    {template.title}
+                  </summary>
+                  <div className="grid gap-3 border-t border-alabaster-grey-500/20 p-3">
+                    <Input
+                      aria-label={t("settingsConsentTemplateTitle")}
+                      value={draft.title}
+                      onChange={(event) => setConsentDrafts((current) => ({
+                        ...current,
+                        [template.id]: { ...draft, title: event.target.value }
+                      }))}
+                    />
+                    <textarea
+                      aria-label={t("settingsConsentTemplateBody")}
+                      className="min-h-64 w-full rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 px-3 py-2 text-sm leading-6 text-white outline-none placeholder:text-alabaster-grey-500 focus:border-powder-blue-500 focus:ring-2 focus:ring-powder-blue-500/20"
+                      value={draft.body}
+                      onChange={(event) => setConsentDrafts((current) => ({
+                        ...current,
+                        [template.id]: { ...draft, body: event.target.value }
+                      }))}
+                    />
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <label className="inline-flex items-center gap-2 text-sm text-alabaster-grey-500">
+                        <input
+                          checked={draft.active}
+                          className="h-4 w-4 accent-powder-blue-500"
+                          type="checkbox"
+                          onChange={(event) => setConsentDrafts((current) => ({
+                            ...current,
+                            [template.id]: { ...draft, active: event.target.checked }
+                          }))}
+                        />
+                        {t("settingsConsentTemplateActive")}
+                      </label>
+                      <SettingsActionButton onClick={() => void handleUpdateConsentTemplate(template.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+                        <Save aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+                        {t("settingsConsentTemplateSave")}
+                      </SettingsActionButton>
+                    </div>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        </details>
       </SettingsSurface>
 
       <SettingsSurface

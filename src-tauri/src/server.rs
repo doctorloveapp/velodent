@@ -1,6 +1,6 @@
 pub mod lan {
     use crate::{
-        agenda,
+        agenda, commands,
         db::{AppointmentInput, NewClinicalRecord, NewPatient},
         files,
         state::AppState,
@@ -90,6 +90,14 @@ pub mod lan {
         patient_id: i64,
     }
 
+    #[derive(Debug, Deserialize)]
+    struct ConsentSignRequest {
+        patient_id: i64,
+        template_id: i64,
+        checkbox_confirmations: Vec<bool>,
+        signature_data_url: String,
+    }
+
     #[derive(Debug, Serialize)]
     struct ApiError {
         error: String,
@@ -121,14 +129,58 @@ pub mod lan {
     fn handle_stream(mut stream: TcpStream, app: AppHandle) {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
         let peer = stream.peer_addr().ok();
-        let mut buffer = [0_u8; 16384];
-        let read = match stream.read(&mut buffer) {
-            Ok(read) if read > 0 => read,
-            _ => return,
+        let request_bytes = match read_http_request(&mut stream) {
+            Some(bytes) => bytes,
+            None => return,
         };
-        let request = String::from_utf8_lossy(&buffer[..read]);
+        let request = String::from_utf8_lossy(&request_bytes);
         let response = route_request(&request, peer, &app);
         let _ = stream.write_all(&response);
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> Option<Vec<u8>> {
+        const MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 16384];
+        let first_read = stream.read(&mut buffer).ok()?;
+        if first_read == 0 {
+            return None;
+        }
+        request.extend_from_slice(&buffer[..first_read]);
+        let content_length = content_length_from_head(&request).unwrap_or(0);
+        let header_end = find_header_end(&request).unwrap_or(request.len());
+        let expected_len = header_end.saturating_add(content_length);
+        if expected_len > MAX_REQUEST_BYTES {
+            return None;
+        }
+        while request.len() < expected_len {
+            let read = stream.read(&mut buffer).ok()?;
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+        }
+        Some(request)
+    }
+
+    fn content_length_from_head(request: &[u8]) -> Option<usize> {
+        let head_end = find_header_end(request)?;
+        let head = std::str::from_utf8(&request[..head_end]).ok()?;
+        for line in head.lines() {
+            if let Some((key, value)) = line.split_once(':') {
+                if key.eq_ignore_ascii_case("content-length") {
+                    return value.trim().parse::<usize>().ok();
+                }
+            }
+        }
+        Some(0)
+    }
+
+    fn find_header_end(request: &[u8]) -> Option<usize> {
+        request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|position| position + 4)
     }
 
     fn route_request(request: &str, peer: Option<SocketAddr>, app: &AppHandle) -> Vec<u8> {
@@ -395,6 +447,58 @@ pub mod lan {
                     Ok(json!({ "deleted": true }))
                 })
             }
+            ("GET", "/api/consents/templates") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let templates = state
+                        .database()?
+                        .list_consent_templates(user.id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(templates))
+                })
+            }
+            ("GET", "/api/consents/render") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let patient_id = query
+                        .get("patient_id")
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .ok_or_else(|| "missing patient_id".to_owned())?;
+                    let template_id = query
+                        .get("template_id")
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .ok_or_else(|| "missing template_id".to_owned())?;
+                    let rendered = state
+                        .database()?
+                        .render_consent_template(user.id, patient_id, template_id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(rendered))
+                })
+            }
+            ("GET", "/api/consents/patient") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request = patient_clinical_query(&query)?;
+                    let consents = state
+                        .database()?
+                        .list_patient_consents(user.id, request.patient_id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(consents))
+                })
+            }
+            ("POST", "/api/consents/sign") => {
+                with_device_context(&headers, remote_ip, app, |state, user, device_id| {
+                    let request = serde_json::from_str::<ConsentSignRequest>(body.trim())
+                        .map_err(|_| "invalid consent sign body".to_owned())?;
+                    let consent = commands::sign_consent_for_actor(
+                        state,
+                        user.id,
+                        Some(device_id),
+                        request.patient_id,
+                        request.template_id,
+                        request.checkbox_confirmations,
+                        request.signature_data_url.trim(),
+                    )?;
+                    Ok(json!(consent))
+                })
+            }
             ("GET", "/api/rx/assets") => {
                 with_device_user(&headers, remote_ip, app, |state, user| {
                     let request = patient_clinical_query(&query)?;
@@ -559,6 +663,26 @@ pub mod lan {
         }
     }
 
+    fn with_device_context<F>(
+        headers: &HashMap<String, String>,
+        remote_ip: IpAddr,
+        app: &AppHandle,
+        handler: F,
+    ) -> Vec<u8>
+    where
+        F: FnOnce(&AppState, crate::db::User, i64) -> Result<Value, String>,
+    {
+        let state = app.state::<AppState>();
+        let (user, device_id) = match device_user_and_id(headers, remote_ip, &state) {
+            Ok(context) => context,
+            Err(error) => return json_response(403, &ApiError { error }),
+        };
+        match handler(&state, user, device_id) {
+            Ok(value) => json_response(200, &value),
+            Err(error) => json_response(500, &ApiError { error }),
+        }
+    }
+
     fn device_user(
         headers: &HashMap<String, String>,
         remote_ip: IpAddr,
@@ -568,6 +692,18 @@ pub mod lan {
         state
             .database()?
             .user_for_device_token(&token, &remote_ip.to_string())
+            .map_err(|error| error.to_string())
+    }
+
+    fn device_user_and_id(
+        headers: &HashMap<String, String>,
+        remote_ip: IpAddr,
+        state: &AppState,
+    ) -> Result<(crate::db::User, i64), String> {
+        let token = bearer_token(headers).ok_or_else(|| "device token missing".to_owned())?;
+        state
+            .database()?
+            .user_and_device_for_device_token(&token, &remote_ip.to_string())
             .map_err(|error| error.to_string())
     }
 

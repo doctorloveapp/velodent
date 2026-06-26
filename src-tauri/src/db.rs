@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 12;
+const CURRENT_SCHEMA_VERSION: i64 = 13;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -546,6 +546,40 @@ pub struct GeneratedDocument {
     pub mime_type: String,
     pub sha256_hex: String,
     pub size_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConsentTemplate {
+    pub id: i64,
+    pub template_key: String,
+    pub title: String,
+    pub body: String,
+    pub active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RenderedConsent {
+    pub template: ConsentTemplate,
+    pub rendered_body: String,
+    pub required_checkbox_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PatientConsent {
+    pub id: i64,
+    pub patient_id: i64,
+    pub template_id: Option<i64>,
+    pub template_title: String,
+    pub consent_type: String,
+    pub file_asset_id: Option<i64>,
+    pub relative_path: Option<String>,
+    pub signed_at: Option<String>,
+    pub signed_by_user_id: Option<i64>,
+    pub signed_device_id: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1271,6 +1305,68 @@ impl Database {
         )?;
 
         Ok(user)
+    }
+
+    pub fn user_and_device_for_device_token(
+        &self,
+        token: &str,
+        remote_ip: &str,
+    ) -> DbResult<(User, i64)> {
+        if token.trim().is_empty() {
+            return Err(DbError::Forbidden);
+        }
+        let token_hash = auth::hash_device_token(token.trim());
+        let row = self
+            .conn
+            .query_row(
+                r#"
+                SELECT
+                    d.id,
+                    d.allowed_lan_cidr,
+                    u.id,
+                    u.username,
+                    u.google_email,
+                    u.role,
+                    u.active,
+                    u.created_at,
+                    u.updated_at
+                FROM authorized_devices d
+                JOIN users u ON u.id = d.user_id
+                WHERE
+                    d.device_token_hash = ?1
+                    AND d.revoked_at IS NULL
+                    AND (d.expires_at IS NULL OR datetime(d.expires_at) > datetime('now'))
+                    AND u.active = 1
+                "#,
+                [&token_hash],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        user_from_columns(row, 2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(DbError::Forbidden)?;
+
+        let (device_id, allowed_lan_cidr, user) = row;
+        if let Some(cidr) = allowed_lan_cidr.as_deref() {
+            if !ipv4_cidr_contains(cidr, remote_ip) {
+                return Err(DbError::Forbidden);
+            }
+        }
+
+        self.conn.execute(
+            r#"
+            UPDATE authorized_devices
+            SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?1
+            "#,
+            [device_id],
+        )?;
+
+        Ok((user, device_id))
     }
 
     pub fn revoke_device(&self, actor_user_id: i64, device_id: i64) -> DbResult<AuthorizedDevice> {
@@ -2634,6 +2730,290 @@ impl Database {
             sha256_hex: sha256_hex.to_owned(),
             size_bytes,
         })
+    }
+
+    pub fn list_consent_templates(&self, actor_user_id: i64) -> DbResult<Vec<ConsentTemplate>> {
+        self.assert_active_user(actor_user_id)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, template_key, title, body, active, created_at, updated_at
+            FROM consent_templates
+            ORDER BY id ASC
+            "#,
+        )?;
+        let templates = statement
+            .query_map([], consent_template_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(templates)
+    }
+
+    pub fn update_consent_template(
+        &self,
+        actor_user_id: i64,
+        template_id: i64,
+        title: &str,
+        body: &str,
+        active: bool,
+    ) -> DbResult<ConsentTemplate> {
+        self.assert_admin(actor_user_id)?;
+        if title.trim().is_empty() || body.trim().is_empty() {
+            return Err(DbError::Sql(
+                "consent template title and body are required".to_owned(),
+            ));
+        }
+        self.conn.execute(
+            r#"
+            UPDATE consent_templates
+            SET
+                title = ?1,
+                body = ?2,
+                active = ?3,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?4
+            "#,
+            params![title.trim(), body.trim(), active as i64, template_id],
+        )?;
+        self.insert_audit(
+            Some(actor_user_id),
+            None,
+            "settings.consent_template_updated",
+            Some("consent_templates"),
+            Some(template_id),
+            "{}",
+        )?;
+        self.get_consent_template(template_id)?
+            .ok_or(DbError::NotFound)
+    }
+
+    pub fn get_consent_template(&self, template_id: i64) -> DbResult<Option<ConsentTemplate>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, template_key, title, body, active, created_at, updated_at
+                FROM consent_templates
+                WHERE id = ?1
+                "#,
+                [template_id],
+                consent_template_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    pub fn render_consent_template(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+        template_id: i64,
+    ) -> DbResult<RenderedConsent> {
+        self.assert_active_user(actor_user_id)?;
+        let patient = self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        let template = self
+            .get_consent_template(template_id)?
+            .filter(|template| template.active)
+            .ok_or(DbError::NotFound)?;
+        let actor = self.get_user(actor_user_id)?.ok_or(DbError::Forbidden)?;
+        let rendered_body = render_consent_body(&template.body, &patient, &actor);
+        Ok(RenderedConsent {
+            required_checkbox_count: required_checkbox_count(&rendered_body),
+            template,
+            rendered_body,
+        })
+    }
+
+    pub fn list_patient_consents(
+        &self,
+        actor_user_id: i64,
+        patient_id: i64,
+    ) -> DbResult<Vec<PatientConsent>> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                patient_consents.id,
+                patient_consents.patient_id,
+                patient_consents.template_id,
+                COALESCE(patient_consents.template_title, patient_consents.consent_type),
+                patient_consents.consent_type,
+                patient_consents.file_asset_id,
+                file_assets.relative_path,
+                patient_consents.signed_at,
+                patient_consents.signed_by_user_id,
+                patient_consents.signed_device_id,
+                patient_consents.created_at,
+                patient_consents.updated_at
+            FROM patient_consents
+            LEFT JOIN file_assets ON file_assets.id = patient_consents.file_asset_id
+            WHERE patient_consents.patient_id = ?1
+            ORDER BY COALESCE(patient_consents.signed_at, patient_consents.created_at) DESC
+            "#,
+        )?;
+        let consents = statement
+            .query_map([patient_id], patient_consent_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(consents)
+    }
+
+    pub fn register_signed_consent(
+        &self,
+        actor_user_id: i64,
+        signed_device_id: Option<i64>,
+        patient_id: i64,
+        template: &ConsentTemplate,
+        rendered_text: &str,
+        checkbox_payload_json: &str,
+        signature_sha256_hex: &str,
+        relative_path: &str,
+        mime_type: &str,
+        sha256_hex: &str,
+        size_bytes: i64,
+    ) -> DbResult<PatientConsent> {
+        self.assert_active_user(actor_user_id)?;
+        self.get_patient(patient_id)?.ok_or(DbError::NotFound)?;
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.conn.execute(
+                r#"
+                INSERT INTO file_assets (
+                    patient_id,
+                    relative_path,
+                    file_kind,
+                    mime_type,
+                    sha256_hex,
+                    size_bytes,
+                    metadata_json,
+                    created_by_user_id
+                )
+                VALUES (?1, ?2, 'consent', ?3, ?4, ?5, ?6, ?7)
+                "#,
+                params![
+                    patient_id,
+                    relative_path,
+                    mime_type,
+                    sha256_hex,
+                    size_bytes,
+                    serde_json::json!({
+                        "consent_template_id": template.id,
+                        "template_key": template.template_key.as_str(),
+                    })
+                    .to_string(),
+                    actor_user_id
+                ],
+            )?;
+            let file_asset_id = self.conn.last_insert_rowid();
+            self.conn.execute(
+                r#"
+                INSERT INTO patient_consents (
+                    patient_id,
+                    template_id,
+                    template_title,
+                    consent_type,
+                    file_asset_id,
+                    rendered_text,
+                    checkbox_payload_json,
+                    signature_sha256_hex,
+                    signed_by_user_id,
+                    signed_device_id,
+                    signed_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                "#,
+                params![
+                    patient_id,
+                    template.id,
+                    template.title.as_str(),
+                    template.template_key.as_str(),
+                    file_asset_id,
+                    rendered_text,
+                    checkbox_payload_json,
+                    signature_sha256_hex,
+                    actor_user_id,
+                    signed_device_id
+                ],
+            )?;
+            let consent_id = self.conn.last_insert_rowid();
+            if template.template_key == "gdpr_2026" {
+                self.conn.execute(
+                    r#"
+                    UPDATE patients
+                    SET
+                        privacy_consent_signed = 1,
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id = ?1
+                    "#,
+                    [patient_id],
+                )?;
+            }
+            self.conn.execute(
+                r#"
+                INSERT INTO audit_log (
+                    user_id,
+                    device_id,
+                    patient_id,
+                    action,
+                    entity_type,
+                    entity_id,
+                    metadata_json
+                )
+                VALUES (?1, ?2, ?3, 'CONSENT_SIGNED', 'patient_consents', ?4, ?5)
+                "#,
+                params![
+                    actor_user_id,
+                    signed_device_id,
+                    patient_id,
+                    consent_id,
+                    serde_json::json!({
+                        "template_id": template.id,
+                        "template_key": template.template_key.as_str(),
+                        "file_asset_id": file_asset_id,
+                    })
+                    .to_string()
+                ],
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(consent_id)
+        })();
+
+        match result {
+            Ok(consent_id) => self
+                .get_patient_consent(consent_id)?
+                .ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn get_patient_consent(&self, consent_id: i64) -> DbResult<Option<PatientConsent>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                    patient_consents.id,
+                    patient_consents.patient_id,
+                    patient_consents.template_id,
+                    COALESCE(patient_consents.template_title, patient_consents.consent_type),
+                    patient_consents.consent_type,
+                    patient_consents.file_asset_id,
+                    file_assets.relative_path,
+                    patient_consents.signed_at,
+                    patient_consents.signed_by_user_id,
+                    patient_consents.signed_device_id,
+                    patient_consents.created_at,
+                    patient_consents.updated_at
+                FROM patient_consents
+                LEFT JOIN file_assets ON file_assets.id = patient_consents.file_asset_id
+                WHERE patient_consents.id = ?1
+                "#,
+                [consent_id],
+                patient_consent_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
     }
 
     pub fn get_tooth_statuses(
@@ -6199,6 +6579,23 @@ fn clinical_audit_metadata(
     )
 }
 
+fn render_consent_body(template_body: &str, patient: &Patient, actor: &User) -> String {
+    let patient_name = format!("{} {}", patient.first_name, patient.last_name);
+    template_body
+        .replace("{{paziente_nome}}", patient_name.trim())
+        .replace("{{paziente_luogo_nascita}}", "non indicato")
+        .replace("{{paziente_data_nascita}}", patient.date_of_birth.as_str())
+        .replace("{{paziente_cf}}", patient.tax_code.as_str())
+        .replace("{{dottore_nome}}", actor.username.as_str())
+}
+
+fn required_checkbox_count(rendered_body: &str) -> i64 {
+    rendered_body
+        .lines()
+        .filter(|line| line.trim_start().starts_with("[ ]"))
+        .count() as i64
+}
+
 fn default_database_path() -> PathBuf {
     if let Ok(path) = env::var("VELODENT_DB_PATH") {
         return PathBuf::from(path);
@@ -6284,6 +6681,19 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         "invoice_kind",
         "TEXT NOT NULL DEFAULT 'final' CHECK(invoice_kind IN ('final', 'deposit'))",
     )?;
+    ensure_column(conn, "patient_consents", "template_id", "INTEGER")?;
+    ensure_column(conn, "patient_consents", "template_title", "TEXT")?;
+    ensure_column(conn, "patient_consents", "rendered_text", "TEXT")?;
+    ensure_column(
+        conn,
+        "patient_consents",
+        "checkbox_payload_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(conn, "patient_consents", "signature_sha256_hex", "TEXT")?;
+    ensure_column(conn, "patient_consents", "signed_by_user_id", "INTEGER")?;
+    ensure_column(conn, "patient_consents", "signed_device_id", "INTEGER")?;
+    seed_consent_templates(conn)?;
     migrate_tooth_status_constraint(conn)?;
     migrate_sync_jobs_status_constraint(conn)?;
     conn.execute(
@@ -6291,8 +6701,46 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "calendar_sync_job_hardening"],
+        params![CURRENT_SCHEMA_VERSION, "digital_consent_signatures"],
     )?;
+    Ok(())
+}
+
+fn seed_consent_templates(conn: &Connection) -> DbResult<()> {
+    let templates = [
+        (
+            "gdpr_2026",
+            "Informativa sul trattamento dei dati personali (GDPR 2026)",
+            r#"Il sottoscritto {{paziente_nome}}, nato a {{paziente_luogo_nascita}} il {{paziente_data_nascita}}, CF {{paziente_cf}}, dichiara di aver ricevuto l'informativa ai sensi dell'art. 13 del GDPR.
+Finalità: I dati personali e sanitari (anamnesi, radiografie, foto) sono raccolti per finalità di diagnosi, cura odontoiatrica e gestione fiscale tramite il software VeloDent.
+Sicurezza: Il trattamento avviene con archiviazione locale cifrata su sistemi protetti all'interno dello studio. I dati non sono diffusi a terzi salvo obblighi di legge.
+Diritti: Ho il diritto di richiedere l'accesso, la rettifica o la cancellazione dei dati.
+[ ] Acconsento al trattamento dei dati sanitari per finalità di cura.
+[ ] Acconsento all'invio di promemoria appuntamenti (SMS/WhatsApp)."#,
+        ),
+        (
+            "treatment_plan_2026",
+            "Consenso Informato al Piano di Trattamento (2026)",
+            r#"Il sottoscritto {{paziente_nome}}, in relazione al piano di cura proposto dal Dott. {{dottore_nome}}, dichiara quanto segue:
+Sono stato informato in modo chiaro sulla mia situazione clinica e sui trattamenti proposti.
+Comprendo i rischi connessi alle terapie (anestesia, chirurgia, protesi) e le possibili complicanze.
+Mi impegno a seguire le prescrizioni post-operatorie e l'igiene domiciliare.
+Confermo di aver preso visione del preventivo economico.
+Sono consapevole di poter revocare il consenso in qualsiasi momento.
+Autorizzo l'esecuzione delle cure descritte nel mio diario clinico."#,
+        ),
+    ];
+
+    for (template_key, title, body) in templates {
+        conn.execute(
+            r#"
+            INSERT OR IGNORE INTO consent_templates (template_key, title, body)
+            VALUES (?1, ?2, ?3)
+            "#,
+            params![template_key, title, body],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -6538,6 +6986,37 @@ fn clinical_service_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Clinic
         base_price_cents: row.get(4)?,
         sort_order: row.get(5)?,
         active: active == 1,
+    })
+}
+
+fn consent_template_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConsentTemplate> {
+    let active: i64 = row.get(4)?;
+
+    Ok(ConsentTemplate {
+        id: row.get(0)?,
+        template_key: row.get(1)?,
+        title: row.get(2)?,
+        body: row.get(3)?,
+        active: active == 1,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+fn patient_consent_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PatientConsent> {
+    Ok(PatientConsent {
+        id: row.get(0)?,
+        patient_id: row.get(1)?,
+        template_id: row.get(2)?,
+        template_title: row.get(3)?,
+        consent_type: row.get(4)?,
+        file_asset_id: row.get(5)?,
+        relative_path: row.get(6)?,
+        signed_at: row.get(7)?,
+        signed_by_user_id: row.get(8)?,
+        signed_device_id: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
     })
 }
 
@@ -7104,16 +7583,36 @@ CREATE TABLE IF NOT EXISTS file_assets (
     FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS consent_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_key TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 CREATE TABLE IF NOT EXISTS patient_consents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     patient_id INTEGER NOT NULL,
+    template_id INTEGER,
+    template_title TEXT,
     consent_type TEXT NOT NULL,
     file_asset_id INTEGER,
+    rendered_text TEXT,
+    checkbox_payload_json TEXT NOT NULL DEFAULT '[]',
+    signature_sha256_hex TEXT,
+    signed_by_user_id INTEGER,
+    signed_device_id INTEGER,
     signed_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
-    FOREIGN KEY (file_asset_id) REFERENCES file_assets(id) ON DELETE SET NULL
+    FOREIGN KEY (template_id) REFERENCES consent_templates(id) ON DELETE SET NULL,
+    FOREIGN KEY (file_asset_id) REFERENCES file_assets(id) ON DELETE SET NULL,
+    FOREIGN KEY (signed_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (signed_device_id) REFERENCES authorized_devices(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS rx_assets (
@@ -7294,6 +7793,7 @@ CREATE INDEX IF NOT EXISTS idx_clinical_records_tooth ON clinical_records(patien
 CREATE INDEX IF NOT EXISTS idx_clinical_records_quote_ready ON clinical_records(ready_for_quote, status);
 CREATE INDEX IF NOT EXISTS idx_clinical_tooth_statuses_patient ON clinical_tooth_statuses(patient_id);
 CREATE INDEX IF NOT EXISTS idx_rx_assets_patient ON rx_assets(patient_id);
+CREATE INDEX IF NOT EXISTS idx_patient_consents_patient ON patient_consents(patient_id);
 CREATE INDEX IF NOT EXISTS idx_quotes_patient ON quotes(patient_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_patient ON invoices(patient_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_year_number ON invoices(invoice_year, invoice_number);
@@ -7368,6 +7868,75 @@ mod tests {
             .get_patient(patient_id)
             .expect("get patient after reopen")
             .is_some());
+    }
+
+    #[test]
+    fn consent_templates_render_and_signed_consent_is_audited() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Mario",
+                    last_name: "Rossi",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-08-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+
+        let templates = db.list_consent_templates(admin.id).expect("list templates");
+        assert!(templates.len() >= 2);
+        let gdpr = templates
+            .iter()
+            .find(|template| template.template_key == "gdpr_2026")
+            .expect("gdpr template");
+        let rendered = db
+            .render_consent_template(admin.id, patient.id, gdpr.id)
+            .expect("render template");
+        assert!(rendered.rendered_body.contains("Mario Rossi"));
+        assert_eq!(rendered.required_checkbox_count, 2);
+
+        let consent = db
+            .register_signed_consent(
+                admin.id,
+                None,
+                patient.id,
+                gdpr,
+                &rendered.rendered_body,
+                "[true,true]",
+                "signature_hash",
+                "patients/1/documents/consenso-test.pdf",
+                "application/pdf",
+                "pdf_hash",
+                128,
+            )
+            .expect("register signed consent");
+        assert_eq!(consent.patient_id, patient.id);
+        assert_eq!(consent.template_id, Some(gdpr.id));
+        assert_eq!(
+            db.list_patient_consents(admin.id, patient.id)
+                .expect("list consents")
+                .len(),
+            1
+        );
+
+        let audit_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE action = 'CONSENT_SIGNED' AND patient_id = ?1",
+                [patient.id],
+                |row| row.get(0),
+            )
+            .expect("audit count");
+        assert_eq!(audit_count, 1);
     }
 
     #[test]

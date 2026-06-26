@@ -3,14 +3,15 @@ use crate::{
     auth::Role,
     billing::{self, FinancialPdf, PdfLine, PdfParty},
     clinical::{self, BridgeUnits},
+    consents::{self, ConsentPdf},
     db::{
         AgendaBlock, Appointment, AppointmentInput, AuthSession, AuthorizedDevice,
         AuthorizedGoogleAccount, BootstrapStatus, ChairConfig, ClinicalRecord,
-        ClinicalRecordFilters, ClinicalService, CreateUserInput, DatabaseStatus,
+        ClinicalRecordFilters, ClinicalService, ConsentTemplate, CreateUserInput, DatabaseStatus,
         DeviceAuthorization, GeneratedDocument, GoogleCalendarAccount, GoogleCalendarSyncStatus,
         Invoice, LicenseStatus, NewAgendaBlock, NewClinicalRecord, NewPatient, NewRxAsset, Patient,
-        PatientTimelineEvent, Payment, Quote, RxAsset, StudioSettings, StudioSettingsUpdate,
-        ToothStatus, User,
+        PatientConsent, PatientTimelineEvent, Payment, Quote, RenderedConsent, RxAsset,
+        StudioSettings, StudioSettingsUpdate, ToothStatus, User,
     },
     dicom_meta, files,
     integrations::{
@@ -24,13 +25,14 @@ use crate::{
 };
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs,
     io::{Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, State};
 
@@ -196,6 +198,31 @@ pub struct UpdatePatientRequest {
 pub struct PatientIdRequest {
     session_token: String,
     patient_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConsentTemplateUpdateRequest {
+    session_token: String,
+    template_id: i64,
+    title: String,
+    body: String,
+    active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenderConsentRequest {
+    session_token: String,
+    patient_id: i64,
+    template_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SignConsentRequest {
+    session_token: String,
+    patient_id: i64,
+    template_id: i64,
+    checkbox_confirmations: Vec<bool>,
+    signature_data_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1239,6 +1266,165 @@ pub fn patient_timeline(
         .database()?
         .patient_timeline(actor.id, request.patient_id)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn list_consent_templates(
+    state: State<'_, AppState>,
+    request: ActorRequest,
+) -> Result<Vec<ConsentTemplate>, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .list_consent_templates(actor.id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn update_consent_template(
+    state: State<'_, AppState>,
+    request: ConsentTemplateUpdateRequest,
+) -> Result<ConsentTemplate, String> {
+    let actor = require_admin_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .update_consent_template(
+            actor.id,
+            request.template_id,
+            request.title.trim(),
+            request.body.trim(),
+            request.active,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn render_consent_template(
+    state: State<'_, AppState>,
+    request: RenderConsentRequest,
+) -> Result<RenderedConsent, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .render_consent_template(actor.id, request.patient_id, request.template_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn sign_patient_consent(
+    state: State<'_, AppState>,
+    request: SignConsentRequest,
+) -> Result<PatientConsent, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    sign_consent_for_actor(
+        state.inner(),
+        actor.id,
+        None,
+        request.patient_id,
+        request.template_id,
+        request.checkbox_confirmations,
+        request.signature_data_url.trim(),
+    )
+}
+
+#[tauri::command]
+pub fn list_patient_consents(
+    state: State<'_, AppState>,
+    request: PatientIdRequest,
+) -> Result<Vec<PatientConsent>, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .list_patient_consents(actor.id, request.patient_id)
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn sign_consent_for_actor(
+    state: &AppState,
+    actor_user_id: i64,
+    signed_device_id: Option<i64>,
+    patient_id: i64,
+    template_id: i64,
+    checkbox_confirmations: Vec<bool>,
+    signature_data_url: &str,
+) -> Result<PatientConsent, String> {
+    let database = state.database()?;
+    let rendered = database
+        .render_consent_template(actor_user_id, patient_id, template_id)
+        .map_err(|error| error.to_string())?;
+    let required_count = usize::try_from(rendered.required_checkbox_count)
+        .map_err(|_| "invalid required checkbox count".to_owned())?;
+    if checkbox_confirmations.len() < required_count
+        || checkbox_confirmations
+            .iter()
+            .take(required_count)
+            .any(|checked| !checked)
+    {
+        return Err("required consent checkboxes are missing".to_owned());
+    }
+    let signature_png = decode_signature_png(signature_data_url)?;
+    let signature_sha256_hex = sha256_hex(&signature_png);
+    let signed_at = current_unix_timestamp_string()?;
+    let patient = database
+        .get_patient(patient_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "patient not found".to_owned())?;
+    let patient_name = format!("{} {}", patient.first_name, patient.last_name);
+    let pdf_bytes = consents::render_consent_pdf(&ConsentPdf {
+        title: &rendered.template.title,
+        patient_name: patient_name.trim(),
+        signed_at: &signed_at,
+        body: &rendered.rendered_body,
+        signature_png: &signature_png,
+    })?;
+    let stored = files::store_patient_document_bytes(
+        patient_id,
+        "consent",
+        &format!("consenso-{}-{}", rendered.template.template_key, patient_id),
+        &pdf_bytes,
+    )?;
+    database
+        .register_signed_consent(
+            actor_user_id,
+            signed_device_id,
+            patient_id,
+            &rendered.template,
+            &rendered.rendered_body,
+            &serde_json::to_string(&checkbox_confirmations).map_err(|error| error.to_string())?,
+            &signature_sha256_hex,
+            &stored.relative_path,
+            &stored.mime_type,
+            &stored.sha256_hex,
+            stored.size_bytes,
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn decode_signature_png(signature_data_url: &str) -> Result<Vec<u8>, String> {
+    let payload = signature_data_url
+        .strip_prefix("data:image/png;base64,")
+        .ok_or_else(|| "signature must be a PNG data URL".to_owned())?;
+    let bytes = general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() < 16 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("signature PNG is invalid".to_owned());
+    }
+    Ok(bytes)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+fn current_unix_timestamp_string() -> Result<String, String> {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    Ok(format!("{seconds}"))
 }
 
 #[tauri::command]

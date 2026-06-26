@@ -6,6 +6,7 @@ import { Input } from "@/frontend/shared/ui/input";
 import { useL10n, type L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
 import { ClinicalPanel } from "@/frontend/clinical/ClinicalPanel";
+import { listPatientConsents, type PatientConsent } from "@/frontend/consents/consentsApi";
 import {
   createDepositInvoice,
   createInvoiceFromQuote,
@@ -429,7 +430,7 @@ function PatientTabPanel({ currentUser, patient, tab }: { currentUser: User | nu
   }
 
   if (tab === "documents") {
-    return <EmptyTab icon={<FileText aria-hidden="true" className="h-5 w-5" />} text={t("patientsDocumentsEmpty")} />;
+    return <PatientConsentsPanel currentUser={currentUser} patient={patient} />;
   }
 
   return <BillingPanel currentUser={currentUser} patient={patient} />;
@@ -792,6 +793,58 @@ function EmptyTab({ icon, text }: { icon: ReactNode; text: string }) {
     <div className="flex items-center gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-4 text-sm text-alabaster-grey-500">
       <span className="text-powder-blue-500">{icon}</span>
       {text}
+    </div>
+  );
+}
+
+function PatientConsentsPanel({ currentUser, patient }: { currentUser: User | null; patient: Patient }) {
+  const { t } = useL10n();
+  const [consents, setConsents] = useState<PatientConsent[]>([]);
+  const [statusMessage, setStatusMessage] = useState("");
+
+  useEffect(() => {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("patientsLoginRequired"));
+      return;
+    }
+    void listPatientConsents(currentUser.session_token, patient.id)
+      .then((nextConsents) => {
+        setConsents(nextConsents);
+        setStatusMessage("");
+      })
+      .catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")));
+  }, [currentUser?.session_token, patient.id, t]);
+
+  if (statusMessage) {
+    return <EmptyTab icon={<FileText aria-hidden="true" className="h-5 w-5" />} text={statusMessage} />;
+  }
+
+  if (consents.length === 0) {
+    return <EmptyTab icon={<FileText aria-hidden="true" className="h-5 w-5" />} text={t("patientsConsentsEmpty")} />;
+  }
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex items-center justify-between rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 px-3 py-2">
+        <span className="text-sm font-semibold text-white">{t("patientsConsentsTitle")}</span>
+        <Badge variant="success">{String(consents.length)}</Badge>
+      </div>
+      {consents.map((consent) => (
+        <div key={consent.id} className="grid gap-2 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 md:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-white">{consent.template_title}</p>
+            <p className="mt-1 font-mono text-[11px] text-alabaster-grey-500">
+              {t("patientsConsentSignedAt")}: {consent.signed_at ?? consent.created_at}
+            </p>
+            {consent.relative_path ? (
+              <p className="mt-1 truncate font-mono text-[11px] text-powder-blue-500">
+                {t("patientsConsentFile")}: {consent.relative_path}
+              </p>
+            ) : null}
+          </div>
+          <Badge variant="default">{consent.consent_type}</Badge>
+        </div>
+      ))}
     </div>
   );
 }

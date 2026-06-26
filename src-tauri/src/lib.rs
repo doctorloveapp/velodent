@@ -4,6 +4,7 @@ mod auth;
 mod billing;
 mod clinical;
 mod commands;
+mod consents;
 mod db;
 mod dicom_meta;
 mod files;
@@ -110,7 +111,12 @@ pub fn run() {
             commands::mock_acquire_rx,
             commands::list_rx_assets,
             commands::rx_asset_data_url,
-            commands::delete_rx_asset
+            commands::delete_rx_asset,
+            commands::list_consent_templates,
+            commands::update_consent_template,
+            commands::render_consent_template,
+            commands::sign_patient_consent,
+            commands::list_patient_consents
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VeloDent");
