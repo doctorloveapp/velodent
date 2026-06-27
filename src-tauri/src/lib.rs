@@ -48,6 +48,8 @@ pub fn run() {
             commands::activate_license,
             commands::create_encrypted_backup,
             commands::restore_encrypted_backup,
+            commands::pick_backup_file,
+            commands::restore_onboarding_backup,
             commands::database_status,
             commands::upsert_test_patient,
             commands::search_patients,

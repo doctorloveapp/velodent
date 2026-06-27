@@ -6,10 +6,11 @@ import { Input } from "@/frontend/shared/ui/input";
 import type { User } from "@/frontend/settings/settingsApi";
 import {
   clearStoredLanDeviceToken,
-  LanRequestError,
+  isLanTokenRejected,
   lanCurrentUser,
   lanHealth,
   pairLanDevice,
+  restoreLanCurrentUser,
   storedLanDeviceToken
 } from "./lanBridgeApi";
 
@@ -57,8 +58,7 @@ export function MobilePairingGate({ onPaired }: MobilePairingGateProps) {
         });
       return;
     }
-    void lanHealth()
-      .then(() => lanCurrentUser(token))
+    void restoreLanCurrentUser(token)
       .then((user) => {
         if (mounted) {
           if (pairingPin) {
@@ -69,11 +69,11 @@ export function MobilePairingGate({ onPaired }: MobilePairingGateProps) {
         }
       })
       .catch((error: unknown) => {
-        if (error instanceof LanRequestError && (error.status === 401 || error.status === 403)) {
+        if (isLanTokenRejected(error)) {
           clearStoredLanDeviceToken();
         }
         if (mounted) {
-          setStatusMessage(t("mobilePairingStoredTokenInvalid"));
+          setStatusMessage(isLanTokenRejected(error) ? t("mobilePairingStoredTokenInvalid") : t("mobilePairingBridgeUnavailable"));
         }
       })
       .finally(() => {

@@ -110,6 +110,12 @@ pub struct RestoreEncryptedBackupRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RestoreOnboardingBackupRequest {
+    admin_password: String,
+    backup_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateFirstAdminRequest {
     username: String,
     password: String,
@@ -662,6 +668,47 @@ pub fn restore_encrypted_backup(
     request: RestoreEncryptedBackupRequest,
 ) -> Result<LicenseStatus, String> {
     let _actor = require_admin_session(&state, &request.session_token)?;
+    let backup_path = match request.backup_path {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path.trim()),
+        _ => rfd::FileDialog::new()
+            .add_filter("VeloDent Backup", &["vdbk"])
+            .pick_file()
+            .ok_or_else(|| "restore annullato".to_owned())?,
+    };
+    let decrypted = backup::decrypt_backup_to_temp(&backup_path, &request.admin_password)?;
+    let database = state.database()?;
+    database
+        .restore_database_from_file(&decrypted.database_path)
+        .map_err(|error| error.to_string())?;
+    backup::replace_patients_folder_from_backup(&decrypted.patients_path)?;
+    let _ = fs::remove_dir_all(&decrypted.root);
+    database
+        .license_status()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn pick_backup_file(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    require_license(&state)?;
+    Ok(rfd::FileDialog::new()
+        .add_filter("VeloDent Backup", &["vdbk"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub fn restore_onboarding_backup(
+    state: State<'_, AppState>,
+    request: RestoreOnboardingBackupRequest,
+) -> Result<LicenseStatus, String> {
+    require_license(&state)?;
+    let bootstrap = state
+        .database()?
+        .bootstrap_status()
+        .map_err(|error| error.to_string())?;
+    if !bootstrap.needs_first_admin {
+        return Err("restore onboarding consentito solo prima della configurazione iniziale".to_owned());
+    }
     let backup_path = match request.backup_path {
         Some(path) if !path.trim().is_empty() => PathBuf::from(path.trim()),
         _ => rfd::FileDialog::new()

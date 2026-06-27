@@ -1663,7 +1663,7 @@ impl Database {
 
         let (allowed_lan_cidr, user) = row;
         if let Some(cidr) = allowed_lan_cidr.as_deref() {
-            if !ipv4_cidr_contains(cidr, remote_ip) {
+            if !ipv4_cidr_contains(cidr, remote_ip) && !ipv4_is_private_or_link_local(remote_ip) {
                 return Err(DbError::Forbidden);
             }
         }
@@ -1725,7 +1725,7 @@ impl Database {
 
         let (device_id, allowed_lan_cidr, user) = row;
         if let Some(cidr) = allowed_lan_cidr.as_deref() {
-            if !ipv4_cidr_contains(cidr, remote_ip) {
+            if !ipv4_cidr_contains(cidr, remote_ip) && !ipv4_is_private_or_link_local(remote_ip) {
                 return Err(DbError::Forbidden);
             }
         }
@@ -6794,6 +6794,18 @@ fn ipv4_cidr_contains(cidr: &str, ip: &str) -> bool {
     (network & mask) == (ip & mask)
 }
 
+fn ipv4_is_private_or_link_local(ip: &str) -> bool {
+    let Some(ip) = ipv4_to_u32(ip.trim()) else {
+        return false;
+    };
+    let octets = ip.to_be_bytes();
+    octets[0] == 10
+        || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+        || (octets[0] == 192 && octets[1] == 168)
+        || (octets[0] == 169 && octets[1] == 254)
+        || octets[0] == 127
+}
+
 fn ipv4_to_u32(value: &str) -> Option<u32> {
     let mut result = 0_u32;
     let mut count = 0_u8;
@@ -8441,6 +8453,15 @@ mod tests {
             Some("migration_activation_required")
         );
         assert!(status.request_code.starts_with(&status.hardware_id));
+    }
+
+    #[test]
+    fn authorized_mobile_token_survives_private_lan_subnet_change() {
+        assert!(ipv4_cidr_contains("192.168.1.0/24", "192.168.1.44"));
+        assert!(!ipv4_cidr_contains("192.168.1.0/24", "192.168.2.44"));
+        assert!(ipv4_is_private_or_link_local("192.168.2.44"));
+        assert!(ipv4_is_private_or_link_local("10.0.0.8"));
+        assert!(!ipv4_is_private_or_link_local("8.8.8.8"));
     }
 
     #[test]

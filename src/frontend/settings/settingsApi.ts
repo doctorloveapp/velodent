@@ -144,6 +144,16 @@ export async function restoreEncryptedBackup(session_token: string, admin_passwo
   });
 }
 
+export async function pickBackupFile() {
+  return invoke<string | null>("pick_backup_file");
+}
+
+export async function restoreOnboardingBackup(admin_password: string, backup_path?: string) {
+  return invoke<LicenseStatus>("restore_onboarding_backup", {
+    request: { admin_password, backup_path }
+  });
+}
+
 export async function createFirstAdmin(request: {
   username: string;
   password: string;

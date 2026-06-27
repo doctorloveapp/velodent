@@ -648,7 +648,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
                       {t("settingsMobileLanUrl")}
                     </p>
                     <p className="mt-2 text-xs leading-5 text-emerald-100">{t("settingsPairingQrHelp")}</p>
-                    <p className="mt-2 break-all font-mono text-sm text-white">{pairingCode.public_url}</p>
+                    <p className="mt-2 break-all font-mono text-sm text-white">{displayPairingUrl(pairingCode.public_url)}</p>
                   </div>
                 </div>
               ) : null}
@@ -677,6 +677,18 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       </SettingsSurface>
     </div>
   );
+}
+
+function displayPairingUrl(publicUrl: string | null) {
+  if (!publicUrl) {
+    return "";
+  }
+  try {
+    const url = new URL(publicUrl);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "http://velodent.local:1420";
+  }
 }
 
 function SettingsSurface({ children, eyebrow, icon, title }: { children: React.ReactNode; eyebrow: string; icon: React.ReactNode; title: string }) {

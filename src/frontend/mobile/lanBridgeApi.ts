@@ -25,10 +25,12 @@ interface LanUser {
 }
 
 export class LanRequestError extends Error {
+  readonly detail: string;
   readonly status: number;
 
-  constructor(status: number) {
-    super(`LAN request failed: ${String(status)}`);
+  constructor(status: number, detail: string) {
+    super(detail ? `LAN request failed: ${String(status)} ${detail}` : `LAN request failed: ${String(status)}`);
+    this.detail = detail;
     this.status = status;
   }
 }
@@ -56,6 +58,18 @@ export function storedLanDeviceToken() {
 
 export function clearStoredLanDeviceToken() {
   window.localStorage.removeItem(LAN_TOKEN_STORAGE_KEY);
+}
+
+export function isLanTokenRejected(error: unknown) {
+  if (!(error instanceof LanRequestError)) {
+    return false;
+  }
+  const detail = error.detail.toLowerCase();
+  return error.status === 401 || (
+    error.status === 403
+    && !detail.includes("lan only")
+    && !detail.includes("outside authorized lan")
+  );
 }
 
 export function storedLanDeviceUid() {
@@ -103,6 +117,23 @@ export async function lanCurrentUser(deviceToken: string): Promise<User> {
   };
 }
 
+export async function restoreLanCurrentUser(deviceToken: string, attempts = 4): Promise<User> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await lanHealth();
+      return await lanCurrentUser(deviceToken);
+    } catch (error) {
+      lastError = error;
+      if (isLanTokenRejected(error) || attempt === attempts - 1) {
+        break;
+      }
+      await delay(300 * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("LAN bridge unavailable");
+}
+
 export async function lanFetch<T>(path: string, sessionOrDeviceToken: string, init?: RequestInit): Promise<T> {
   const deviceToken = fromLanSessionToken(sessionOrDeviceToken);
   const headers = new Headers(init?.headers);
@@ -112,7 +143,20 @@ export async function lanFetch<T>(path: string, sessionOrDeviceToken: string, in
     headers
   });
   if (!response.ok) {
-    throw new LanRequestError(response.status);
+    throw new LanRequestError(response.status, await responseErrorDetail(response));
   }
   return (await response.json()) as T;
+}
+
+async function responseErrorDetail(response: Response) {
+  try {
+    const payload = (await response.clone().json()) as { error?: string };
+    return payload.error ?? "";
+  } catch {
+    return response.statusText;
+  }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

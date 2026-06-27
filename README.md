@@ -166,6 +166,36 @@ Il workflow economico core e' backend-trusted:
 
 Ogni creazione/modifica economica registra `FINANCIAL_TRANSACTION` in `audit_log`.
 
+## Gestione Dati: Backup e Ripristino
+
+VeloDent permette di creare un archivio cifrato completo dei dati dello studio. Il backup include il database locale e i file clinici collegati ai pazienti, come documenti, consensi, fatture, RX e foto.
+
+### Creare un backup
+
+1. Accedere all'app desktop come amministratore.
+2. Aprire `Impostazioni`.
+3. Nella sezione `Backup cifrato`, inserire la password amministratore corrente.
+4. Premere `Crea backup .vdbk` e scegliere dove salvare il file.
+
+Il file generato usa estensione `.vdbk` ed e' cifrato. La password richiesta per aprirlo e' la password amministratore dello studio valida nel momento in cui il backup viene creato.
+
+### Ripristinare su un nuovo PC
+
+Al primo avvio, se VeloDent non e' ancora configurato, il wizard iniziale mostra due opzioni:
+
+- `Configura un nuovo studio`, per iniziare da zero.
+- `Ripristina dati da backup`, per caricare un archivio `.vdbk`.
+
+Per ripristinare:
+
+1. Selezionare `Ripristina dati da backup`.
+2. Scegliere il file `.vdbk`.
+3. Inserire la password amministratore associata al backup.
+4. Avviare il ripristino.
+5. Al termine, accedere con le credenziali dello studio ripristinato.
+
+Conservare i file `.vdbk` in una posizione protetta. Senza la password amministratore corretta, il contenuto del backup non puo' essere recuperato.
+
 ## Comandi Tauri disponibili
 
 - `health_check`: verifica minima del runtime Tauri.

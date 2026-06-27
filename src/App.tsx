@@ -1,14 +1,15 @@
 import { AppShell } from "@/frontend/app-shell/AppShell";
 import { L10nProvider } from "@/frontend/shared/i18n/L10nProvider";
 import { useEffect, useState, type ReactNode } from "react";
-import { Activity, KeyRound, ShieldCheck } from "lucide-react";
+import { Activity, ArrowLeft, Building2, CalendarCheck, CheckCircle2, KeyRound, RotateCcw, ShieldCheck, UploadCloud } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import { MobileApp } from "@/frontend/mobile/MobileApp";
 import { MobilePairingGate } from "@/frontend/mobile/MobilePairingGate";
 import {
   clearStoredLanDeviceToken,
   isLanSessionToken,
-  lanCurrentUser,
-  lanHealth,
+  isLanTokenRejected,
+  restoreLanCurrentUser,
   storedLanDeviceToken
 } from "@/frontend/mobile/lanBridgeApi";
 import {
@@ -18,6 +19,9 @@ import {
   isTauriRuntime,
   licenseStatus,
   login,
+  pickBackupFile,
+  restoreOnboardingBackup,
+  startGoogleCalendarAccountLink,
   type LicenseStatus,
   type User
 } from "@/frontend/settings/settingsApi";
@@ -47,8 +51,14 @@ function AuthGate() {
   const [statusMessage, setStatusMessage] = useState("");
   const [adminForm, setAdminForm] = useState({
     username: "admin",
-    password: ""
+    password: "",
+    confirmPassword: ""
   });
+  const [onboardingChoice, setOnboardingChoice] = useState<"new" | "restore" | null>(null);
+  const [onboardingStep, setOnboardingStep] = useState<"choice" | "new" | "restore" | "calendar">("choice");
+  const [onboardingUser, setOnboardingUser] = useState<User | null>(null);
+  const [restoreForm, setRestoreForm] = useState({ backupPath: "", password: "" });
+  const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [loginForm, setLoginForm] = useState({ username: "admin", password: "" });
 
   useEffect(() => {
@@ -78,11 +88,12 @@ function AuthGate() {
       return;
     }
     setLanAutoLoginChecking(true);
-    void lanHealth()
-      .then(() => lanCurrentUser(token))
+    void restoreLanCurrentUser(token)
       .then((user) => setCurrentUser(user))
-      .catch(() => {
-        clearStoredLanDeviceToken();
+      .catch((error: unknown) => {
+        if (isLanTokenRejected(error)) {
+          clearStoredLanDeviceToken();
+        }
       })
       .finally(() => setLanAutoLoginChecking(false));
   }, [backendAvailable]);
@@ -115,8 +126,43 @@ function AuthGate() {
       username: adminForm.username,
       password: adminForm.password
     });
-    setCurrentUser(user);
-    setNeedsFirstAdmin(false);
+    setOnboardingUser(user);
+    setOnboardingStep("calendar");
+    setStatusMessage(t("onboardingAdminCreated"));
+  }
+
+  async function handleLinkOnboardingCalendar() {
+    if (!onboardingUser?.session_token) {
+      return;
+    }
+    setOnboardingBusy(true);
+    try {
+      await startGoogleCalendarAccountLink(onboardingUser.session_token);
+      setNeedsFirstAdmin(false);
+      setCurrentUser(onboardingUser);
+      setStatusMessage(t("onboardingCalendarConnected"));
+    } finally {
+      setOnboardingBusy(false);
+    }
+  }
+
+  async function handlePickOnboardingBackup() {
+    const selected = await pickBackupFile();
+    if (selected) {
+      setRestoreForm((current) => ({ ...current, backupPath: selected }));
+    }
+  }
+
+  async function handleRestoreOnboardingBackup() {
+    setOnboardingBusy(true);
+    try {
+      const nextLicense = await restoreOnboardingBackup(restoreForm.password, restoreForm.backupPath);
+      setLicense(nextLicense);
+      setNeedsFirstAdmin(false);
+      setStatusMessage(t("onboardingRestoreCompleted"));
+    } finally {
+      setOnboardingBusy(false);
+    }
   }
 
   async function handleLogin() {
@@ -201,27 +247,31 @@ function AuthGate() {
   }
 
   return needsFirstAdmin ? (
-    <AuthSurface
-      icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
-      title={t("settingsFirstAdminTitle")}
-      eyebrow={t("settingsSecurityEyebrow")}
-    >
-      <form
-        className="grid gap-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void handleCreateFirstAdmin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")));
-        }}
-      >
-        <p className="text-sm leading-6 text-alabaster-grey-500">{t("authGateFirstAdminHelp")}</p>
-        <Input placeholder={t("settingsUsername")} value={adminForm.username} onChange={(event) => setAdminForm({ ...adminForm, username: event.target.value })} />
-        <Input autoFocus placeholder={t("settingsPassword")} type="password" value={adminForm.password} onChange={(event) => setAdminForm({ ...adminForm, password: event.target.value })} />
-        <Button type="submit">
-          {t("settingsCreateFirstAdmin")}
-        </Button>
-        {statusMessage ? <p className="text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
-      </form>
-    </AuthSurface>
+    <OnboardingWizard
+      adminForm={adminForm}
+      busy={onboardingBusy}
+      choice={onboardingChoice}
+      restoreForm={restoreForm}
+      statusMessage={statusMessage}
+      step={onboardingStep}
+      onBack={() => {
+        setStatusMessage("");
+        setOnboardingStep("choice");
+      }}
+      onChoiceChange={setOnboardingChoice}
+      onContinue={() => {
+        if (onboardingChoice) {
+          setStatusMessage("");
+          setOnboardingStep(onboardingChoice);
+        }
+      }}
+      onCreateAdmin={() => void handleCreateFirstAdmin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
+      onLinkCalendar={() => void handleLinkOnboardingCalendar().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
+      onPickBackup={() => void handlePickOnboardingBackup().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
+      onRestore={() => void handleRestoreOnboardingBackup().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
+      onAdminFormChange={setAdminForm}
+      onRestoreFormChange={setRestoreForm}
+    />
   ) : (
     <AuthSurface
       icon={<KeyRound aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
@@ -243,6 +293,254 @@ function AuthGate() {
         {statusMessage ? <p className="text-xs leading-5 text-alabaster-grey-500">{statusMessage}</p> : null}
       </form>
     </AuthSurface>
+  );
+}
+
+interface OnboardingWizardProps {
+  adminForm: { username: string; password: string; confirmPassword: string };
+  busy: boolean;
+  choice: "new" | "restore" | null;
+  restoreForm: { backupPath: string; password: string };
+  statusMessage: string;
+  step: "choice" | "new" | "restore" | "calendar";
+  onAdminFormChange: (form: { username: string; password: string; confirmPassword: string }) => void;
+  onBack: () => void;
+  onChoiceChange: (choice: "new" | "restore") => void;
+  onContinue: () => void;
+  onCreateAdmin: () => void;
+  onLinkCalendar: () => void;
+  onPickBackup: () => void;
+  onRestore: () => void;
+  onRestoreFormChange: (form: { backupPath: string; password: string }) => void;
+}
+
+function OnboardingWizard({
+  adminForm,
+  busy,
+  choice,
+  restoreForm,
+  statusMessage,
+  step,
+  onAdminFormChange,
+  onBack,
+  onChoiceChange,
+  onContinue,
+  onCreateAdmin,
+  onLinkCalendar,
+  onPickBackup,
+  onRestore,
+  onRestoreFormChange
+}: OnboardingWizardProps) {
+  const { t } = useL10n();
+  const passwordsMatch = adminForm.password.length > 0 && adminForm.password === adminForm.confirmPassword;
+  const restoreReady = restoreForm.backupPath.trim().length > 0 && restoreForm.password.length > 0;
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-ink-black-950 p-4 text-ink-black-50 sm:p-6">
+      <section className="flex max-h-[calc(100vh-2rem)] w-full max-w-[820px] flex-col overflow-hidden rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 shadow-[0_24px_80px_rgba(0,0,0,0.42)]">
+        <div className="border-b border-alabaster-grey-500/15 p-5 sm:p-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md border border-powder-blue-500/30 bg-powder-blue-950 text-powder-blue-500">
+              <ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
+            </div>
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("onboardingEyebrow")}</p>
+              <h1 className="text-xl font-semibold text-white">{t("onboardingTitle")}</h1>
+            </div>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
+          <AnimatePresence mode="wait">
+            {step === "choice" ? (
+              <motion.div
+                key="choice"
+                animate={{ opacity: 1, y: 0 }}
+                className="grid gap-4"
+                exit={{ opacity: 0, y: -8 }}
+                initial={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.18 }}
+              >
+                <p className="max-w-2xl text-sm leading-6 text-alabaster-grey-500">{t("onboardingChoiceBody")}</p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <OnboardingChoiceCard
+                    active={choice === "new"}
+                    body={t("onboardingNewStudioBody")}
+                    icon={<Building2 aria-hidden="true" className="h-6 w-6" strokeWidth={1.5} />}
+                    title={t("onboardingNewStudioTitle")}
+                    onClick={() => onChoiceChange("new")}
+                  />
+                  <OnboardingChoiceCard
+                    active={choice === "restore"}
+                    body={t("onboardingRestoreStudioBody")}
+                    icon={<RotateCcw aria-hidden="true" className="h-6 w-6" strokeWidth={1.5} />}
+                    title={t("onboardingRestoreStudioTitle")}
+                    onClick={() => onChoiceChange("restore")}
+                  />
+                </div>
+              </motion.div>
+            ) : null}
+
+            {step === "new" ? (
+              <motion.form
+                key="new"
+                animate={{ opacity: 1, x: 0 }}
+                className="grid gap-4"
+                exit={{ opacity: 0, x: -12 }}
+                initial={{ opacity: 0, x: 12 }}
+                transition={{ duration: 0.18 }}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (passwordsMatch && !busy) {
+                    onCreateAdmin();
+                  }
+                }}
+              >
+                <StepHeader body={t("onboardingNewFormBody")} title={t("onboardingNewFormTitle")} />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    autoFocus
+                    placeholder={t("onboardingNewPassword")}
+                    type="password"
+                    value={adminForm.password}
+                    onChange={(event) => onAdminFormChange({ ...adminForm, password: event.target.value })}
+                  />
+                  <Input
+                    placeholder={t("onboardingConfirmPassword")}
+                    type="password"
+                    value={adminForm.confirmPassword}
+                    onChange={(event) => onAdminFormChange({ ...adminForm, confirmPassword: event.target.value })}
+                  />
+                </div>
+                <Button disabled={!passwordsMatch || busy} type="submit">
+                  <ShieldCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.8} />
+                  {t("onboardingSaveAdmin")}
+                </Button>
+                {adminForm.confirmPassword && !passwordsMatch ? <p className="text-xs text-red-300">{t("onboardingPasswordMismatch")}</p> : null}
+              </motion.form>
+            ) : null}
+
+            {step === "calendar" ? (
+              <motion.div
+                key="calendar"
+                animate={{ opacity: 1, x: 0 }}
+                className="grid gap-4"
+                exit={{ opacity: 0, x: -12 }}
+                initial={{ opacity: 0, x: 12 }}
+                transition={{ duration: 0.18 }}
+              >
+                <StepHeader body={t("onboardingCalendarBody")} title={t("onboardingCalendarTitle")} />
+                <div className="rounded-lg border border-powder-blue-500/25 bg-ink-black-950 p-4">
+                  <div className="flex items-start gap-3">
+                    <CalendarCheck aria-hidden="true" className="mt-1 h-5 w-5 text-powder-blue-500" strokeWidth={1.6} />
+                    <p className="text-sm leading-6 text-alabaster-grey-500">{t("onboardingCalendarRequired")}</p>
+                  </div>
+                </div>
+                <Button disabled={busy} type="button" onClick={onLinkCalendar}>
+                  <CalendarCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.8} />
+                  {busy ? t("onboardingCalendarConnecting") : t("onboardingConnectCalendar")}
+                </Button>
+              </motion.div>
+            ) : null}
+
+            {step === "restore" ? (
+              <motion.form
+                key="restore"
+                animate={{ opacity: 1, x: 0 }}
+                className="grid gap-4"
+                exit={{ opacity: 0, x: -12 }}
+                initial={{ opacity: 0, x: 12 }}
+                transition={{ duration: 0.18 }}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (restoreReady && !busy) {
+                    onRestore();
+                  }
+                }}
+              >
+                <StepHeader body={t("onboardingRestoreFormBody")} title={t("onboardingRestoreFormTitle")} />
+                <button
+                  className="flex min-h-24 items-center justify-between gap-4 rounded-lg border border-dashed border-powder-blue-500/35 bg-ink-black-950 px-4 py-3 text-left transition hover:border-powder-blue-500 hover:bg-powder-blue-950/20"
+                  type="button"
+                  onClick={onPickBackup}
+                >
+                  <span>
+                    <span className="block text-sm font-semibold text-white">{t("onboardingSelectBackup")}</span>
+                    <span className="mt-1 block break-all text-xs leading-5 text-alabaster-grey-500">
+                      {restoreForm.backupPath || t("onboardingNoBackupSelected")}
+                    </span>
+                  </span>
+                  <UploadCloud aria-hidden="true" className="h-5 w-5 shrink-0 text-powder-blue-500" strokeWidth={1.6} />
+                </button>
+                <Input
+                  placeholder={t("onboardingBackupPassword")}
+                  type="password"
+                  value={restoreForm.password}
+                  onChange={(event) => onRestoreFormChange({ ...restoreForm, password: event.target.value })}
+                />
+                <Button disabled={!restoreReady || busy} type="submit">
+                  <RotateCcw aria-hidden="true" className="h-4 w-4" strokeWidth={1.8} />
+                  {busy ? t("onboardingRestoring") : t("onboardingStartRestore")}
+                </Button>
+              </motion.form>
+            ) : null}
+          </AnimatePresence>
+          {statusMessage ? <p className="mt-4 rounded-md border border-alabaster-grey-500/15 bg-ink-black-950 p-3 text-xs leading-5 text-alabaster-grey-500">{statusMessage}</p> : null}
+        </div>
+
+        <div className="sticky bottom-0 flex items-center justify-between gap-3 border-t border-alabaster-grey-500/15 bg-glaucous-950/95 p-4 backdrop-blur">
+          {step === "choice" ? (
+            <span className="text-xs text-alabaster-grey-500">{t("onboardingSelectRequired")}</span>
+          ) : (
+            <Button disabled={busy || step === "calendar"} type="button" variant="ghost" onClick={onBack}>
+              <ArrowLeft aria-hidden="true" className="h-4 w-4" strokeWidth={1.8} />
+              {t("onboardingBack")}
+            </Button>
+          )}
+          {step === "choice" ? (
+            <Button disabled={!choice} type="button" onClick={onContinue}>
+              {t("onboardingContinue")}
+            </Button>
+          ) : step === "calendar" ? (
+            <span className="inline-flex items-center gap-2 rounded-md border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-200">
+              <CheckCircle2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.8} />
+              {t("onboardingAdminReady")}
+            </span>
+          ) : null}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function OnboardingChoiceCard({ active, body, icon, title, onClick }: { active: boolean; body: string; icon: ReactNode; title: string; onClick: () => void }) {
+  return (
+    <motion.button
+      animate={{ scale: active ? 1.01 : 1 }}
+      className={`min-h-48 rounded-xl border p-5 text-left transition ${
+        active
+          ? "border-powder-blue-500 bg-powder-blue-950/35 shadow-[0_0_0_1px_rgba(147,197,253,0.25),0_0_28px_rgba(59,130,246,0.22)]"
+          : "border-alabaster-grey-500/20 bg-ink-black-950 hover:border-powder-blue-500/55 hover:bg-powder-blue-950/15"
+      }`}
+      type="button"
+      whileTap={{ scale: 0.985 }}
+      onClick={onClick}
+    >
+      <span className="mb-5 flex h-12 w-12 items-center justify-center rounded-lg border border-powder-blue-500/25 bg-glaucous-950 text-powder-blue-500">
+        {icon}
+      </span>
+      <span className="block text-lg font-semibold text-white">{title}</span>
+      <span className="mt-3 block text-sm leading-6 text-alabaster-grey-500">{body}</span>
+    </motion.button>
+  );
+}
+
+function StepHeader({ body, title }: { body: string; title: string }) {
+  return (
+    <div>
+      <h2 className="text-lg font-semibold text-white">{title}</h2>
+      <p className="mt-2 max-w-2xl text-sm leading-6 text-alabaster-grey-500">{body}</p>
+    </div>
   );
 }
 
