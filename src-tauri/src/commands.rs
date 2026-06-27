@@ -1,6 +1,7 @@
 use crate::{
     agenda,
     auth::Role,
+    backup::{self, BackupResult},
     billing::{self, FinancialPdf, PdfLine, PdfParty},
     clinical::{self, BridgeUnits},
     consents::{self, ConsentPdf},
@@ -90,7 +91,22 @@ pub struct SearchPatientsRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct ActivateLicenseRequest {
+    email: Option<String>,
     activation_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateEncryptedBackupRequest {
+    session_token: String,
+    admin_password: String,
+    destination_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreEncryptedBackupRequest {
+    session_token: String,
+    admin_password: String,
+    backup_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -599,9 +615,69 @@ pub fn activate_license(
     state: State<'_, AppState>,
     request: ActivateLicenseRequest,
 ) -> Result<LicenseStatus, String> {
+    let _activation_email = request.email.as_deref().map(str::trim);
     state
         .database()?
         .activate_license(request.activation_key.trim())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn create_encrypted_backup(
+    state: State<'_, AppState>,
+    request: CreateEncryptedBackupRequest,
+) -> Result<BackupResult, String> {
+    let _actor = require_admin_session(&state, &request.session_token)?;
+    let destination = match request.destination_path {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path.trim()),
+        _ => rfd::FileDialog::new()
+            .add_filter("VeloDent Backup", &["vdbk"])
+            .set_file_name(default_backup_filename()?)
+            .save_file()
+            .ok_or_else(|| "backup annullato".to_owned())?,
+    };
+    let database = state.database()?;
+    match backup::create_encrypted_backup(&database, &request.admin_password, &destination) {
+        Ok(result) => {
+            database
+                .register_backup_run(&result.backup_path, "completed", Some(&result.sha256_hex), None)
+                .map_err(|error| error.to_string())?;
+            Ok(result)
+        }
+        Err(error) => {
+            let _ = database.register_backup_run(
+                &destination.to_string_lossy(),
+                "failed",
+                None,
+                Some(&error),
+            );
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn restore_encrypted_backup(
+    state: State<'_, AppState>,
+    request: RestoreEncryptedBackupRequest,
+) -> Result<LicenseStatus, String> {
+    let _actor = require_admin_session(&state, &request.session_token)?;
+    let backup_path = match request.backup_path {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path.trim()),
+        _ => rfd::FileDialog::new()
+            .add_filter("VeloDent Backup", &["vdbk"])
+            .pick_file()
+            .ok_or_else(|| "restore annullato".to_owned())?,
+    };
+    let decrypted = backup::decrypt_backup_to_temp(&backup_path, &request.admin_password)?;
+    let database = state.database()?;
+    database
+        .restore_database_from_file(&decrypted.database_path)
+        .map_err(|error| error.to_string())?;
+    backup::replace_patients_folder_from_backup(&decrypted.patients_path)?;
+    let _ = fs::remove_dir_all(&decrypted.root);
+    database
+        .license_status()
         .map_err(|error| error.to_string())
 }
 
@@ -1547,6 +1623,14 @@ fn civil_date_from_unix_days(days_since_epoch: i64) -> (i32, u32, u32) {
     let month = mp + if mp < 10 { 3 } else { -9 };
     let year = y + i64::from(month <= 2);
     (year as i32, month as u32, day as u32)
+}
+
+fn default_backup_filename() -> Result<String, String> {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    Ok(format!("velodent-backup-{seconds}.vdbk"))
 }
 
 #[tauri::command]

@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 13;
+const CURRENT_SCHEMA_VERSION: i64 = 14;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -113,7 +113,7 @@ impl EncryptionKey {
         }
     }
 
-    fn value(&self) -> &str {
+    pub(crate) fn value(&self) -> &str {
         &self.value
     }
 
@@ -145,6 +145,7 @@ fn allow_insecure_development_key() -> bool {
 pub struct Database {
     conn: Connection,
     path: PathBuf,
+    encryption_key_value: String,
     key_source: KeySource,
     uses_development_key: bool,
 }
@@ -585,9 +586,16 @@ pub struct PatientConsent {
 #[derive(Debug, Clone, Serialize)]
 pub struct LicenseStatus {
     pub hardware_id: String,
+    pub request_code: String,
+    pub allowed: bool,
     pub activated: bool,
+    pub trial_active: bool,
+    pub blocked: bool,
+    pub block_reason: Option<String>,
+    pub migration_count: i64,
     pub email: Option<String>,
     pub activated_at: Option<String>,
+    pub trial_expires_at: Option<String>,
 }
 
 impl Database {
@@ -606,10 +614,12 @@ impl Database {
         configure_encryption(&conn, key.value())?;
         configure_connection(&conn)?;
         run_migrations(&conn)?;
+        initialize_system_integrity(&conn)?;
 
         Ok(Self {
             conn,
             path,
+            encryption_key_value: key.value().to_owned(),
             key_source: key.source(),
             uses_development_key: key.uses_development_fallback(),
         })
@@ -649,6 +659,20 @@ impl Database {
 
     pub fn license_status(&self) -> DbResult<LicenseStatus> {
         let hardware_id = license::hardware_id();
+        self.sync_hardware_integrity(&hardware_id)?;
+        let migration_count = self.system_integrity_i64("migration_count")?.unwrap_or(0);
+        let request_code = license::request_code(&hardware_id, migration_count);
+        let clock_rollback = self.clock_rollback_detected()?;
+        let oldest_date = self.oldest_license_anchor_date()?;
+        let trial_expires_at = oldest_date
+            .as_deref()
+            .map(|date| self.plus_days(date, 60))
+            .transpose()?;
+        let trial_active = trial_expires_at
+            .as_deref()
+            .map(|expires_at| self.timestamp_not_past(expires_at))
+            .transpose()?
+            .unwrap_or(true);
         let row = self
             .conn
             .query_row(
@@ -668,21 +692,46 @@ impl Database {
             )
             .optional()?;
 
-        let Some((activation_key, email, activated_at)) = row else {
-            return Ok(LicenseStatus {
-                hardware_id,
-                activated: false,
-                email: None,
-                activated_at: None,
-            });
+        let (activated, email, activated_at) = if let Some((activation_key, email, activated_at)) =
+            row
+        {
+            let activated = license::verify_activation_key(&activation_key, &hardware_id).is_ok();
+            (
+                activated,
+                activated.then_some(email),
+                activated.then_some(activated_at),
+            )
+        } else {
+            (false, None, None)
         };
 
-        let activated = license::verify_activation_key(&activation_key, &hardware_id).is_ok();
+        let block_reason = if clock_rollback {
+            Some("clock_anomaly".to_owned())
+        } else if !activated && migration_count > 0 {
+            Some("migration_activation_required".to_owned())
+        } else if !activated && !trial_active {
+            Some("trial_expired".to_owned())
+        } else {
+            None
+        };
+        let blocked = block_reason.is_some();
+        let allowed = !blocked && (activated || trial_active);
+        if allowed {
+            self.record_last_usage_date()?;
+        }
+
         Ok(LicenseStatus {
             hardware_id,
+            request_code,
+            allowed,
             activated,
-            email: activated.then_some(email),
-            activated_at: activated.then_some(activated_at),
+            trial_active,
+            blocked,
+            block_reason,
+            migration_count,
+            email,
+            activated_at,
+            trial_expires_at,
         })
     }
 
@@ -708,7 +757,245 @@ impl Database {
     }
 
     pub fn has_valid_license(&self) -> DbResult<bool> {
-        Ok(self.license_status()?.activated)
+        Ok(self.license_status()?.allowed)
+    }
+
+    pub fn record_last_usage_date(&self) -> DbResult<()> {
+        self.set_system_integrity_value("last_usage_date", "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')")
+    }
+
+    pub fn vacuum_into(&self, target_path: &Path) -> DbResult<()> {
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let target = target_path.to_string_lossy().into_owned();
+        if target_path.exists() {
+            fs::remove_file(target_path)?;
+        }
+        self.conn.execute("VACUUM INTO ?1", [&target])?;
+        Ok(())
+    }
+
+    pub fn restore_database_from_file(&self, backup_database_path: &Path) -> DbResult<()> {
+        if !backup_database_path.is_file() {
+            return Err(DbError::Io("backup database file was not found".to_owned()));
+        }
+        let backup_path = backup_database_path.to_string_lossy().into_owned();
+        self.conn.execute("ATTACH DATABASE ?1 AS restored KEY ?2", params![backup_path, self.encryption_key_value.as_str()])?;
+        self.reset_main_schema_for_restore()?;
+        let export_result = self
+            .conn
+            .execute_batch("SELECT sqlcipher_export('main', 'restored');");
+        let detach_result = self.conn.execute_batch("DETACH DATABASE restored;");
+        export_result?;
+        detach_result?;
+        run_migrations(&self.conn)?;
+        initialize_system_integrity(&self.conn)?;
+        Ok(())
+    }
+
+    fn reset_main_schema_for_restore(&self) -> DbResult<()> {
+        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        let objects = {
+            let mut statement = self.conn.prepare(
+                r#"
+                SELECT type, name
+                FROM sqlite_master
+                WHERE type IN ('view', 'trigger', 'table')
+                    AND name NOT LIKE 'sqlite_%'
+                ORDER BY CASE type
+                    WHEN 'view' THEN 0
+                    WHEN 'trigger' THEN 1
+                    ELSE 2
+                END
+                "#,
+            )?;
+            let collected = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            collected
+        };
+        for (object_type, name) in objects {
+            let keyword = match object_type.as_str() {
+                "view" => "VIEW",
+                "trigger" => "TRIGGER",
+                "table" => "TABLE",
+                _ => continue,
+            };
+            self.conn.execute_batch(&format!(
+                "DROP {keyword} IF EXISTS {};",
+                quote_identifier(&name)
+            ))?;
+        }
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        Ok(())
+    }
+
+    pub fn verify_admin_password(&self, password: &str) -> DbResult<bool> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT password_hash
+            FROM users
+            WHERE role = 'admin' AND active = 1 AND password_hash IS NOT NULL
+            ORDER BY id ASC
+            "#,
+        )?;
+        let hashes = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(hashes.iter().any(|hash| auth::verify_password(password, hash)))
+    }
+
+    pub fn register_backup_run(
+        &self,
+        backup_path: &str,
+        status: &str,
+        sha256_hex: Option<&str>,
+        error_message: Option<&str>,
+    ) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO backup_runs (backup_path, status, sha256_hex, error_message, finished_at)
+            VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            "#,
+            params![backup_path, status, sha256_hex, error_message],
+        )?;
+        Ok(())
+    }
+
+    fn sync_hardware_integrity(&self, hardware_id: &str) -> DbResult<()> {
+        let stored = self.system_integrity_value("bound_hardware_id")?;
+        match stored {
+            None => {
+                self.set_system_integrity_literal("bound_hardware_id", hardware_id)?;
+            }
+            Some(value) if value != hardware_id => {
+                self.conn.execute(
+                    r#"
+                    INSERT INTO system_integrity (key, value)
+                    VALUES ('migration_count', '1')
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    "#,
+                    [],
+                )?;
+                self.set_system_integrity_literal("bound_hardware_id", hardware_id)?;
+                self.set_system_integrity_value("last_migration_date", "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')")?;
+            }
+            Some(_) => {}
+        }
+        Ok(())
+    }
+
+    fn oldest_license_anchor_date(&self) -> DbResult<Option<String>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT MIN(anchor_date)
+                FROM (
+                    SELECT value AS anchor_date FROM system_integrity WHERE key = 'first_install_date'
+                    UNION ALL
+                    SELECT MIN(created_at) AS anchor_date FROM patients
+                    UNION ALL
+                    SELECT MIN(created_at) AS anchor_date FROM audit_log
+                )
+                WHERE anchor_date IS NOT NULL AND anchor_date <> ''
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .map_err(DbError::from)
+    }
+
+    fn clock_rollback_detected(&self) -> DbResult<bool> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT CASE
+                    WHEN value IS NULL THEN 0
+                    WHEN datetime('now') < datetime(value, '-5 minutes') THEN 1
+                    ELSE 0
+                END
+                FROM system_integrity
+                WHERE key = 'last_usage_date'
+                "#,
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|value| value.unwrap_or(0) == 1)
+            .map_err(DbError::from)
+    }
+
+    fn plus_days(&self, value: &str, days: i64) -> DbResult<String> {
+        self.conn
+            .query_row(
+                "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', datetime(?1, ?2 || ' days'))",
+                params![value, days],
+                |row| row.get(0),
+            )
+            .map_err(DbError::from)
+    }
+
+    fn timestamp_not_past(&self, value: &str) -> DbResult<bool> {
+        self.conn
+            .query_row(
+                "SELECT CASE WHEN datetime('now') <= datetime(?1) THEN 1 ELSE 0 END",
+                [value],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value == 1)
+            .map_err(DbError::from)
+    }
+
+    fn system_integrity_i64(&self, key: &str) -> DbResult<Option<i64>> {
+        Ok(self
+            .system_integrity_value(key)?
+            .and_then(|value| value.parse::<i64>().ok()))
+    }
+
+    fn system_integrity_value(&self, key: &str) -> DbResult<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT value FROM system_integrity WHERE key = ?1",
+                [key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn set_system_integrity_literal(&self, key: &str, value: &str) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO system_integrity (key, value)
+            VALUES (?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    fn set_system_integrity_value(&self, key: &str, sql_expression: &str) -> DbResult<()> {
+        self.conn.execute(
+            &format!(
+                r#"
+                INSERT INTO system_integrity (key, value)
+                VALUES (?1, {sql_expression})
+                ON CONFLICT(key) DO UPDATE SET
+                    value = {sql_expression},
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                "#
+            ),
+            [key],
+        )?;
+        Ok(())
     }
 
     pub fn bootstrap_status(&self) -> DbResult<BootstrapStatus> {
@@ -6804,6 +7091,16 @@ fn configure_connection(conn: &Connection) -> DbResult<()> {
 
 fn run_migrations(conn: &Connection) -> DbResult<()> {
     conn.execute_batch(SCHEMA_SQL)?;
+    conn.execute(
+        r#"
+        CREATE TABLE IF NOT EXISTS system_integrity (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        )
+        "#,
+        [],
+    )?;
     ensure_column(conn, "authorized_devices", "device_uid", "TEXT")?;
     ensure_column(
         conn,
@@ -6878,7 +7175,33 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "digital_consent_signatures"],
+        params![CURRENT_SCHEMA_VERSION, "enterprise_trial_backup_integrity"],
+    )?;
+    Ok(())
+}
+
+fn initialize_system_integrity(conn: &Connection) -> DbResult<()> {
+    let hardware_id = license::hardware_id();
+    conn.execute(
+        r#"
+        INSERT OR IGNORE INTO system_integrity (key, value)
+        VALUES ('first_install_date', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        "#,
+        [],
+    )?;
+    conn.execute(
+        r#"
+        INSERT OR IGNORE INTO system_integrity (key, value)
+        VALUES ('migration_count', '0')
+        "#,
+        [],
+    )?;
+    conn.execute(
+        r#"
+        INSERT OR IGNORE INTO system_integrity (key, value)
+        VALUES ('bound_hardware_id', ?1)
+        "#,
+        [hardware_id],
     )?;
     Ok(())
 }
@@ -7132,6 +7455,10 @@ fn ensure_column(
     }
 
     Ok(())
+}
+
+fn quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 fn patient_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
@@ -8045,6 +8372,114 @@ mod tests {
             .get_patient(patient_id)
             .expect("get patient after reopen")
             .is_some());
+    }
+
+    #[test]
+    fn enterprise_trial_allows_sixty_days_then_blocks() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let status = db.license_status().expect("license status");
+        assert!(status.allowed);
+        assert!(status.trial_active);
+        assert!(!status.activated);
+        assert!(status.request_code.starts_with("VD-"));
+
+        db.conn
+            .execute(
+                r#"
+                UPDATE system_integrity
+                SET value = strftime('%Y-%m-%dT%H:%M:%fZ', datetime('now', '-61 days'))
+                WHERE key = 'first_install_date'
+                "#,
+                [],
+            )
+            .expect("age first install");
+        let expired = db.license_status().expect("expired license status");
+        assert!(!expired.allowed);
+        assert!(expired.blocked);
+        assert_eq!(expired.block_reason.as_deref(), Some("trial_expired"));
+    }
+
+    #[test]
+    fn enterprise_gate_blocks_clock_rollback() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        db.conn
+            .execute(
+                r#"
+                INSERT INTO system_integrity (key, value)
+                VALUES ('last_usage_date', strftime('%Y-%m-%dT%H:%M:%fZ', datetime('now', '+1 day')))
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                "#,
+                [],
+            )
+            .expect("force future usage");
+        let status = db.license_status().expect("license status");
+        assert!(!status.allowed);
+        assert_eq!(status.block_reason.as_deref(), Some("clock_anomaly"));
+    }
+
+    #[test]
+    fn enterprise_gate_requires_activation_after_hardware_migration() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        db.conn
+            .execute(
+                r#"
+                UPDATE system_integrity
+                SET value = 'VD-OLD0-OLD0-OLD0'
+                WHERE key = 'bound_hardware_id'
+                "#,
+                [],
+            )
+            .expect("force previous hardware");
+        let status = db.license_status().expect("license status");
+        assert_eq!(status.migration_count, 1);
+        assert!(!status.allowed);
+        assert_eq!(
+            status.block_reason.as_deref(),
+            Some("migration_activation_required")
+        );
+        assert!(status.request_code.starts_with(&status.hardware_id));
+    }
+
+    #[test]
+    fn encrypted_database_restore_imports_backup_file() {
+        let source = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open source db");
+        let admin = source
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create admin");
+        source
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Backup",
+                    last_name: "Restore",
+                    tax_code: "RSSMRA85M01H501Q",
+                    date_of_birth: "1985-08-01",
+                    phone: None,
+                    email: None,
+                    address: None,
+                },
+            )
+            .expect("create patient");
+        let backup_file = test_database_path().with_extension("backup.sqlite");
+        source.vacuum_into(&backup_file).expect("vacuum source");
+
+        let destination = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open destination db");
+        assert!(destination
+            .search_patients("Restore", 10)
+            .expect("destination empty")
+            .is_empty());
+        destination
+            .restore_database_from_file(&backup_file)
+            .expect("restore database");
+        let restored = destination
+            .search_patients("Restore", 10)
+            .expect("search restored");
+        assert_eq!(restored.len(), 1);
     }
 
     #[test]

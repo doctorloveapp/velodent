@@ -49,6 +49,12 @@ pub fn hardware_id() -> String {
     format!("VD-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
 }
 
+pub fn request_code(hardware_id: &str, migration_count: i64) -> String {
+    let normalized_count = migration_count.max(0) as u64;
+    let obfuscated = normalized_count ^ 0xA7D3;
+    format!("{hardware_id}-{}", base36_fixed(obfuscated, 4))
+}
+
 pub fn verify_activation_key(
     activation_key: &str,
     expected_hwid: &str,
@@ -118,6 +124,22 @@ fn hardware_material() -> String {
     values.join("|")
 }
 
+fn base36_fixed(mut value: u64, min_width: usize) -> String {
+    const ALPHABET: &[u8; 36] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut output = Vec::new();
+    loop {
+        output.push(ALPHABET[(value % 36) as usize] as char);
+        value /= 36;
+        if value == 0 {
+            break;
+        }
+    }
+    while output.len() < min_width {
+        output.push('0');
+    }
+    output.iter().rev().collect()
+}
+
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
     let output = Command::new(program).args(args).output().ok()?;
     if !output.status.success() {
@@ -146,5 +168,12 @@ mod tests {
         let hwid = hardware_id();
         assert!(hwid.starts_with("VD-"));
         assert_eq!(hwid.len(), 17);
+    }
+
+    #[test]
+    fn request_code_includes_obfuscated_migration_count() {
+        let code = request_code("VD-ABCD-EF12-3456", 2);
+        assert!(code.starts_with("VD-ABCD-EF12-3456-"));
+        assert_ne!(code, "VD-ABCD-EF12-3456-2");
     }
 }

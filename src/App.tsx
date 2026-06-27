@@ -40,6 +40,7 @@ function AuthGate() {
   const [licenseChecking, setLicenseChecking] = useState(true);
   const [lanAutoLoginChecking, setLanAutoLoginChecking] = useState(() => !isTauriRuntime() && Boolean(storedLanDeviceToken()));
   const [license, setLicense] = useState<LicenseStatus | null>(null);
+  const [activationEmail, setActivationEmail] = useState("");
   const [activationKey, setActivationKey] = useState("");
   const [needsFirstAdmin, setNeedsFirstAdmin] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -87,7 +88,7 @@ function AuthGate() {
   }, [backendAvailable]);
 
   useEffect(() => {
-    if (!backendAvailable || licenseChecking || !license?.activated) {
+    if (!backendAvailable || licenseChecking || !license?.allowed) {
       setChecking(false);
       return;
     }
@@ -101,10 +102,10 @@ function AuthGate() {
         setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError"));
       })
       .finally(() => setChecking(false));
-  }, [backendAvailable, license?.activated, licenseChecking, t]);
+  }, [backendAvailable, license?.allowed, licenseChecking, t]);
 
   async function handleActivateLicense() {
-    const nextLicense = await activateLicense(activationKey);
+    const nextLicense = await activateLicense(activationEmail, activationKey);
     setLicense(nextLicense);
     setStatusMessage(t("licenseActivationSuccess"));
   }
@@ -165,7 +166,7 @@ function AuthGate() {
     );
   }
 
-  if (!license?.activated) {
+  if (!license?.allowed) {
     return (
       <AuthSurface
         icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
@@ -174,10 +175,17 @@ function AuthGate() {
       >
         <div className="grid gap-3">
           <p className="text-sm leading-6 text-alabaster-grey-500">{t("licenseLockedBody")}</p>
+          <p className="text-sm font-semibold text-powder-blue-500">{t("licenseSupportEmail")}</p>
           <div className="rounded-md border border-powder-blue-500/25 bg-ink-black-950 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">{t("licenseHardwareId")}</p>
-            <p className="mt-2 font-mono text-lg font-semibold text-white">{license?.hardware_id ?? "VD-0000-0000-0000"}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">{t("licenseRequestCode")}</p>
+            <p className="mt-2 break-all font-mono text-lg font-semibold text-white">{license?.request_code ?? "VD-0000-0000-0000-0000"}</p>
           </div>
+          <Input
+            placeholder={t("licenseEmail")}
+            type="email"
+            value={activationEmail}
+            onChange={(event) => setActivationEmail(event.target.value)}
+          />
           <Input
             placeholder={t("licenseActivationKey")}
             value={activationKey}

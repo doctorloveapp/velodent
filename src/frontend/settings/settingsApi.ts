@@ -92,9 +92,22 @@ export interface GoogleCalendarAccount {
 
 export interface LicenseStatus {
   hardware_id: string;
+  request_code: string;
+  allowed: boolean;
   activated: boolean;
+  trial_active: boolean;
+  blocked: boolean;
+  block_reason: string | null;
+  migration_count: number;
   email: string | null;
   activated_at: string | null;
+  trial_expires_at: string | null;
+}
+
+export interface BackupResult {
+  backup_path: string;
+  sha256_hex: string;
+  size_bytes: number;
 }
 
 declare global {
@@ -115,8 +128,20 @@ export async function licenseStatus() {
   return invoke<LicenseStatus>("license_status");
 }
 
-export async function activateLicense(activation_key: string) {
-  return invoke<LicenseStatus>("activate_license", { request: { activation_key } });
+export async function activateLicense(email: string, activation_key: string) {
+  return invoke<LicenseStatus>("activate_license", { request: { email, activation_key } });
+}
+
+export async function createEncryptedBackup(session_token: string, admin_password: string, destination_path?: string) {
+  return invoke<BackupResult>("create_encrypted_backup", {
+    request: { session_token, admin_password, destination_path }
+  });
+}
+
+export async function restoreEncryptedBackup(session_token: string, admin_password: string, backup_path?: string) {
+  return invoke<LicenseStatus>("restore_encrypted_backup", {
+    request: { session_token, admin_password, backup_path }
+  });
 }
 
 export async function createFirstAdmin(request: {

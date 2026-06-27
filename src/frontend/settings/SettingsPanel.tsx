@@ -13,6 +13,7 @@ import {
 } from "@/frontend/consents/consentsApi";
 import {
   changeAdminPassword,
+  createEncryptedBackup,
   createUser,
   deleteUser,
   getPairingCode,
@@ -23,6 +24,7 @@ import {
   listUsers,
   pickStudioLogoPath,
   removeGoogleAccount,
+  restoreEncryptedBackup,
   revokeDevice,
   startGoogleCalendarAccountLink,
   updateStudioSettings,
@@ -71,6 +73,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     newPassword: "",
     confirmPassword: ""
   });
+  const [backupPassword, setBackupPassword] = useState("");
   const activeDevices = devices.filter((device) => !device.revoked_at);
   const activeUsers = users.filter((user) => user.active);
   const principalAdminId = activeUsers
@@ -262,6 +265,37 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     setStatusMessage(t("settingsPasswordChanged"));
   }
 
+  async function handleCreateEncryptedBackup() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+    if (!backupPassword) {
+      setStatusMessage(t("settingsBackupPasswordRequired"));
+      return;
+    }
+    const result = await createEncryptedBackup(currentUser.session_token, backupPassword);
+    setBackupPassword("");
+    setStatusMessage(`${t("settingsBackupCreated")}: ${result.backup_path}`);
+  }
+
+  async function handleRestoreEncryptedBackup() {
+    if (!currentUser?.session_token) {
+      setStatusMessage(t("settingsLoginRequired"));
+      return;
+    }
+    if (!backupPassword) {
+      setStatusMessage(t("settingsBackupPasswordRequired"));
+      return;
+    }
+    if (!window.confirm(t("settingsRestoreConfirm"))) {
+      return;
+    }
+    await restoreEncryptedBackup(currentUser.session_token, backupPassword);
+    setBackupPassword("");
+    setStatusMessage(t("settingsRestoreCompleted"));
+  }
+
   async function handleLinkGoogleCalendar() {
     if (!currentUser?.session_token) {
       setStatusMessage(t("settingsLoginRequired"));
@@ -436,6 +470,33 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
               {t("settingsChangePassword")}
             </SettingsActionButton>
           </DenseForm>
+        </SettingsSurface>
+
+        <SettingsSurface
+          icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+          title={t("settingsBackupTitle")}
+          eyebrow={t("settingsBackupEyebrow")}
+        >
+          <div className="grid gap-3">
+            <p className="text-sm leading-6 text-alabaster-grey-500">{t("settingsBackupHelp")}</p>
+            <Input
+              autoComplete="current-password"
+              placeholder={t("settingsBackupAdminPassword")}
+              type="password"
+              value={backupPassword}
+              onChange={(event) => setBackupPassword(event.target.value)}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <SettingsActionButton onClick={() => void handleCreateEncryptedBackup().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+                <Save aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+                {t("settingsCreateBackup")}
+              </SettingsActionButton>
+              <SettingsActionButton tone="danger" onClick={() => void handleRestoreEncryptedBackup().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+                <ShieldCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
+                {t("settingsRestoreBackup")}
+              </SettingsActionButton>
+            </div>
+          </div>
         </SettingsSurface>
       </div>
 

@@ -1,6 +1,7 @@
 mod agenda;
 mod audit;
 mod auth;
+mod backup;
 mod billing;
 mod clinical;
 mod commands;
@@ -30,10 +31,23 @@ pub fn run() {
             server::lan::start(app.handle().clone());
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                let state = window.state::<state::AppState>();
+                let _ = if let Ok(database) = state.database() {
+                    let _ = database.record_last_usage_date();
+                    Ok::<(), String>(())
+                } else {
+                    Ok(())
+                };
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             health::health_check,
             commands::license_status,
             commands::activate_license,
+            commands::create_encrypted_backup,
+            commands::restore_encrypted_backup,
             commands::database_status,
             commands::upsert_test_patient,
             commands::search_patients,
