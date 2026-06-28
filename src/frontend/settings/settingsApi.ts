@@ -92,6 +92,7 @@ export interface GoogleCalendarAccount {
 
 export interface LicenseStatus {
   hardware_id: string;
+  database_identity_id: string;
   request_code: string;
   allowed: boolean;
   activated: boolean;

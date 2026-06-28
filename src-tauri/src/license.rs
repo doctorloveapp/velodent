@@ -7,6 +7,8 @@ use std::process::Command;
 const LICENSE_PUBLIC_KEY_B64: &str = "QJr2NdjByJ72nc8H4LPp0hH46Q-NvOz8Lpl2Z8Uwf88";
 const LICENSE_KEY_PREFIX: &str = "VDLK1";
 const LICENSE_PRODUCT: &str = "velodent-enterprise";
+const REQUEST_CODE_PREFIX: &str = "VDRQ1";
+const REQUEST_CODE_MASK: &[u8] = b"velodent-database-dna-request-v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LicensePayload {
@@ -14,7 +16,16 @@ pub struct LicensePayload {
     pub product: String,
     pub hwid: String,
     pub email: String,
+    pub database_identity_id: Option<String>,
     pub issued_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct RequestCodePayload {
+    v: u8,
+    h: String,
+    d: String,
+    m: i64,
 }
 
 #[derive(Debug)]
@@ -49,10 +60,20 @@ pub fn hardware_id() -> String {
     format!("VD-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
 }
 
-pub fn request_code(hardware_id: &str, migration_count: i64) -> String {
-    let normalized_count = migration_count.max(0) as u64;
-    let obfuscated = normalized_count ^ 0xA7D3;
-    format!("{hardware_id}-{}", base36_fixed(obfuscated, 4))
+pub fn request_code(hardware_id: &str, database_identity_id: &str, migration_count: i64) -> String {
+    let payload = RequestCodePayload {
+        v: 1,
+        h: hardware_id.trim().to_owned(),
+        d: database_identity_id.trim().to_owned(),
+        m: migration_count.max(0),
+    };
+    let payload_json = serde_json::to_vec(&payload).unwrap_or_default();
+    let masked_payload = xor_bytes(&payload_json, REQUEST_CODE_MASK);
+    let body = URL_SAFE_NO_PAD.encode(masked_payload);
+    let checksum_material = format!("{REQUEST_CODE_PREFIX}.{body}.velodent");
+    let checksum = Sha256::digest(checksum_material.as_bytes());
+    let checksum_b64 = URL_SAFE_NO_PAD.encode(&checksum[..6]);
+    format!("{REQUEST_CODE_PREFIX}.{body}.{checksum_b64}")
 }
 
 pub fn verify_activation_key(
@@ -100,6 +121,11 @@ pub fn verify_activation_key(
     if payload.email.trim().is_empty() {
         return Err(LicenseError::InvalidPayload);
     }
+    if let Some(database_identity_id) = payload.database_identity_id.as_deref() {
+        if database_identity_id.trim().is_empty() {
+            return Err(LicenseError::InvalidPayload);
+        }
+    }
 
     Ok(payload)
 }
@@ -124,20 +150,12 @@ fn hardware_material() -> String {
     values.join("|")
 }
 
-fn base36_fixed(mut value: u64, min_width: usize) -> String {
-    const ALPHABET: &[u8; 36] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    let mut output = Vec::new();
-    loop {
-        output.push(ALPHABET[(value % 36) as usize] as char);
-        value /= 36;
-        if value == 0 {
-            break;
-        }
-    }
-    while output.len() < min_width {
-        output.push('0');
-    }
-    output.iter().rev().collect()
+fn xor_bytes(input: &[u8], mask: &[u8]) -> Vec<u8> {
+    input
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| byte ^ mask[index % mask.len()])
+        .collect()
 }
 
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
@@ -171,9 +189,11 @@ mod tests {
     }
 
     #[test]
-    fn request_code_includes_obfuscated_migration_count() {
-        let code = request_code("VD-ABCD-EF12-3456", 2);
-        assert!(code.starts_with("VD-ABCD-EF12-3456-"));
-        assert_ne!(code, "VD-ABCD-EF12-3456-2");
+    fn request_code_obfuscates_hardware_database_and_migration_count() {
+        let code = request_code("VD-ABCD-EF12-3456", "VDDB-ABCDEF123456", 2);
+        assert!(code.starts_with("VDRQ1."));
+        assert!(!code.contains("VD-ABCD-EF12-3456"));
+        assert!(!code.contains("VDDB-ABCDEF123456"));
+        assert!(!code.ends_with(".2"));
     }
 }

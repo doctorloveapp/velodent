@@ -5,13 +5,15 @@ use crate::{
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use sha2::Digest;
 use std::{
     collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 14;
+const CURRENT_SCHEMA_VERSION: i64 = 15;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -586,6 +588,7 @@ pub struct PatientConsent {
 #[derive(Debug, Clone, Serialize)]
 pub struct LicenseStatus {
     pub hardware_id: String,
+    pub database_identity_id: String,
     pub request_code: String,
     pub allowed: bool,
     pub activated: bool,
@@ -661,7 +664,8 @@ impl Database {
         let hardware_id = license::hardware_id();
         self.sync_hardware_integrity(&hardware_id)?;
         let migration_count = self.system_integrity_i64("migration_count")?.unwrap_or(0);
-        let request_code = license::request_code(&hardware_id, migration_count);
+        let database_identity_id = self.database_identity_id()?;
+        let request_code = license::request_code(&hardware_id, &database_identity_id, migration_count);
         let clock_rollback = self.clock_rollback_detected()?;
         let oldest_date = self.oldest_license_anchor_date()?;
         let trial_expires_at = oldest_date
@@ -722,6 +726,7 @@ impl Database {
 
         Ok(LicenseStatus {
             hardware_id,
+            database_identity_id,
             request_code,
             allowed,
             activated,
@@ -739,6 +744,9 @@ impl Database {
         let hardware_id = license::hardware_id();
         let payload = license::verify_activation_key(activation_key, &hardware_id)
             .map_err(|error| DbError::Sql(error.to_string()))?;
+        if let Some(payload_database_id) = payload.database_identity_id.as_deref() {
+            self.bind_database_identity_id(payload_database_id)?;
+        }
         self.conn.execute(
             r#"
             INSERT INTO enterprise_licenses (id, hardware_id, email, activation_key)
@@ -966,6 +974,55 @@ impl Database {
             )
             .optional()
             .map_err(DbError::from)
+    }
+
+    fn database_identity_id(&self) -> DbResult<String> {
+        if let Some(existing) = self.system_integrity_value("database_identity_id")? {
+            let trimmed = existing.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_owned());
+            }
+        }
+        let generated = generate_database_identity_id();
+        self.set_database_identity_literal(&generated)?;
+        Ok(generated)
+    }
+
+    fn bind_database_identity_id(&self, license_database_identity_id: &str) -> DbResult<()> {
+        let normalized = license_database_identity_id.trim();
+        if normalized.is_empty() {
+            return Err(DbError::Sql("database identity in activation key is empty".to_owned()));
+        }
+        let current = self.database_identity_id()?;
+        if current != normalized {
+            return Err(DbError::Sql(
+                "activation key is not valid for this database".to_owned(),
+            ));
+        }
+        self.set_database_identity_literal(normalized)
+    }
+
+    fn set_database_identity_literal(&self, value: &str) -> DbResult<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO system_integrity (key, value, database_identity_id)
+            VALUES ('database_identity_id', ?1, ?1)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                database_identity_id = excluded.database_identity_id,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            [value],
+        )?;
+        self.conn.execute(
+            r#"
+            UPDATE system_integrity
+            SET database_identity_id = ?1
+            WHERE database_identity_id IS NULL OR database_identity_id = ''
+            "#,
+            [value],
+        )?;
+        Ok(())
     }
 
     fn set_system_integrity_literal(&self, key: &str, value: &str) -> DbResult<()> {
@@ -7114,6 +7171,7 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         [],
     )?;
     ensure_column(conn, "authorized_devices", "device_uid", "TEXT")?;
+    ensure_column(conn, "system_integrity", "database_identity_id", "TEXT")?;
     ensure_column(
         conn,
         "clinical_services_catalog",
@@ -7194,6 +7252,15 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
 
 fn initialize_system_integrity(conn: &Connection) -> DbResult<()> {
     let hardware_id = license::hardware_id();
+    let database_identity_id = conn
+        .query_row(
+            "SELECT value FROM system_integrity WHERE key = 'database_identity_id'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(generate_database_identity_id);
     conn.execute(
         r#"
         INSERT OR IGNORE INTO system_integrity (key, value)
@@ -7215,7 +7282,45 @@ fn initialize_system_integrity(conn: &Connection) -> DbResult<()> {
         "#,
         [hardware_id],
     )?;
+    conn.execute(
+        r#"
+        INSERT INTO system_integrity (key, value, database_identity_id)
+        VALUES ('database_identity_id', ?1, ?1)
+        ON CONFLICT(key) DO UPDATE SET
+            value = CASE
+                WHEN system_integrity.value IS NULL OR system_integrity.value = '' THEN excluded.value
+                ELSE system_integrity.value
+            END,
+            database_identity_id = CASE
+                WHEN system_integrity.database_identity_id IS NULL OR system_integrity.database_identity_id = '' THEN excluded.database_identity_id
+                ELSE system_integrity.database_identity_id
+            END,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        "#,
+        [database_identity_id.as_str()],
+    )?;
+    conn.execute(
+        r#"
+        UPDATE system_integrity
+        SET database_identity_id = (
+            SELECT value FROM system_integrity WHERE key = 'database_identity_id'
+        )
+        WHERE database_identity_id IS NULL OR database_identity_id = ''
+        "#,
+        [],
+    )?;
     Ok(())
+}
+
+fn generate_database_identity_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let material = format!("{}|{}|{}", license::hardware_id(), nanos, std::process::id());
+    let digest = sha2::Sha256::digest(material.as_bytes());
+    let hex = hex::encode_upper(digest);
+    format!("VDDB-{}", &hex[..16])
 }
 
 fn seed_consent_templates(conn: &Connection) -> DbResult<()> {
@@ -8394,7 +8499,8 @@ mod tests {
         assert!(status.allowed);
         assert!(status.trial_active);
         assert!(!status.activated);
-        assert!(status.request_code.starts_with("VD-"));
+        assert!(status.database_identity_id.starts_with("VDDB-"));
+        assert!(status.request_code.starts_with("VDRQ1."));
 
         db.conn
             .execute(
@@ -8410,6 +8516,27 @@ mod tests {
         assert!(!expired.allowed);
         assert!(expired.blocked);
         assert_eq!(expired.block_reason.as_deref(), Some("trial_expired"));
+    }
+
+    #[test]
+    fn database_identity_is_stable_and_obfuscated_in_request_code() {
+        let path = test_database_path();
+        let first = Database::open(path.clone(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let first_status = first.license_status().expect("first license status");
+        assert!(first_status.database_identity_id.starts_with("VDDB-"));
+        assert!(first_status.request_code.starts_with("VDRQ1."));
+        assert!(!first_status.request_code.contains(&first_status.hardware_id));
+        assert!(!first_status.request_code.contains(&first_status.database_identity_id));
+        drop(first);
+
+        let second = Database::open(path, EncryptionKey::for_tests())
+            .expect("reopen encrypted db");
+        let second_status = second.license_status().expect("second license status");
+        assert_eq!(
+            second_status.database_identity_id,
+            first_status.database_identity_id
+        );
     }
 
     #[test]
@@ -8452,7 +8579,9 @@ mod tests {
             status.block_reason.as_deref(),
             Some("migration_activation_required")
         );
-        assert!(status.request_code.starts_with(&status.hardware_id));
+        assert!(status.request_code.starts_with("VDRQ1."));
+        assert!(!status.request_code.contains(&status.hardware_id));
+        assert!(!status.request_code.contains(&status.database_identity_id));
     }
 
     #[test]
