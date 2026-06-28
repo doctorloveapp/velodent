@@ -64,6 +64,7 @@ const emptyPatientForm = {
   last_name: "",
   tax_code: "",
   date_of_birth: "",
+  birth_place: "",
   phone: "",
   email: "",
   address: ""
@@ -169,6 +170,7 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
       last_name: form.last_name,
       tax_code: normalizedTaxCode,
       date_of_birth: form.date_of_birth,
+      birth_place: form.birth_place || undefined,
       phone: form.phone || undefined,
       email: form.email || undefined,
       address: form.address || undefined
@@ -328,10 +330,11 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
               <Input placeholder={t("patientsFirstName")} value={form.first_name} onChange={(event) => updateForm("first_name", event.target.value)} />
               <Input placeholder={t("patientsLastName")} value={form.last_name} onChange={(event) => updateForm("last_name", event.target.value)} />
               <Input placeholder={t("patientsBirthDate")} type="date" value={form.date_of_birth} onChange={(event) => updateForm("date_of_birth", event.target.value)} />
+              <Input placeholder={t("patientsBirthPlace")} value={form.birth_place} onChange={(event) => updateForm("birth_place", event.target.value)} />
               <Input className="font-mono" placeholder={t("patientsTaxCode")} value={form.tax_code} onChange={(event) => updateForm("tax_code", event.target.value)} />
               <Input placeholder={t("patientsPhone")} value={form.phone} onChange={(event) => updateForm("phone", event.target.value)} />
               <Input placeholder={t("patientsEmail")} type="email" value={form.email} onChange={(event) => updateForm("email", event.target.value)} />
-              <Input className="xl:col-span-2" placeholder={t("patientsAddress")} value={form.address} onChange={(event) => updateForm("address", event.target.value)} />
+              <Input placeholder={t("patientsAddress")} value={form.address} onChange={(event) => updateForm("address", event.target.value)} />
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <Badge variant={taxCodeTouched ? (taxCodeValid ? "success" : "danger") : "default"}>
@@ -419,6 +422,7 @@ function PatientTabPanel({ currentUser, patient, tab }: { currentUser: User | nu
       <dl className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <PatientData label={t("patientsTaxCode")} value={patient.tax_code} mono />
         <PatientData label={t("patientsBirthDate")} value={patient.date_of_birth} />
+        <PatientData label={t("patientsBirthPlace")} value={patient.birth_place ?? t("commonEmpty")} />
         <PatientData label={t("patientsPhone")} value={patient.phone ?? t("commonEmpty")} />
         <PatientData label={t("patientsEmail")} value={patient.email ?? t("commonEmpty")} />
         <PatientData label={t("patientsAddress")} value={patient.address ?? t("commonEmpty")} wide />
@@ -948,6 +952,7 @@ function patientToForm(patient: Patient) {
     last_name: patient.last_name,
     tax_code: patient.tax_code,
     date_of_birth: patient.date_of_birth,
+    birth_place: patient.birth_place ?? "",
     phone: patient.phone ?? "",
     email: patient.email ?? "",
     address: patient.address ?? ""

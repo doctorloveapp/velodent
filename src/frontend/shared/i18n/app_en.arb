@@ -435,6 +435,7 @@
   "patientsFirstName": "First name",
   "patientsLastName": "Last name",
   "patientsBirthDate": "Date of birth",
+  "patientsBirthPlace": "Place of birth",
   "patientsTaxCode": "Italian tax code",
   "patientsTaxCodeBadge": "CF",
   "patientsPhone": "Phone",

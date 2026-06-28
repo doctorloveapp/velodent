@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
@@ -9,9 +10,11 @@ const GOOGLE_AUTH_URI: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URI: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
 const GOOGLE_CALENDAR_EVENTS_URI: &str = "https://www.googleapis.com/calendar/v3/calendars";
-const GOOGLE_SCOPES: [&str; 2] = [
+const GOOGLE_GMAIL_SEND_URI: &str = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+const GOOGLE_SCOPES: [&str; 3] = [
     "openid email profile",
     "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/gmail.send",
 ];
 
 #[derive(Debug)]
@@ -97,6 +100,11 @@ pub struct GoogleCalendarRemoteEventTime {
 #[derive(Debug, Deserialize)]
 struct GoogleCalendarEventsResponse {
     items: Option<Vec<GoogleCalendarRemoteEvent>>,
+}
+
+#[derive(Debug, Serialize)]
+struct GmailSendPayload<'a> {
+    raw: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -376,6 +384,46 @@ pub async fn user_info(access_token: &str) -> Result<GoogleUserInfo, GoogleApiEr
         .json::<GoogleUserInfo>()
         .await
         .map_err(|error| GoogleApiError::Request(error.to_string()))
+}
+
+pub async fn send_gmail_message(
+    access_token: &str,
+    recipient: &str,
+    subject: &str,
+    body: &str,
+) -> Result<(), GoogleApiError> {
+    let recipient = recipient.trim();
+    if recipient.is_empty() {
+        return Err(GoogleApiError::Request(
+            "welcome email recipient is missing".to_owned(),
+        ));
+    }
+
+    let mime = format!(
+        "To: {recipient}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{body}"
+    );
+    let raw = URL_SAFE_NO_PAD.encode(mime.as_bytes());
+    let response = reqwest::Client::new()
+        .post(GOOGLE_GMAIL_SEND_URI)
+        .bearer_auth(access_token)
+        .json(&GmailSendPayload { raw: &raw })
+        .send()
+        .await
+        .map_err(|error| GoogleApiError::Request(error.to_string()))?;
+    let status = response.status();
+
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "redacted google error".to_owned());
+        return Err(GoogleApiError::HttpStatus(
+            status.as_u16(),
+            sanitize_google_error(&body),
+        ));
+    }
+
+    Ok(())
 }
 
 pub async fn upsert_calendar_event(

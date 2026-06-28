@@ -7,6 +7,7 @@ export interface Patient {
   last_name: string;
   tax_code: string;
   date_of_birth: string;
+  birth_place: string | null;
   phone: string | null;
   email: string | null;
   address: string | null;
@@ -20,6 +21,7 @@ export interface PatientInput {
   last_name: string;
   tax_code: string;
   date_of_birth: string;
+  birth_place?: string;
   phone?: string;
   email?: string;
   address?: string;

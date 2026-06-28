@@ -13,7 +13,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 15;
+const CURRENT_SCHEMA_VERSION: i64 = 16;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -171,6 +171,7 @@ pub struct Patient {
     pub last_name: String,
     pub tax_code: String,
     pub date_of_birth: String,
+    pub birth_place: Option<String>,
     pub phone: Option<String>,
     pub email: Option<String>,
     pub address: Option<String>,
@@ -185,6 +186,7 @@ pub struct NewPatient<'a> {
     pub last_name: &'a str,
     pub tax_code: &'a str,
     pub date_of_birth: &'a str,
+    pub birth_place: Option<&'a str>,
     pub phone: Option<&'a str>,
     pub email: Option<&'a str>,
     pub address: Option<&'a str>,
@@ -665,7 +667,8 @@ impl Database {
         self.sync_hardware_integrity(&hardware_id)?;
         let migration_count = self.system_integrity_i64("migration_count")?.unwrap_or(0);
         let database_identity_id = self.database_identity_id()?;
-        let request_code = license::request_code(&hardware_id, &database_identity_id, migration_count);
+        let request_code =
+            license::request_code(&hardware_id, &database_identity_id, migration_count);
         let clock_rollback = self.clock_rollback_detected()?;
         let oldest_date = self.oldest_license_anchor_date()?;
         let trial_expires_at = oldest_date
@@ -789,7 +792,10 @@ impl Database {
             return Err(DbError::Io("backup database file was not found".to_owned()));
         }
         let backup_path = backup_database_path.to_string_lossy().into_owned();
-        self.conn.execute("ATTACH DATABASE ?1 AS restored KEY ?2", params![backup_path, self.encryption_key_value.as_str()])?;
+        self.conn.execute(
+            "ATTACH DATABASE ?1 AS restored KEY ?2",
+            params![backup_path, self.encryption_key_value.as_str()],
+        )?;
         self.reset_main_schema_for_restore()?;
         let export_result = self
             .conn
@@ -853,7 +859,9 @@ impl Database {
         let hashes = statement
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(hashes.iter().any(|hash| auth::verify_password(password, hash)))
+        Ok(hashes
+            .iter()
+            .any(|hash| auth::verify_password(password, hash)))
     }
 
     pub fn register_backup_run(
@@ -891,7 +899,10 @@ impl Database {
                     [],
                 )?;
                 self.set_system_integrity_literal("bound_hardware_id", hardware_id)?;
-                self.set_system_integrity_value("last_migration_date", "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')")?;
+                self.set_system_integrity_value(
+                    "last_migration_date",
+                    "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+                )?;
             }
             Some(_) => {}
         }
@@ -991,7 +1002,9 @@ impl Database {
     fn bind_database_identity_id(&self, license_database_identity_id: &str) -> DbResult<()> {
         let normalized = license_database_identity_id.trim();
         if normalized.is_empty() {
-            return Err(DbError::Sql("database identity in activation key is empty".to_owned()));
+            return Err(DbError::Sql(
+                "database identity in activation key is empty".to_owned(),
+            ));
         }
         let current = self.database_identity_id()?;
         if current != normalized {
@@ -1945,6 +1958,7 @@ impl Database {
 
     pub fn insert_patient(&self, patient: &NewPatient<'_>) -> DbResult<i64> {
         let tax_code = normalize_tax_code(patient.tax_code)?;
+        let birth_place = normalize_optional(patient.birth_place);
         let phone = normalize_optional(patient.phone);
         let email = normalize_optional(patient.email);
         let address = normalize_optional(patient.address);
@@ -1956,17 +1970,19 @@ impl Database {
                 last_name,
                 tax_code,
                 date_of_birth,
+                birth_place,
                 phone,
                 email,
                 address
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 patient.first_name.trim(),
                 patient.last_name.trim(),
                 tax_code,
                 patient.date_of_birth.trim(),
+                birth_place.as_deref(),
                 phone.as_deref(),
                 email.as_deref(),
                 address.as_deref(),
@@ -1984,6 +2000,7 @@ impl Database {
     ) -> DbResult<Patient> {
         self.assert_active_user(actor_user_id)?;
         let tax_code = normalize_tax_code(patient.tax_code)?;
+        let birth_place = normalize_optional(patient.birth_place);
         let phone = normalize_optional(patient.phone);
         let email = normalize_optional(patient.email);
         let address = normalize_optional(patient.address);
@@ -1996,17 +2013,19 @@ impl Database {
                 last_name = ?2,
                 tax_code = ?3,
                 date_of_birth = ?4,
-                phone = ?5,
-                email = ?6,
-                address = ?7,
+                birth_place = ?5,
+                phone = ?6,
+                email = ?7,
+                address = ?8,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?8 AND deleted_at IS NULL
+            WHERE id = ?9 AND deleted_at IS NULL
             "#,
             params![
                 patient.first_name.trim(),
                 patient.last_name.trim(),
                 tax_code,
                 patient.date_of_birth.trim(),
+                birth_place.as_deref(),
                 phone.as_deref(),
                 email.as_deref(),
                 address.as_deref(),
@@ -5639,6 +5658,7 @@ impl Database {
                     last_name,
                     tax_code,
                     date_of_birth,
+                    birth_place,
                     phone,
                     email,
                     address,
@@ -5667,6 +5687,7 @@ impl Database {
                 last_name,
                 tax_code,
                 date_of_birth,
+                birth_place,
                 phone,
                 email,
                 address,
@@ -5710,6 +5731,7 @@ impl Database {
             last_name: "Rossi",
             tax_code,
             date_of_birth: "1985-08-01",
+            birth_place: None,
             phone: None,
             email: None,
             address: None,
@@ -5742,6 +5764,7 @@ impl Database {
                     last_name,
                     tax_code,
                     date_of_birth,
+                    birth_place,
                     phone,
                     email,
                     address,
@@ -7114,9 +7137,15 @@ fn clinical_audit_metadata(
 
 fn render_consent_body(template_body: &str, patient: &Patient, actor: &User) -> String {
     let patient_name = format!("{} {}", patient.first_name, patient.last_name);
+    let birth_place = patient
+        .birth_place
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("non indicato");
     template_body
         .replace("{{paziente_nome}}", patient_name.trim())
-        .replace("{{paziente_luogo_nascita}}", "non indicato")
+        .replace("{{paziente_luogo_nascita}}", birth_place)
         .replace("{{paziente_data_nascita}}", patient.date_of_birth.as_str())
         .replace("{{paziente_cf}}", patient.tax_code.as_str())
         .replace("{{dottore_nome}}", actor.username.as_str())
@@ -7187,6 +7216,7 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         [],
     )?;
     ensure_column(conn, "patients", "deleted_at", "TEXT")?;
+    ensure_column(conn, "patients", "birth_place", "TEXT")?;
     ensure_column(
         conn,
         "clinical_records",
@@ -7317,7 +7347,12 @@ fn generate_database_identity_id() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    let material = format!("{}|{}|{}", license::hardware_id(), nanos, std::process::id());
+    let material = format!(
+        "{}|{}|{}",
+        license::hardware_id(),
+        nanos,
+        std::process::id()
+    );
     let digest = sha2::Sha256::digest(material.as_bytes());
     let hex = hex::encode_upper(digest);
     format!("VDDB-{}", &hex[..16])
@@ -7579,7 +7614,7 @@ fn quote_identifier(value: &str) -> String {
 }
 
 fn patient_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
-    let privacy_consent_signed: i64 = row.get(8)?;
+    let privacy_consent_signed: i64 = row.get(9)?;
 
     Ok(Patient {
         id: row.get(0)?,
@@ -7587,12 +7622,13 @@ fn patient_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
         last_name: row.get(2)?,
         tax_code: row.get(3)?,
         date_of_birth: row.get(4)?,
-        phone: row.get(5)?,
-        email: row.get(6)?,
-        address: row.get(7)?,
+        birth_place: row.get(5)?,
+        phone: row.get(6)?,
+        email: row.get(7)?,
+        address: row.get(8)?,
         privacy_consent_signed: privacy_consent_signed == 1,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
     })
 }
 
@@ -7962,6 +7998,7 @@ CREATE TABLE IF NOT EXISTS patients (
     last_name TEXT NOT NULL,
     tax_code TEXT NOT NULL UNIQUE,
     date_of_birth TEXT NOT NULL,
+    birth_place TEXT,
     phone TEXT,
     email TEXT,
     address TEXT,
@@ -8468,6 +8505,7 @@ mod tests {
                 last_name: "Lovelace",
                 tax_code: "RSSMRA85M01H501Q",
                 date_of_birth: "1815-12-10",
+                birth_place: None,
                 phone: None,
                 email: Some("ada@example.test"),
                 address: None,
@@ -8521,17 +8559,20 @@ mod tests {
     #[test]
     fn database_identity_is_stable_and_obfuscated_in_request_code() {
         let path = test_database_path();
-        let first = Database::open(path.clone(), EncryptionKey::for_tests())
-            .expect("open encrypted db");
+        let first =
+            Database::open(path.clone(), EncryptionKey::for_tests()).expect("open encrypted db");
         let first_status = first.license_status().expect("first license status");
         assert!(first_status.database_identity_id.starts_with("VDDB-"));
         assert!(first_status.request_code.starts_with("VDRQ1."));
-        assert!(!first_status.request_code.contains(&first_status.hardware_id));
-        assert!(!first_status.request_code.contains(&first_status.database_identity_id));
+        assert!(!first_status
+            .request_code
+            .contains(&first_status.hardware_id));
+        assert!(!first_status
+            .request_code
+            .contains(&first_status.database_identity_id));
         drop(first);
 
-        let second = Database::open(path, EncryptionKey::for_tests())
-            .expect("reopen encrypted db");
+        let second = Database::open(path, EncryptionKey::for_tests()).expect("reopen encrypted db");
         let second_status = second.license_status().expect("second license status");
         assert_eq!(
             second_status.database_identity_id,
@@ -8608,6 +8649,7 @@ mod tests {
                     last_name: "Restore",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-08-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -8647,6 +8689,7 @@ mod tests {
                     last_name: "Rossi",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-08-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -8882,6 +8925,7 @@ mod tests {
                     last_name: "Rossi",
                     tax_code: "rssmra85m01h501q",
                     date_of_birth: "1985-08-01",
+                    birth_place: None,
                     phone: Some("+39 060000000"),
                     email: Some("mario.rossi@example.test"),
                     address: Some("Via Roma 1"),
@@ -8904,6 +8948,7 @@ mod tests {
                     last_name: "Rossi",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-08-01",
+                    birth_place: None,
                     phone: Some("+39 061111111"),
                     email: Some("mario.rossi@example.test"),
                     address: Some("Via Milano 2"),
@@ -8954,6 +8999,7 @@ mod tests {
                     last_name: "Bianchi",
                     tax_code: "BNCLGU85T41H501W",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9116,6 +9162,7 @@ mod tests {
                     last_name: "Verdi",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9251,6 +9298,7 @@ mod tests {
                     last_name: "Neri",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9314,6 +9362,7 @@ mod tests {
                     last_name: "Bianchi",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9398,6 +9447,7 @@ mod tests {
                     last_name: "Queue",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9516,6 +9566,7 @@ mod tests {
                     last_name: "Links",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9603,6 +9654,7 @@ mod tests {
                     last_name: "Agenda",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9680,6 +9732,7 @@ mod tests {
                     last_name: "Calendar",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9758,6 +9811,7 @@ mod tests {
                     last_name: "Delete",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9845,6 +9899,7 @@ mod tests {
                     last_name: "Agenda",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -9929,6 +9984,7 @@ mod tests {
                     last_name: "Sync",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -10030,6 +10086,7 @@ mod tests {
                     last_name: "Quote",
                     tax_code: "BNCLGU85T41H501W",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -10095,6 +10152,7 @@ mod tests {
                     last_name: "Quote",
                     tax_code: "BNCLGU85T41H501W",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -10175,6 +10233,7 @@ mod tests {
                     last_name: "Assets",
                     tax_code: "BNCLGU85T41H501W",
                     date_of_birth: "1985-12-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,
@@ -10246,6 +10305,7 @@ mod tests {
                     last_name: "Blu",
                     tax_code: "RSSMRA85M01H501Q",
                     date_of_birth: "1985-08-01",
+                    birth_place: None,
                     phone: None,
                     email: None,
                     address: None,

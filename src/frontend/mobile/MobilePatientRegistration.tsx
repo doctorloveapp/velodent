@@ -10,6 +10,7 @@ interface MobilePatientDraft {
   last_name: string;
   tax_code: string;
   date_of_birth: string;
+  birth_place: string;
   phone: string;
   email: string;
   address: string;
@@ -20,6 +21,7 @@ const emptyDraft: MobilePatientDraft = {
   last_name: "",
   tax_code: "",
   date_of_birth: "",
+  birth_place: "",
   phone: "",
   email: "",
   address: ""
@@ -48,6 +50,7 @@ export function MobilePatientRegistration({ sessionToken }: { sessionToken: stri
         last_name: draft.last_name.trim(),
         tax_code: draft.tax_code.trim().toUpperCase(),
         date_of_birth: draft.date_of_birth,
+        birth_place: draft.birth_place.trim() || undefined,
         phone: draft.phone.trim() || undefined,
         email: draft.email.trim() || undefined,
         address: draft.address.trim() || undefined
@@ -129,6 +132,11 @@ function MobilePatientDraftForm({
           type="date"
           value={draft.date_of_birth}
           onChange={(value) => update("date_of_birth", value)}
+        />
+        <LabeledInput
+          label={t("patientsBirthPlace")}
+          value={draft.birth_place}
+          onChange={(value) => update("birth_place", value)}
         />
         <LabeledInput
           label={t("patientsTaxCode")}

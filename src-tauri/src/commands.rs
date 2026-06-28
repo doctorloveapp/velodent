@@ -204,6 +204,7 @@ pub struct PatientRequest {
     last_name: String,
     tax_code: String,
     date_of_birth: String,
+    birth_place: Option<String>,
     phone: Option<String>,
     email: Option<String>,
     address: Option<String>,
@@ -217,6 +218,7 @@ pub struct UpdatePatientRequest {
     last_name: String,
     tax_code: String,
     date_of_birth: String,
+    birth_place: Option<String>,
     phone: Option<String>,
     email: Option<String>,
     address: Option<String>,
@@ -559,6 +561,7 @@ pub struct SumupPaymentStart {
 pub struct GoogleAuthorizationUrlRequest {
     session_token: String,
     state: Option<String>,
+    send_welcome_email: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -646,7 +649,12 @@ pub fn create_encrypted_backup(
     match backup::create_encrypted_backup(&database, &request.admin_password, &destination) {
         Ok(result) => {
             database
-                .register_backup_run(&result.backup_path, "completed", Some(&result.sha256_hex), None)
+                .register_backup_run(
+                    &result.backup_path,
+                    "completed",
+                    Some(&result.sha256_hex),
+                    None,
+                )
                 .map_err(|error| error.to_string())?;
             Ok(result)
         }
@@ -682,9 +690,7 @@ pub fn restore_encrypted_backup(
         .map_err(|error| error.to_string())?;
     backup::replace_patients_folder_from_backup(&decrypted.patients_path)?;
     let _ = fs::remove_dir_all(&decrypted.root);
-    database
-        .license_status()
-        .map_err(|error| error.to_string())
+    database.license_status().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -707,7 +713,9 @@ pub fn restore_onboarding_backup(
         .bootstrap_status()
         .map_err(|error| error.to_string())?;
     if !bootstrap.needs_first_admin {
-        return Err("restore onboarding consentito solo prima della configurazione iniziale".to_owned());
+        return Err(
+            "restore onboarding consentito solo prima della configurazione iniziale".to_owned(),
+        );
     }
     let backup_path = match request.backup_path {
         Some(path) if !path.trim().is_empty() => PathBuf::from(path.trim()),
@@ -723,9 +731,7 @@ pub fn restore_onboarding_backup(
         .map_err(|error| error.to_string())?;
     backup::replace_patients_folder_from_backup(&decrypted.patients_path)?;
     let _ = fs::remove_dir_all(&decrypted.root);
-    database
-        .license_status()
-        .map_err(|error| error.to_string())
+    database.license_status().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1147,8 +1153,24 @@ pub async fn start_google_calendar_account_link(
             &token_json,
         )
         .map_err(|error| error.to_string())?;
+    if request.send_welcome_email.unwrap_or(false) {
+        google::send_gmail_message(
+            &token.access_token,
+            &user_info.email,
+            "Benvenuto in VeloDent",
+            &welcome_email_body(&user_info.email),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    }
     agenda::trigger_google_calendar_sync(&app, actor.id);
     Ok(account)
+}
+
+fn welcome_email_body(account_email: &str) -> String {
+    format!(
+        "Benvenuto in VeloDent.\n\nL'account Google Calendar {account_email} e' stato collegato correttamente allo studio.\n\nVeloDent e' pronto per gestire agenda, pazienti, cartella clinica, consensi e documenti locali cifrati.\n\nPer sicurezza la password amministratore non viene inviata via email: conservala in un luogo protetto e usa i backup cifrati .vdbk per il ripristino dei dati.\n\nVeloDent Precision"
+    )
 }
 
 #[tauri::command]
@@ -1351,6 +1373,7 @@ pub fn create_patient(
                 last_name: request.last_name.trim(),
                 tax_code: request.tax_code.trim(),
                 date_of_birth: request.date_of_birth.trim(),
+                birth_place: request.birth_place.as_deref(),
                 phone: request.phone.as_deref(),
                 email: request.email.as_deref(),
                 address: request.address.as_deref(),
@@ -1375,6 +1398,7 @@ pub fn update_patient(
                 last_name: request.last_name.trim(),
                 tax_code: request.tax_code.trim(),
                 date_of_birth: request.date_of_birth.trim(),
+                birth_place: request.birth_place.as_deref(),
                 phone: request.phone.as_deref(),
                 email: request.email.as_deref(),
                 address: request.address.as_deref(),

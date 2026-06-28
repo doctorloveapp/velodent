@@ -303,9 +303,9 @@ export async function removeGoogleAccount(session_token: string, account_id: num
   return invoke<void>("remove_google_account", { request: { session_token, account_id } });
 }
 
-export async function startGoogleCalendarAccountLink(session_token: string) {
+export async function startGoogleCalendarAccountLink(session_token: string, send_welcome_email = false) {
   return invoke<GoogleCalendarAccount>("start_google_calendar_account_link", {
-    request: { session_token, state: "velodent-calendar" }
+    request: { session_token, state: "velodent-calendar", send_welcome_email }
   });
 }
 

@@ -435,6 +435,7 @@
   "patientsFirstName": "Nome",
   "patientsLastName": "Cognome",
   "patientsBirthDate": "Data di nascita",
+  "patientsBirthPlace": "Luogo di nascita",
   "patientsTaxCode": "Codice fiscale",
   "patientsTaxCodeBadge": "CF",
   "patientsPhone": "Telefono",
