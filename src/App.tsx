@@ -175,6 +175,9 @@ function AuthGate() {
       setNeedsFirstAdmin(false);
       setCurrentUser(onboardingUser);
       setStatusMessage(t("onboardingCalendarConnected"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatusMessage(message.includes("oauth callback timed out") ? t("onboardingCalendarTimeout") : t("onboardingCalendarLinkFailed"));
     } finally {
       setOnboardingBusy(false);
     }

@@ -37,6 +37,8 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, State};
 
+const GOOGLE_OAUTH_CALLBACK_TIMEOUT_SECONDS: u64 = 45;
+
 #[tauri::command]
 pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, String> {
     require_license(&state)?;
@@ -2681,13 +2683,16 @@ fn wait_for_google_oauth_code(
     listener: TcpListener,
     expected_state: &str,
 ) -> Result<String, String> {
-    let deadline = Instant::now() + Duration::from_secs(180);
+    let deadline = Instant::now() + Duration::from_secs(GOOGLE_OAUTH_CALLBACK_TIMEOUT_SECONDS);
     let mut stream = loop {
         match listener.accept() {
             Ok((stream, _)) => break stream,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    return Err("google login timed out".to_owned());
+                    eprintln!(
+                        "VeloDent Google OAuth: callback timed out after {GOOGLE_OAUTH_CALLBACK_TIMEOUT_SECONDS}s. The selected Google account may not be enabled as a test user in Google Cloud."
+                    );
+                    return Err("google oauth callback timed out".to_owned());
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -2788,8 +2793,23 @@ fn write_oauth_response(stream: &mut impl Write, success: bool) -> Result<(), St
             "Autorizzazione non completata. Torna in VeloDent e riprova.",
         )
     };
+    let close_script = r#"<script>
+      (function () {
+        var fallback = document.getElementById('close-fallback');
+        function closeVeloDentWindow() {
+          try { window.close(); } catch (_) {}
+          setTimeout(function () {
+            try { window.close(); } catch (_) {}
+            if (fallback) { fallback.style.display = 'block'; }
+          }, 250);
+        }
+        var button = document.getElementById('close-window');
+        if (button) { button.addEventListener('click', closeVeloDentWindow); }
+        setTimeout(closeVeloDentWindow, 5000);
+      })();
+    </script>"#;
     let html = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body style=\"font-family:system-ui;background:#05070b;color:#eef6ff;min-height:100vh;display:grid;place-items:center;margin:0\"><main style=\"max-width:560px;padding:40px;border:1px solid rgba(148,163,184,.22);border-radius:18px;background:#07111f\"><h1 style=\"margin-top:0\">{title}</h1><p style=\"line-height:1.6;color:#b7c7d8\">{body}</p><button id=\"close-window\" style=\"margin-top:20px;border:1px solid rgba(96,165,250,.45);background:#12345a;color:#eef6ff;border-radius:10px;padding:12px 18px;font-weight:700\">Chiudi scheda</button></main><script>function closeVeloDentWindow(){{window.open('', '_self'); window.close();}} document.getElementById('close-window').addEventListener('click', closeVeloDentWindow); setTimeout(closeVeloDentWindow, 5000);</script></body></html>"
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body style=\"font-family:system-ui;background:#05070b;color:#eef6ff;min-height:100vh;display:grid;place-items:center;margin:0\"><main style=\"max-width:560px;padding:40px;border:1px solid rgba(148,163,184,.22);border-radius:18px;background:#07111f\"><h1 style=\"margin-top:0\">{title}</h1><p style=\"line-height:1.6;color:#b7c7d8\">{body}</p><button id=\"close-window\" type=\"button\" style=\"margin-top:20px;border:1px solid rgba(96,165,250,.45);background:#12345a;color:#eef6ff;border-radius:10px;padding:12px 18px;font-weight:700\">Chiudi scheda</button><p id=\"close-fallback\" style=\"display:none;margin-top:16px;color:#8fb4d6;font-size:13px;line-height:1.5\">Il browser ha impedito la chiusura automatica della scheda. Puoi chiuderla manualmente e tornare in VeloDent.</p></main>{close_script}</body></html>"
     );
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",

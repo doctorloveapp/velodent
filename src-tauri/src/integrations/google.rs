@@ -237,10 +237,11 @@ pub fn authorization_url(state: &str) -> Result<GoogleAuthorizationUrl, GoogleCo
         state.trim()
     };
     let authorization_url = format!(
-        "{GOOGLE_AUTH_URI}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&state={}",
+        "{GOOGLE_AUTH_URI}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt={}&state={}",
         encode_url_component(&config.client_id),
         encode_url_component(&config.redirect_uri),
         encode_url_component(&scope_value),
+        encode_url_component("consent select_account"),
         encode_url_component(state),
     );
 

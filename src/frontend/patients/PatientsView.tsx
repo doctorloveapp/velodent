@@ -346,7 +346,7 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
               <Input placeholder={t("patientsEmail")} type="email" value={form.email} onChange={(event) => updateForm("email", event.target.value)} />
               <Input placeholder={t("patientsAddress")} value={form.address} onChange={(event) => updateForm("address", event.target.value)} />
               <Input placeholder={t("patientsCity")} value={form.city} onChange={(event) => updateForm("city", event.target.value)} />
-              <Input className="uppercase" maxLength={2} placeholder={t("patientsProvince")} value={form.province} onChange={(event) => updateForm("province", event.target.value)} />
+              <Input className="w-20 max-w-20 text-center tracking-widest" maxLength={2} placeholder={t("patientsProvince")} value={form.province} onChange={(event) => updateForm("province", event.target.value)} />
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <Badge variant={taxCodeTouched ? (taxCodeValid ? "success" : "danger") : "default"}>

@@ -53,6 +53,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [consentDrafts, setConsentDrafts] = useState<Record<number, { title: string; body: string; active: boolean }>>({});
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
+  const [calendarLinking, setCalendarLinking] = useState(false);
   const [pairingCode, setPairingCode] = useState<PairingCodeInfo | null>(null);
   const [pairingQrDataUrl, setPairingQrDataUrl] = useState("");
 
@@ -302,9 +303,18 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       return;
     }
 
-    await startGoogleCalendarAccountLink(currentUser.session_token);
-    setStatusMessage(t("settingsCalendarAccountLinked"));
-    await refresh();
+    setCalendarLinking(true);
+    setStatusMessage(t("settingsCalendarAccountLinking"));
+    try {
+      await startGoogleCalendarAccountLink(currentUser.session_token);
+      setStatusMessage(t("settingsCalendarAccountLinked"));
+      await refresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatusMessage(message.includes("oauth callback timed out") ? t("settingsCalendarAccountLinkTimeout") : t("settingsCalendarAccountLinkFailed"));
+    } finally {
+      setCalendarLinking(false);
+    }
   }
 
   async function handleRemoveGoogleCalendarAccount(accountId: number) {
@@ -515,9 +525,9 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
               {calendarSyncStatus?.failed_jobs || !calendarSyncStatus?.connected ? t("agendaCalendarDisconnected") : t("agendaCalendarConnected")}
             </Badge>
           </div>
-          <SettingsActionButton disabled={calendarAccounts.length > 0} onClick={() => void handleLinkGoogleCalendar().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
+          <SettingsActionButton disabled={calendarAccounts.length > 0 || calendarLinking} onClick={() => void handleLinkGoogleCalendar()}>
             <CalendarCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
-            {t("settingsGoogleCalendarAddAccount")}
+            {calendarLinking ? t("settingsCalendarAccountLinking") : t("settingsGoogleCalendarAddAccount")}
           </SettingsActionButton>
         </div>
         <DenseTable
