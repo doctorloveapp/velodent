@@ -53,6 +53,7 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [consentDrafts, setConsentDrafts] = useState<Record<number, { title: string; body: string; active: boolean }>>({});
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
+  const [backupStatusMessage, setBackupStatusMessage] = useState("");
   const [calendarLinking, setCalendarLinking] = useState(false);
   const [pairingCode, setPairingCode] = useState<PairingCodeInfo | null>(null);
   const [pairingQrDataUrl, setPairingQrDataUrl] = useState("");
@@ -271,13 +272,16 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       setStatusMessage(t("settingsLoginRequired"));
       return;
     }
-    if (!backupPassword) {
+    if (!backupPassword.trim()) {
       setStatusMessage(t("settingsBackupPasswordRequired"));
+      setBackupStatusMessage(t("settingsBackupPasswordRequired"));
       return;
     }
+    setBackupStatusMessage("");
     const result = await createEncryptedBackup(currentUser.session_token, backupPassword);
     setBackupPassword("");
     setStatusMessage(`${t("settingsBackupCreated")}: ${result.backup_path}`);
+    setBackupStatusMessage(t("settingsBackupCreated"));
   }
 
   async function handleRestoreEncryptedBackup() {
@@ -285,16 +289,19 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       setStatusMessage(t("settingsLoginRequired"));
       return;
     }
-    if (!backupPassword) {
+    if (!backupPassword.trim()) {
       setStatusMessage(t("settingsBackupPasswordRequired"));
+      setBackupStatusMessage(t("settingsBackupPasswordRequired"));
       return;
     }
     if (!window.confirm(t("settingsRestoreConfirm"))) {
       return;
     }
+    setBackupStatusMessage("");
     await restoreEncryptedBackup(currentUser.session_token, backupPassword);
     setBackupPassword("");
     setStatusMessage(t("settingsRestoreCompleted"));
+    setBackupStatusMessage(t("settingsRestoreCompleted"));
   }
 
   async function handleLinkGoogleCalendar() {
@@ -494,8 +501,18 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
               placeholder={t("settingsBackupAdminPassword")}
               type="password"
               value={backupPassword}
-              onChange={(event) => setBackupPassword(event.target.value)}
+              onChange={(event) => {
+                setBackupPassword(event.target.value);
+                if (backupStatusMessage) {
+                  setBackupStatusMessage("");
+                }
+              }}
             />
+            {backupStatusMessage ? (
+              <p className="rounded-md border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-sm font-medium text-amber-100">
+                {backupStatusMessage}
+              </p>
+            ) : null}
             <div className="flex flex-wrap items-center gap-2">
               <SettingsActionButton onClick={() => void handleCreateEncryptedBackup().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("settingsGenericError")))}>
                 <Save aria-hidden="true" className="h-4 w-4" strokeWidth={1.6} />
