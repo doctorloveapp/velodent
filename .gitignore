@@ -27,3 +27,7 @@ piano_fasi.md
 AGENTS.md
 estetica.md
 mobile.md
+
+# Local-only QA deception scripts. Never commit tools that mutate dev databases directly.
+scripts/dev_deception.rs
+scripts/dev_deception/
