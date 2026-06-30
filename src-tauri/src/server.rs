@@ -44,6 +44,8 @@ pub mod lan {
         phone: Option<String>,
         email: Option<String>,
         address: Option<String>,
+        city: Option<String>,
+        province: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -279,6 +281,8 @@ pub mod lan {
                                 phone: request.phone.as_deref(),
                                 email: request.email.as_deref(),
                                 address: request.address.as_deref(),
+                                city: request.city.as_deref(),
+                                province: request.province.as_deref(),
                             },
                         )
                         .map_err(|error| error.to_string())?;

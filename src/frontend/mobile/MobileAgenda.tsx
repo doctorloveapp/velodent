@@ -262,7 +262,7 @@ export function MobileAgenda({ sessionToken }: MobileAgendaProps) {
                   key={status}
                   type="button"
                   variant={statusTarget.status === status ? "navActive" : "secondary"}
-                  className="h-12 justify-center text-base"
+                  className={`h-12 justify-center text-base ${status === "cancelled" ? "border-red-500/35 text-red-300 hover:bg-red-500/15" : ""}`}
                   onClick={() => void handleStatusChange(statusTarget, status).catch(() => setStatusMessage(t("agendaGenericError")))}
                 >
                   {t(appointmentStatusLabelKey(status))}

@@ -11,6 +11,8 @@ export interface Patient {
   phone: string | null;
   email: string | null;
   address: string | null;
+  city: string | null;
+  province: string | null;
   privacy_consent_signed: boolean;
   created_at: string;
   updated_at: string;
@@ -25,6 +27,8 @@ export interface PatientInput {
   phone?: string;
   email?: string;
   address?: string;
+  city?: string;
+  province?: string;
 }
 
 export interface TsCnsPatientData {
@@ -32,6 +36,8 @@ export interface TsCnsPatientData {
   first_name: string;
   date_of_birth: string;
   tax_code: string;
+  city?: string;
+  province?: string;
 }
 
 export interface PatientTimelineEvent {

@@ -170,7 +170,7 @@ function AuthGate() {
     setOnboardingBusy(true);
     setOnboardingCalendarLinked(false);
     try {
-      await startGoogleCalendarAccountLink(onboardingUser.session_token, true);
+      await startGoogleCalendarAccountLink(onboardingUser.session_token, true, adminForm.password);
       setOnboardingCalendarLinked(true);
       setNeedsFirstAdmin(false);
       setCurrentUser(onboardingUser);

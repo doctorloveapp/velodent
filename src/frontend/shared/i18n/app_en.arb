@@ -446,6 +446,8 @@
   "patientsPhone": "Phone",
   "patientsEmail": "Email",
   "patientsAddress": "Address",
+  "patientsCity": "City",
+  "patientsProvince": "Province",
   "patientsTaxCodeValid": "Valid tax code",
   "patientsTaxCodeInvalid": "Invalid tax code",
   "patientsDelete": "Delete",

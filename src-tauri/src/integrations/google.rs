@@ -400,7 +400,7 @@ pub async fn send_gmail_message(
     }
 
     let mime = format!(
-        "To: {recipient}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{body}"
+        "To: {recipient}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{body}"
     );
     let raw = URL_SAFE_NO_PAD.encode(mime.as_bytes());
     let response = reqwest::Client::new()

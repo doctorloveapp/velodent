@@ -14,6 +14,8 @@ interface MobilePatientDraft {
   phone: string;
   email: string;
   address: string;
+  city: string;
+  province: string;
 }
 
 const emptyDraft: MobilePatientDraft = {
@@ -24,7 +26,9 @@ const emptyDraft: MobilePatientDraft = {
   birth_place: "",
   phone: "",
   email: "",
-  address: ""
+  address: "",
+  city: "",
+  province: ""
 };
 
 export function MobilePatientRegistration({ sessionToken }: { sessionToken: string }) {
@@ -53,7 +57,9 @@ export function MobilePatientRegistration({ sessionToken }: { sessionToken: stri
         birth_place: draft.birth_place.trim() || undefined,
         phone: draft.phone.trim() || undefined,
         email: draft.email.trim() || undefined,
-        address: draft.address.trim() || undefined
+        address: draft.address.trim() || undefined,
+        city: draft.city.trim() || undefined,
+        province: draft.province.trim().toUpperCase() || undefined
       });
       setDraft(emptyDraft);
       setStatusMessage(t("mobilePatientSaved"));
@@ -160,6 +166,17 @@ function MobilePatientDraftForm({
           value={draft.address}
           onChange={(value) => update("address", value)}
         />
+        <LabeledInput
+          label={t("patientsCity")}
+          value={draft.city}
+          onChange={(value) => update("city", value)}
+        />
+        <LabeledInput
+          label={t("patientsProvince")}
+          maxLength={2}
+          value={draft.province}
+          onChange={(value) => update("province", value.toUpperCase().slice(0, 2))}
+        />
       </div>
     </div>
   );
@@ -168,12 +185,14 @@ function MobilePatientDraftForm({
 function LabeledInput({
   inputMode,
   label,
+  maxLength,
   onChange,
   type = "text",
   value
 }: {
   inputMode?: "email" | "tel";
   label: string;
+  maxLength?: number;
   onChange: (value: string) => void;
   type?: "date" | "text";
   value: string;
@@ -186,6 +205,7 @@ function LabeledInput({
       <Input
         className="h-12 text-base"
         inputMode={inputMode}
+        maxLength={maxLength}
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}

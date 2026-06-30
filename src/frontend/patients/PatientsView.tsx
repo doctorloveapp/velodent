@@ -67,7 +67,9 @@ const emptyPatientForm = {
   birth_place: "",
   phone: "",
   email: "",
-  address: ""
+  address: "",
+  city: "",
+  province: ""
 };
 
 const tabs: PatientTab[] = ["summary", "clinical", "rx", "documents", "billing"];
@@ -161,6 +163,10 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
       setForm((current) => ({ ...current, tax_code: value.toUpperCase() }));
       return;
     }
+    if (key === "province") {
+      setForm((current) => ({ ...current, province: value.toUpperCase().slice(0, 2) }));
+      return;
+    }
     setForm((current) => ({ ...current, [key]: value }));
   }
 
@@ -173,7 +179,9 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
       birth_place: form.birth_place || undefined,
       phone: form.phone || undefined,
       email: form.email || undefined,
-      address: form.address || undefined
+      address: form.address || undefined,
+      city: form.city || undefined,
+      province: form.province || undefined
     };
   }
 
@@ -243,7 +251,9 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
       first_name: scanned.first_name,
       last_name: scanned.last_name,
       date_of_birth: scanned.date_of_birth,
-      tax_code: scanned.tax_code.toUpperCase()
+      tax_code: scanned.tax_code.toUpperCase(),
+      city: scanned.city ?? current.city,
+      province: scanned.province?.toUpperCase().slice(0, 2) ?? current.province
     }));
     setTaxCodeTouched(false);
     setStatusMessage(t("patientsTsScanned"));
@@ -335,6 +345,8 @@ export function PatientsView({ currentUser, onPatientSelected, selectedPatient }
               <Input placeholder={t("patientsPhone")} value={form.phone} onChange={(event) => updateForm("phone", event.target.value)} />
               <Input placeholder={t("patientsEmail")} type="email" value={form.email} onChange={(event) => updateForm("email", event.target.value)} />
               <Input placeholder={t("patientsAddress")} value={form.address} onChange={(event) => updateForm("address", event.target.value)} />
+              <Input placeholder={t("patientsCity")} value={form.city} onChange={(event) => updateForm("city", event.target.value)} />
+              <Input className="uppercase" maxLength={2} placeholder={t("patientsProvince")} value={form.province} onChange={(event) => updateForm("province", event.target.value)} />
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <Badge variant={taxCodeTouched ? (taxCodeValid ? "success" : "danger") : "default"}>
@@ -426,6 +438,8 @@ function PatientTabPanel({ currentUser, patient, tab }: { currentUser: User | nu
         <PatientData label={t("patientsPhone")} value={patient.phone ?? t("commonEmpty")} />
         <PatientData label={t("patientsEmail")} value={patient.email ?? t("commonEmpty")} />
         <PatientData label={t("patientsAddress")} value={patient.address ?? t("commonEmpty")} wide />
+        <PatientData label={t("patientsCity")} value={patient.city ?? t("commonEmpty")} />
+        <PatientData label={t("patientsProvince")} value={patient.province ?? t("commonEmpty")} />
       </dl>
     );
   }
@@ -955,7 +969,9 @@ function patientToForm(patient: Patient) {
     birth_place: patient.birth_place ?? "",
     phone: patient.phone ?? "",
     email: patient.email ?? "",
-    address: patient.address ?? ""
+    address: patient.address ?? "",
+    city: patient.city ?? "",
+    province: patient.province ?? ""
   };
 }
 

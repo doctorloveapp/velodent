@@ -13,7 +13,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 16;
+const CURRENT_SCHEMA_VERSION: i64 = 17;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 
 #[derive(Debug)]
@@ -175,6 +175,8 @@ pub struct Patient {
     pub phone: Option<String>,
     pub email: Option<String>,
     pub address: Option<String>,
+    pub city: Option<String>,
+    pub province: Option<String>,
     pub privacy_consent_signed: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -190,6 +192,8 @@ pub struct NewPatient<'a> {
     pub phone: Option<&'a str>,
     pub email: Option<&'a str>,
     pub address: Option<&'a str>,
+    pub city: Option<&'a str>,
+    pub province: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1966,6 +1970,8 @@ impl Database {
         let phone = normalize_optional(patient.phone);
         let email = normalize_optional(patient.email);
         let address = normalize_optional(patient.address);
+        let city = normalize_optional(patient.city);
+        let province = normalize_province(patient.province)?;
 
         self.conn.execute(
             r#"
@@ -1977,9 +1983,11 @@ impl Database {
                 birth_place,
                 phone,
                 email,
-                address
+                address,
+                city,
+                province
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
             params![
                 patient.first_name.trim(),
@@ -1990,6 +1998,8 @@ impl Database {
                 phone.as_deref(),
                 email.as_deref(),
                 address.as_deref(),
+                city.as_deref(),
+                province.as_deref(),
             ],
         )?;
 
@@ -2008,6 +2018,8 @@ impl Database {
         let phone = normalize_optional(patient.phone);
         let email = normalize_optional(patient.email);
         let address = normalize_optional(patient.address);
+        let city = normalize_optional(patient.city);
+        let province = normalize_province(patient.province)?;
 
         let affected = self.conn.execute(
             r#"
@@ -2021,8 +2033,10 @@ impl Database {
                 phone = ?6,
                 email = ?7,
                 address = ?8,
+                city = ?9,
+                province = ?10,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?9 AND deleted_at IS NULL
+            WHERE id = ?11 AND deleted_at IS NULL
             "#,
             params![
                 patient.first_name.trim(),
@@ -2033,6 +2047,8 @@ impl Database {
                 phone.as_deref(),
                 email.as_deref(),
                 address.as_deref(),
+                city.as_deref(),
+                province.as_deref(),
                 patient_id,
             ],
         )?;
@@ -5666,6 +5682,8 @@ impl Database {
                     phone,
                     email,
                     address,
+                    city,
+                    province,
                     privacy_consent_signed,
                     created_at,
                     updated_at
@@ -5695,6 +5713,8 @@ impl Database {
                 phone,
                 email,
                 address,
+                city,
+                province,
                 privacy_consent_signed,
                 created_at,
                 updated_at
@@ -5739,6 +5759,8 @@ impl Database {
             phone: None,
             email: None,
             address: None,
+            city: None,
+            province: None,
         })?;
 
         self.conn.execute(
@@ -5772,6 +5794,8 @@ impl Database {
                     phone,
                     email,
                     address,
+                    city,
+                    province,
                     privacy_consent_signed,
                     created_at,
                     updated_at
@@ -6831,6 +6855,16 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn normalize_province(value: Option<&str>) -> DbResult<Option<String>> {
+    let Some(normalized) = normalize_optional(value).map(|value| value.to_ascii_uppercase()) else {
+        return Ok(None);
+    };
+    if normalized.chars().count() != 2 || !normalized.chars().all(|character| character.is_ascii_alphabetic()) {
+        return Err(DbError::Sql("province must use a 2-letter code".to_owned()));
+    }
+    Ok(Some(normalized))
+}
+
 fn clinical_service_group_key(value: Option<&str>) -> &'static str {
     let normalized = value.unwrap_or_default().trim().to_ascii_lowercase();
     if normalized.contains("conservativa") {
@@ -7221,6 +7255,8 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
     )?;
     ensure_column(conn, "patients", "deleted_at", "TEXT")?;
     ensure_column(conn, "patients", "birth_place", "TEXT")?;
+    ensure_column(conn, "patients", "city", "TEXT")?;
+    ensure_column(conn, "patients", "province", "TEXT")?;
     ensure_column(
         conn,
         "clinical_records",
@@ -7611,7 +7647,7 @@ fn quote_identifier(value: &str) -> String {
 }
 
 fn patient_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
-    let privacy_consent_signed: i64 = row.get(9)?;
+    let privacy_consent_signed: i64 = row.get(11)?;
 
     Ok(Patient {
         id: row.get(0)?,
@@ -7623,9 +7659,11 @@ fn patient_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Patient> {
         phone: row.get(6)?,
         email: row.get(7)?,
         address: row.get(8)?,
+        city: row.get(9)?,
+        province: row.get(10)?,
         privacy_consent_signed: privacy_consent_signed == 1,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -7999,6 +8037,8 @@ CREATE TABLE IF NOT EXISTS patients (
     phone TEXT,
     email TEXT,
     address TEXT,
+    city TEXT,
+    province TEXT,
     privacy_consent_signed INTEGER NOT NULL DEFAULT 0 CHECK(privacy_consent_signed IN (0, 1)),
     deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -8505,7 +8545,9 @@ mod tests {
                 birth_place: None,
                 phone: None,
                 email: Some("ada@example.test"),
-                address: None,
+                    address: None,
+                    city: None,
+                    province: None,
             })
             .expect("insert patient");
 
@@ -8679,6 +8721,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -8719,6 +8763,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -8954,7 +9000,9 @@ mod tests {
                     birth_place: None,
                     phone: Some("+39 060000000"),
                     email: Some("mario.rossi@example.test"),
-                    address: Some("Via Roma 1"),
+                    address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -8977,7 +9025,9 @@ mod tests {
                     birth_place: None,
                     phone: Some("+39 061111111"),
                     email: Some("mario.rossi@example.test"),
-                    address: Some("Via Milano 2"),
+                    address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("update patient");
@@ -9029,6 +9079,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -9192,6 +9244,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -9328,6 +9382,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -9392,6 +9448,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -9477,6 +9535,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -9596,6 +9656,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -9684,6 +9746,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -9762,6 +9826,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -9841,6 +9907,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -9929,6 +9997,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -10014,6 +10084,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -10116,6 +10188,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -10182,6 +10256,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -10263,6 +10339,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -10335,6 +10413,8 @@ mod tests {
                     phone: None,
                     email: None,
                     address: None,
+                    city: None,
+                    province: None,
                 },
             )
             .expect("create patient");
@@ -10686,3 +10766,4 @@ mod tests {
         env::temp_dir().join(format!("velodent-test-{suffix}.sqlite"))
     }
 }
+

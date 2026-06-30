@@ -208,6 +208,8 @@ pub struct PatientRequest {
     phone: Option<String>,
     email: Option<String>,
     address: Option<String>,
+    city: Option<String>,
+    province: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +224,8 @@ pub struct UpdatePatientRequest {
     phone: Option<String>,
     email: Option<String>,
     address: Option<String>,
+    city: Option<String>,
+    province: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -562,6 +566,7 @@ pub struct GoogleAuthorizationUrlRequest {
     session_token: String,
     state: Option<String>,
     send_welcome_email: Option<bool>,
+    welcome_admin_password: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1174,12 +1179,15 @@ pub async fn start_google_calendar_account_link(
             &token.access_token,
             &user_info.email,
             "Benvenuto in VeloDent",
-            &welcome_email_body(&user_info.email),
+            &welcome_email_html(
+                &user_info.email,
+                request.welcome_admin_password.as_deref(),
+            ),
         )
         .await
         {
             eprintln!(
-                "VeloDent Google Calendar OAuth: welcome email not sent, continuing onboarding: {error}"
+                "VeloDent Google Calendar OAuth: welcome email not sent, continuing onboarding. Check Google Cloud Gmail API and scope https://www.googleapis.com/auth/gmail.send. Error: {error}"
             );
         } else {
             println!("VeloDent Google Calendar OAuth: welcome email sent");
@@ -1189,10 +1197,62 @@ pub async fn start_google_calendar_account_link(
     Ok(account)
 }
 
-fn welcome_email_body(account_email: &str) -> String {
+fn welcome_email_html(account_email: &str, admin_password: Option<&str>) -> String {
+    let password_block = admin_password
+        .map(|password| {
+            format!(
+                r#"<div style="margin:24px 0;padding:18px;border:1px solid rgba(245,158,11,.35);border-radius:14px;background:rgba(245,158,11,.10)">
+                    <p style="margin:0 0 8px;color:#fcd34d;font-size:12px;text-transform:uppercase;letter-spacing:.12em;font-weight:800">Password amministratore</p>
+                    <p style="margin:0;font-family:Consolas,monospace;font-size:18px;color:#fff;word-break:break-all">{}</p>
+                    <p style="margin:10px 0 0;color:#cbd5e1;font-size:13px;line-height:1.5">Conserva questa email in un luogo protetto.</p>
+                </div>"#,
+                escape_html(password)
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "Benvenuto in VeloDent.\n\nL'account Google Calendar {account_email} e' stato collegato correttamente allo studio.\n\nVeloDent e' pronto per gestire agenda, pazienti, cartella clinica, consensi e documenti locali cifrati.\n\nPer sicurezza la password amministratore non viene inviata via email: conservala in un luogo protetto e usa i backup cifrati .vdbk per il ripristino dei dati.\n\nVeloDent Precision"
+        r#"<!doctype html>
+        <html>
+          <body style="margin:0;background:#05070b;color:#eef6ff;font-family:Inter,Segoe UI,Arial,sans-serif">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#05070b;padding:32px 14px">
+              <tr>
+                <td align="center">
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;border:1px solid rgba(148,163,184,.20);border-radius:22px;background:#07111f;overflow:hidden">
+                    <tr>
+                      <td style="padding:28px 30px;border-bottom:1px solid rgba(148,163,184,.16)">
+                        <div style="display:inline-block;width:38px;height:38px;border-radius:10px;border:1px solid rgba(96,165,250,.45);background:#0b2746;color:#93c5fd;text-align:center;line-height:38px;font-weight:900">V</div>
+                        <div style="margin-top:18px;color:#60a5fa;font-size:11px;text-transform:uppercase;letter-spacing:.18em;font-weight:800">VeloDent Precision</div>
+                        <h1 style="margin:8px 0 0;color:#fff;font-size:26px;line-height:1.25">Benvenuto in VeloDent</h1>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding:30px">
+                        <p style="margin:0 0 16px;color:#dbeafe;font-size:16px;line-height:1.7">Grazie per aver scelto VeloDent. La configurazione iniziale dello studio e' stata completata e l'account Google Calendar <strong style="color:#93c5fd">{}</strong> e' stato collegato.</p>
+                        <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7">Da questo momento puoi gestire agenda, anagrafica pazienti, cartella clinica, documenti e backup locali cifrati.</p>
+                        {}
+                        <div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(148,163,184,.16);color:#8fb4d6;font-size:13px;line-height:1.6">
+                          VeloDent archivia i dati localmente nello studio. Esegui backup periodici in formato .vdbk.
+                        </div>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </body>
+        </html>"#,
+        escape_html(account_email),
+        password_block
     )
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 #[tauri::command]
@@ -1399,6 +1459,8 @@ pub fn create_patient(
                 phone: request.phone.as_deref(),
                 email: request.email.as_deref(),
                 address: request.address.as_deref(),
+                city: request.city.as_deref(),
+                province: request.province.as_deref(),
             },
         )
         .map_err(|error| error.to_string())
@@ -1424,6 +1486,8 @@ pub fn update_patient(
                 phone: request.phone.as_deref(),
                 email: request.email.as_deref(),
                 address: request.address.as_deref(),
+                city: request.city.as_deref(),
+                province: request.province.as_deref(),
             },
         )
         .map_err(|error| error.to_string())
@@ -2725,7 +2789,7 @@ fn write_oauth_response(stream: &mut impl Write, success: bool) -> Result<(), St
         )
     };
     let html = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body style=\"font-family:system-ui;background:#05070b;color:#eef6ff;min-height:100vh;display:grid;place-items:center;margin:0\"><main style=\"max-width:560px;padding:40px;border:1px solid rgba(148,163,184,.22);border-radius:18px;background:#07111f\"><h1 style=\"margin-top:0\">{title}</h1><p style=\"line-height:1.6;color:#b7c7d8\">{body}</p><button onclick=\"window.close()\" style=\"margin-top:20px;border:1px solid rgba(96,165,250,.45);background:#12345a;color:#eef6ff;border-radius:10px;padding:12px 18px;font-weight:700\">Chiudi scheda</button></main><script>setTimeout(() => window.close(), 1800);</script></body></html>"
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body style=\"font-family:system-ui;background:#05070b;color:#eef6ff;min-height:100vh;display:grid;place-items:center;margin:0\"><main style=\"max-width:560px;padding:40px;border:1px solid rgba(148,163,184,.22);border-radius:18px;background:#07111f\"><h1 style=\"margin-top:0\">{title}</h1><p style=\"line-height:1.6;color:#b7c7d8\">{body}</p><button id=\"close-window\" style=\"margin-top:20px;border:1px solid rgba(96,165,250,.45);background:#12345a;color:#eef6ff;border-radius:10px;padding:12px 18px;font-weight:700\">Chiudi scheda</button></main><script>function closeVeloDentWindow(){{window.open('', '_self'); window.close();}} document.getElementById('close-window').addEventListener('click', closeVeloDentWindow); setTimeout(closeVeloDentWindow, 5000);</script></body></html>"
     );
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
