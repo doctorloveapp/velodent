@@ -1120,6 +1120,10 @@ impl Database {
             )?;
             self.conn.last_insert_rowid()
         };
+        self.set_system_integrity_value(
+            "first_install_date",
+            "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        )?;
         self.insert_audit(
             Some(user_id),
             None,
@@ -7294,13 +7298,6 @@ fn initialize_system_integrity(conn: &Connection) -> DbResult<()> {
     conn.execute(
         r#"
         INSERT OR IGNORE INTO system_integrity (key, value)
-        VALUES ('first_install_date', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-        "#,
-        [],
-    )?;
-    conn.execute(
-        r#"
-        INSERT OR IGNORE INTO system_integrity (key, value)
         VALUES ('migration_count', '0')
         "#,
         [],
@@ -8533,6 +8530,11 @@ mod tests {
     fn enterprise_trial_allows_sixty_days_then_blocks() {
         let db = Database::open(test_database_path(), EncryptionKey::for_tests())
             .expect("open encrypted db");
+        db.set_system_integrity_value(
+            "first_install_date",
+            "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        )
+        .expect("seed first install");
         let status = db.license_status().expect("license status");
         assert!(status.allowed);
         assert!(status.trial_active);
@@ -8554,6 +8556,30 @@ mod tests {
         assert!(!expired.allowed);
         assert!(expired.blocked);
         assert_eq!(expired.block_reason.as_deref(), Some("trial_expired"));
+    }
+
+    #[test]
+    fn first_install_date_starts_when_first_admin_is_saved() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        assert!(db
+            .system_integrity_value("first_install_date")
+            .expect("first install date")
+            .is_none());
+
+        db.license_status()
+            .expect("license status before bootstrap");
+        assert!(db
+            .system_integrity_value("first_install_date")
+            .expect("first install date after status")
+            .is_none());
+
+        db.create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        assert!(db
+            .system_integrity_value("first_install_date")
+            .expect("first install date after admin")
+            .is_some());
     }
 
     #[test]

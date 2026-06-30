@@ -1,5 +1,6 @@
 import { AppShell } from "@/frontend/app-shell/AppShell";
 import { L10nProvider } from "@/frontend/shared/i18n/L10nProvider";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState, type ReactNode } from "react";
 import { Activity, ArrowLeft, Building2, CalendarCheck, CheckCircle2, KeyRound, RotateCcw, ShieldCheck, UploadCloud } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -57,6 +58,7 @@ function AuthGate() {
   const [onboardingChoice, setOnboardingChoice] = useState<"new" | "restore" | null>(null);
   const [onboardingStep, setOnboardingStep] = useState<"choice" | "new" | "restore" | "calendar">("choice");
   const [onboardingUser, setOnboardingUser] = useState<User | null>(null);
+  const [onboardingCalendarLinked, setOnboardingCalendarLinked] = useState(false);
   const [restoreForm, setRestoreForm] = useState({ backupPath: "", password: "" });
   const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [loginForm, setLoginForm] = useState({ username: "admin", password: "" });
@@ -115,6 +117,35 @@ function AuthGate() {
       .finally(() => setChecking(false));
   }, [backendAvailable, license?.allowed, licenseChecking, t]);
 
+  useEffect(() => {
+    if (!backendAvailable || onboardingStep !== "calendar" || !onboardingUser) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen("velodent-google-calendar-linked", () => {
+      if (disposed) {
+        return;
+      }
+      setOnboardingCalendarLinked(true);
+      setStatusMessage(t("onboardingCalendarConnected"));
+    }).then((nextUnlisten) => {
+      if (disposed) {
+        nextUnlisten();
+      } else {
+        unlisten = nextUnlisten;
+      }
+    });
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [backendAvailable, onboardingStep, onboardingUser?.id, t]);
+
   async function handleActivateLicense() {
     const nextLicense = await activateLicense(activationEmail, activationKey);
     setLicense(nextLicense);
@@ -127,6 +158,7 @@ function AuthGate() {
       password: adminForm.password
     });
     setOnboardingUser(user);
+    setOnboardingCalendarLinked(false);
     setOnboardingStep("calendar");
     setStatusMessage(t("onboardingAdminCreated"));
   }
@@ -136,14 +168,26 @@ function AuthGate() {
       return;
     }
     setOnboardingBusy(true);
+    setOnboardingCalendarLinked(false);
     try {
       await startGoogleCalendarAccountLink(onboardingUser.session_token, true);
+      setOnboardingCalendarLinked(true);
       setNeedsFirstAdmin(false);
       setCurrentUser(onboardingUser);
       setStatusMessage(t("onboardingCalendarConnected"));
     } finally {
       setOnboardingBusy(false);
     }
+  }
+
+  function handleSkipOnboardingCalendar() {
+    if (!onboardingUser) {
+      return;
+    }
+    setOnboardingCalendarLinked(false);
+    setNeedsFirstAdmin(false);
+    setCurrentUser(onboardingUser);
+    setStatusMessage(t("onboardingCalendarSkipped"));
   }
 
   async function handlePickOnboardingBackup() {
@@ -250,6 +294,7 @@ function AuthGate() {
     <OnboardingWizard
       adminForm={adminForm}
       busy={onboardingBusy}
+      calendarLinked={onboardingCalendarLinked}
       choice={onboardingChoice}
       restoreForm={restoreForm}
       statusMessage={statusMessage}
@@ -269,6 +314,7 @@ function AuthGate() {
       onLinkCalendar={() => void handleLinkOnboardingCalendar().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
       onPickBackup={() => void handlePickOnboardingBackup().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
       onRestore={() => void handleRestoreOnboardingBackup().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")))}
+      onSkipCalendar={handleSkipOnboardingCalendar}
       onAdminFormChange={setAdminForm}
       onRestoreFormChange={setRestoreForm}
     />
@@ -299,6 +345,7 @@ function AuthGate() {
 interface OnboardingWizardProps {
   adminForm: { username: string; password: string; confirmPassword: string };
   busy: boolean;
+  calendarLinked: boolean;
   choice: "new" | "restore" | null;
   restoreForm: { backupPath: string; password: string };
   statusMessage: string;
@@ -311,12 +358,14 @@ interface OnboardingWizardProps {
   onLinkCalendar: () => void;
   onPickBackup: () => void;
   onRestore: () => void;
+  onSkipCalendar: () => void;
   onRestoreFormChange: (form: { backupPath: string; password: string }) => void;
 }
 
 function OnboardingWizard({
   adminForm,
   busy,
+  calendarLinked,
   choice,
   restoreForm,
   statusMessage,
@@ -329,6 +378,7 @@ function OnboardingWizard({
   onLinkCalendar,
   onPickBackup,
   onRestore,
+  onSkipCalendar,
   onRestoreFormChange
 }: OnboardingWizardProps) {
   const { t } = useL10n();
@@ -435,11 +485,28 @@ function OnboardingWizard({
                     <CalendarCheck aria-hidden="true" className="mt-1 h-5 w-5 text-powder-blue-500" strokeWidth={1.6} />
                     <p className="text-sm leading-6 text-alabaster-grey-500">{t("onboardingCalendarRequired")}</p>
                   </div>
+                  <div className="mt-4">
+                    <span className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold ${
+                      calendarLinked
+                        ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
+                        : busy
+                          ? "border-powder-blue-500/25 bg-powder-blue-950/30 text-powder-blue-200"
+                          : "border-amber-400/25 bg-amber-400/10 text-amber-200"
+                    }`}>
+                      <span className={`h-2 w-2 rounded-full ${calendarLinked ? "bg-emerald-400" : busy ? "bg-powder-blue-500" : "bg-amber-400"}`} />
+                      {calendarLinked ? t("onboardingCalendarStatusConnected") : busy ? t("onboardingCalendarStatusWaiting") : t("onboardingCalendarStatusDisconnected")}
+                    </span>
+                  </div>
                 </div>
-                <Button disabled={busy} type="button" onClick={onLinkCalendar}>
-                  <CalendarCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.8} />
-                  {busy ? t("onboardingCalendarConnecting") : t("onboardingConnectCalendar")}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button disabled={busy} type="button" onClick={onLinkCalendar}>
+                    <CalendarCheck aria-hidden="true" className="h-4 w-4" strokeWidth={1.8} />
+                    {busy ? t("onboardingCalendarConnecting") : t("onboardingConnectCalendar")}
+                  </Button>
+                  <Button disabled={busy} type="button" variant="ghost" onClick={onSkipCalendar}>
+                    {t("onboardingSkipCalendar")}
+                  </Button>
+                </div>
               </motion.div>
             ) : null}
 

@@ -35,7 +35,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
 pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, String> {
@@ -582,6 +582,11 @@ pub struct GoogleCalendarSyncRunResult {
     failed: i64,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct GoogleCalendarLinkedEvent {
+    account_id: i64,
+}
+
 fn require_session(state: &State<'_, AppState>, session_token: &str) -> Result<User, String> {
     require_license(state)?;
     state
@@ -1122,6 +1127,7 @@ pub async fn start_google_calendar_account_link(
         .to_owned();
     let authorization =
         google::authorization_url(&expected_state).map_err(|error| error.to_string())?;
+    println!("VeloDent Google Calendar OAuth: opening browser and waiting for callback");
     let listener = TcpListener::bind(("127.0.0.1", 1421)).map_err(|error| {
         format!("unable to start Google Calendar listener on port 1421: {error}")
     })?;
@@ -1153,15 +1159,31 @@ pub async fn start_google_calendar_account_link(
             &token_json,
         )
         .map_err(|error| error.to_string())?;
+    println!(
+        "VeloDent Google Calendar OAuth: token saved successfully, account_id={}",
+        account.id
+    );
+    let _ = app.emit(
+        "velodent-google-calendar-linked",
+        GoogleCalendarLinkedEvent {
+            account_id: account.id,
+        },
+    );
     if request.send_welcome_email.unwrap_or(false) {
-        google::send_gmail_message(
+        if let Err(error) = google::send_gmail_message(
             &token.access_token,
             &user_info.email,
             "Benvenuto in VeloDent",
             &welcome_email_body(&user_info.email),
         )
         .await
-        .map_err(|error| error.to_string())?;
+        {
+            eprintln!(
+                "VeloDent Google Calendar OAuth: welcome email not sent, continuing onboarding: {error}"
+            );
+        } else {
+            println!("VeloDent Google Calendar OAuth: welcome email sent");
+        }
     }
     agenda::trigger_google_calendar_sync(&app, actor.id);
     Ok(account)
@@ -2608,6 +2630,7 @@ fn wait_for_google_oauth_code(
             Err(error) => return Err(error.to_string()),
         }
     };
+    println!("VeloDent Google OAuth callback received on localhost");
     let mut buffer = [0_u8; 4096];
     let read = stream
         .read(&mut buffer)
@@ -2628,6 +2651,7 @@ fn wait_for_google_oauth_code(
     let parameters = parse_query_parameters(query);
 
     if let Some(error) = parameters.get("error") {
+        eprintln!("VeloDent Google OAuth callback rejected by provider: {error}");
         write_oauth_response(&mut stream, false)?;
         return Err(format!("google login rejected: {error}"));
     }
@@ -2637,6 +2661,7 @@ fn wait_for_google_oauth_code(
         .map(String::as_str)
         .unwrap_or_default();
     if state != expected_state {
+        eprintln!("VeloDent Google OAuth callback rejected: state mismatch");
         write_oauth_response(&mut stream, false)?;
         return Err("google login state mismatch".to_owned());
     }
@@ -2647,6 +2672,7 @@ fn wait_for_google_oauth_code(
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "google callback did not include an authorization code".to_owned())?
         .to_owned();
+    println!("VeloDent Google OAuth callback accepted");
     write_oauth_response(&mut stream, true)?;
     Ok(code)
 }
@@ -2688,18 +2714,18 @@ fn write_oauth_response(stream: &mut impl Write, success: bool) -> Result<(), St
     let (status, title, body) = if success {
         (
             "200 OK",
-            "VeloDent Google login completed",
-            "You can close this browser tab and return to VeloDent.",
+            "Autorizzazione riuscita",
+            "Autorizzazione riuscita! Torna nell'app VeloDent per completare la configurazione.",
         )
     } else {
         (
             "400 Bad Request",
-            "VeloDent Google login not completed",
-            "Return to VeloDent and try Google login again.",
+            "Autorizzazione non completata",
+            "Autorizzazione non completata. Torna in VeloDent e riprova.",
         )
     };
     let html = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body style=\"font-family:system-ui;background:#05070b;color:#eef6ff;padding:40px\"><h1>{title}</h1><p>{body}</p></body></html>"
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body style=\"font-family:system-ui;background:#05070b;color:#eef6ff;min-height:100vh;display:grid;place-items:center;margin:0\"><main style=\"max-width:560px;padding:40px;border:1px solid rgba(148,163,184,.22);border-radius:18px;background:#07111f\"><h1 style=\"margin-top:0\">{title}</h1><p style=\"line-height:1.6;color:#b7c7d8\">{body}</p><button onclick=\"window.close()\" style=\"margin-top:20px;border:1px solid rgba(96,165,250,.45);background:#12345a;color:#eef6ff;border-radius:10px;padding:12px 18px;font-weight:700\">Chiudi scheda</button></main><script>setTimeout(() => window.close(), 1800);</script></body></html>"
     );
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
