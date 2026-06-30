@@ -355,6 +355,7 @@ pub struct GoogleCalendarSyncJob {
 #[derive(Debug, Clone)]
 pub struct GoogleCalendarTokenRecord {
     pub account_id: i64,
+    pub email: Option<String>,
     pub calendar_id: String,
     pub token_json: String,
 }
@@ -602,6 +603,10 @@ pub struct LicenseStatus {
     pub blocked: bool,
     pub block_reason: Option<String>,
     pub migration_count: i64,
+    pub migration_grace_active: bool,
+    pub migration_grace_days_remaining: i64,
+    pub migration_detected_at: Option<String>,
+    pub migration_expires_at: Option<String>,
     pub email: Option<String>,
     pub activated_at: Option<String>,
     pub trial_expires_at: Option<String>,
@@ -703,22 +708,43 @@ impl Database {
             )
             .optional()?;
 
-        let (activated, email, activated_at) = if let Some((activation_key, email, activated_at)) =
-            row
-        {
-            let activated = license::verify_activation_key(&activation_key, &hardware_id).is_ok();
-            (
-                activated,
-                activated.then_some(email),
-                activated.then_some(activated_at),
-            )
+        let (activated, license_hardware_mismatch, email, activated_at) =
+            if let Some((activation_key, email, activated_at)) = row {
+                match license::verify_activation_key(&activation_key, &hardware_id) {
+                    Ok(_) => (true, false, Some(email), Some(activated_at)),
+                    Err(license::LicenseError::HardwareMismatch) => (false, true, None, None),
+                    Err(_) => (false, false, None, None),
+                }
         } else {
-            (false, None, None)
+                (false, false, None, None)
+            };
+        let migration_required = license_hardware_mismatch || (!activated && migration_count > 0);
+        if activated {
+            self.delete_system_integrity_value("migration_detected_at")?;
+        }
+        let migration_detected_at = if migration_required {
+            Some(self.ensure_migration_detected_at()?)
+        } else {
+            None
         };
+        let migration_expires_at = migration_detected_at
+            .as_deref()
+            .map(|date| self.plus_days(date, 7))
+            .transpose()?;
+        let migration_grace_active = migration_expires_at
+            .as_deref()
+            .map(|expires_at| self.timestamp_not_past(expires_at))
+            .transpose()?
+            .unwrap_or(false);
+        let migration_grace_days_remaining = migration_expires_at
+            .as_deref()
+            .map(|expires_at| self.days_remaining_until(expires_at))
+            .transpose()?
+            .unwrap_or(0);
 
         let block_reason = if clock_rollback {
             Some("clock_anomaly".to_owned())
-        } else if !activated && migration_count > 0 {
+        } else if migration_required && !migration_grace_active {
             Some("migration_activation_required".to_owned())
         } else if !activated && !trial_active {
             Some("trial_expired".to_owned())
@@ -726,7 +752,7 @@ impl Database {
             None
         };
         let blocked = block_reason.is_some();
-        let allowed = !blocked && (activated || trial_active);
+        let allowed = !blocked && (activated || trial_active || migration_grace_active);
         if allowed {
             self.record_last_usage_date()?;
         }
@@ -741,6 +767,10 @@ impl Database {
             blocked,
             block_reason,
             migration_count,
+            migration_grace_active,
+            migration_grace_days_remaining,
+            migration_detected_at,
+            migration_expires_at,
             email,
             activated_at,
             trial_expires_at,
@@ -767,6 +797,8 @@ impl Database {
             "#,
             params![hardware_id, payload.email, activation_key.trim()],
         )?;
+        self.set_system_integrity_literal("bound_hardware_id", &hardware_id)?;
+        self.delete_system_integrity_value("migration_detected_at")?;
 
         self.license_status()
     }
@@ -907,6 +939,12 @@ impl Database {
                     "last_migration_date",
                     "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
                 )?;
+                if self.system_integrity_value("migration_detected_at")?.is_none() {
+                    self.set_system_integrity_value(
+                        "migration_detected_at",
+                        "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+                    )?;
+                }
             }
             Some(_) => {}
         }
@@ -971,6 +1009,18 @@ impl Database {
                 |row| row.get::<_, i64>(0),
             )
             .map(|value| value == 1)
+            .map_err(DbError::from)
+    }
+
+    fn days_remaining_until(&self, value: &str) -> DbResult<i64> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT MAX(0, CAST(((strftime('%s', ?1) - strftime('%s', 'now') + 86399) / 86400) AS INTEGER))
+                "#,
+                [value],
+                |row| row.get(0),
+            )
             .map_err(DbError::from)
     }
 
@@ -1054,6 +1104,24 @@ impl Database {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    fn delete_system_integrity_value(&self, key: &str) -> DbResult<()> {
+        self.conn
+            .execute("DELETE FROM system_integrity WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn ensure_migration_detected_at(&self) -> DbResult<String> {
+        if let Some(existing) = self.system_integrity_value("migration_detected_at")? {
+            return Ok(existing);
+        }
+        self.set_system_integrity_value(
+            "migration_detected_at",
+            "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        )?;
+        self.system_integrity_value("migration_detected_at")?
+            .ok_or_else(|| DbError::Sql("migration_detected_at not initialized".to_owned()))
     }
 
     fn set_system_integrity_value(&self, key: &str, sql_expression: &str) -> DbResult<()> {
@@ -4839,7 +4907,7 @@ impl Database {
         self.assert_active_user(actor_user_id)?;
         let mut statement = self.conn.prepare(
             r#"
-            SELECT id, calendar_id, token_json
+            SELECT id, email, calendar_id, token_json
             FROM google_calendar_accounts
             WHERE active = 1
             ORDER BY updated_at DESC, id DESC
@@ -4850,8 +4918,9 @@ impl Database {
             .query_map([], |row| {
                 Ok(GoogleCalendarTokenRecord {
                     account_id: row.get(0)?,
-                    calendar_id: row.get(1)?,
-                    token_json: row.get(2)?,
+                    email: row.get(1)?,
+                    calendar_id: row.get(2)?,
+                    token_json: row.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -8668,7 +8737,7 @@ mod tests {
     }
 
     #[test]
-    fn enterprise_gate_requires_activation_after_hardware_migration() {
+    fn enterprise_gate_allows_seven_day_hardware_migration_then_blocks() {
         let db = Database::open(test_database_path(), EncryptionKey::for_tests())
             .expect("open encrypted db");
         db.conn
@@ -8683,14 +8752,33 @@ mod tests {
             .expect("force previous hardware");
         let status = db.license_status().expect("license status");
         assert_eq!(status.migration_count, 1);
-        assert!(!status.allowed);
-        assert_eq!(
-            status.block_reason.as_deref(),
-            Some("migration_activation_required")
-        );
+        assert!(status.allowed);
+        assert!(status.migration_grace_active);
+        assert!(status.migration_grace_days_remaining > 0);
+        assert!(status.migration_detected_at.is_some());
+        assert!(status.migration_expires_at.is_some());
+        assert_eq!(status.block_reason.as_deref(), None);
         assert!(status.request_code.starts_with("VDRQ1."));
         assert!(!status.request_code.contains(&status.hardware_id));
         assert!(!status.request_code.contains(&status.database_identity_id));
+
+        db.conn
+            .execute(
+                r#"
+                UPDATE system_integrity
+                SET value = strftime('%Y-%m-%dT%H:%M:%fZ', datetime('now', '-8 days'))
+                WHERE key = 'migration_detected_at'
+                "#,
+                [],
+            )
+            .expect("expire migration grace");
+        let expired = db.license_status().expect("expired migration status");
+        assert!(!expired.allowed);
+        assert!(!expired.migration_grace_active);
+        assert_eq!(
+            expired.block_reason.as_deref(),
+            Some("migration_activation_required")
+        );
     }
 
     #[test]
@@ -8726,6 +8814,14 @@ mod tests {
                 },
             )
             .expect("create patient");
+        source
+            .store_google_calendar_account_token(
+                admin.id,
+                Some("calendar@example.test"),
+                "primary",
+                r#"{"access_token":"access-token","refresh_token":"refresh-token","token_type":"Bearer","scope":"https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.send","expires_at_epoch_seconds":4102444800}"#,
+            )
+            .expect("store google calendar token");
         let backup_file = test_database_path().with_extension("backup.sqlite");
         source.vacuum_into(&backup_file).expect("vacuum source");
 
@@ -8742,6 +8838,15 @@ mod tests {
             .search_patients("Restore", 10)
             .expect("search restored");
         assert_eq!(restored.len(), 1);
+        let restored_accounts = destination
+            .active_google_calendar_tokens(admin.id)
+            .expect("calendar tokens restored");
+        assert_eq!(restored_accounts.len(), 1);
+        assert_eq!(
+            restored_accounts[0].email.as_deref(),
+            Some("calendar@example.test")
+        );
+        assert!(restored_accounts[0].token_json.contains("refresh-token"));
     }
 
     #[test]
@@ -10766,4 +10871,3 @@ mod tests {
         env::temp_dir().join(format!("velodent-test-{suffix}.sqlite"))
     }
 }
-

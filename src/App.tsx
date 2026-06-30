@@ -62,6 +62,7 @@ function AuthGate() {
   const [restoreForm, setRestoreForm] = useState({ backupPath: "", password: "" });
   const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [loginForm, setLoginForm] = useState({ username: "admin", password: "" });
+  const [migrationRequestOpen, setMigrationRequestOpen] = useState(false);
 
   useEffect(() => {
     if (!backendAvailable) {
@@ -217,18 +218,30 @@ function AuthGate() {
   }
 
   if (currentUser?.session_token) {
-    return isLanSessionToken(currentUser.session_token) || shouldUseMobileShell() ? (
-      <MobileApp
-        currentUser={currentUser}
-        onLogout={() => {
-          if (currentUser.session_token && isLanSessionToken(currentUser.session_token)) {
-            clearStoredLanDeviceToken();
-          }
-          setCurrentUser(null);
-        }}
-      />
-    ) : (
-      <AppShell currentUser={currentUser} />
+    const shell = isLanSessionToken(currentUser.session_token) || shouldUseMobileShell() ? (
+        <MobileApp
+          currentUser={currentUser}
+          onLogout={() => {
+            if (currentUser.session_token && isLanSessionToken(currentUser.session_token)) {
+              clearStoredLanDeviceToken();
+            }
+            setCurrentUser(null);
+          }}
+        />
+      ) : (
+        <AppShell currentUser={currentUser} />
+      );
+
+    return (
+      <MigrationGraceFrame
+        license={license}
+        requestOpen={migrationRequestOpen}
+        onCloseRequest={() => setMigrationRequestOpen(false)}
+        onLicenseActivated={setLicense}
+        onOpenRequest={() => setMigrationRequestOpen(true)}
+      >
+        {shell}
+      </MigrationGraceFrame>
     );
   }
 
@@ -342,6 +355,105 @@ function AuthGate() {
         {statusMessage ? <p className="text-xs leading-5 text-alabaster-grey-500">{statusMessage}</p> : null}
       </form>
     </AuthSurface>
+  );
+}
+
+function MigrationGraceFrame({
+  children,
+  license,
+  requestOpen,
+  onCloseRequest,
+  onLicenseActivated,
+  onOpenRequest
+}: {
+  children: ReactNode;
+  license: LicenseStatus | null;
+  requestOpen: boolean;
+  onCloseRequest: () => void;
+  onLicenseActivated: (license: LicenseStatus) => void;
+  onOpenRequest: () => void;
+}) {
+  const { t } = useL10n();
+  const [activationEmail, setActivationEmail] = useState("");
+  const [activationKey, setActivationKey] = useState("");
+  const [activationBusy, setActivationBusy] = useState(false);
+  const [activationMessage, setActivationMessage] = useState("");
+  if (!license?.migration_grace_active) {
+    return <>{children}</>;
+  }
+  const days = String(Math.max(0, license.migration_grace_days_remaining));
+
+  async function handleMigrationActivation() {
+    setActivationBusy(true);
+    setActivationMessage("");
+    try {
+      const nextLicense = await activateLicense(activationEmail, activationKey);
+      onLicenseActivated(nextLicense);
+      setActivationKey("");
+      setActivationMessage(t("licenseActivationSuccess"));
+      if (nextLicense.allowed && !nextLicense.migration_grace_active) {
+        onCloseRequest();
+      }
+    } catch (error) {
+      setActivationMessage(error instanceof Error ? error.message : t("licenseActivationError"));
+    } finally {
+      setActivationBusy(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-ink-black-950">
+      <div className="fixed inset-x-0 top-0 z-[70] border-b border-amber-400/30 bg-ink-black-950/95 px-4 py-3 shadow-[0_16px_42px_rgba(0,0,0,0.35)] backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-300">{t("licenseMigrationGraceEyebrow")}</p>
+            <p className="mt-1 text-sm font-semibold leading-5 text-white">
+              {t("licenseMigrationGraceBanner").replace("{days}", days)}
+            </p>
+          </div>
+          <Button type="button" variant="secondary" onClick={onOpenRequest}>
+            {t("licenseMigrationRequestAction")}
+          </Button>
+        </div>
+      </div>
+      <div className="pt-[88px]">{children}</div>
+      {requestOpen ? (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-ink-black-950/75 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-md border border-powder-blue-500/25 bg-glaucous-950 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.5)]">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-powder-blue-500">{t("licenseRequestCode")}</p>
+            <h2 className="mt-2 text-xl font-semibold text-white">{t("licenseMigrationRequestTitle")}</h2>
+            <p className="mt-3 text-sm leading-6 text-alabaster-grey-500">{t("licenseMigrationRequestBody")}</p>
+            <div className="mt-4 rounded-md border border-powder-blue-500/25 bg-ink-black-950 p-3">
+              <p className="break-all font-mono text-sm font-semibold leading-6 text-white">{license.request_code}</p>
+            </div>
+            <div className="mt-4 grid gap-3 border-t border-alabaster-grey-500/15 pt-4">
+              <Input
+                placeholder={t("licenseEmail")}
+                type="email"
+                value={activationEmail}
+                onChange={(event) => setActivationEmail(event.target.value)}
+              />
+              <Input
+                placeholder={t("licenseActivationKey")}
+                value={activationKey}
+                onChange={(event) => setActivationKey(event.target.value)}
+              />
+              <Button
+                disabled={activationBusy}
+                type="button"
+                onClick={() => void handleMigrationActivation()}
+              >
+                {t("licenseActivate")}
+              </Button>
+              {activationMessage ? <p className="text-xs leading-5 text-alabaster-grey-500">{activationMessage}</p> : null}
+            </div>
+            <div className="mt-5 flex justify-end">
+              <Button type="button" onClick={onCloseRequest}>{t("commonClose")}</Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

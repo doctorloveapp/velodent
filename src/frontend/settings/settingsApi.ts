@@ -100,6 +100,10 @@ export interface LicenseStatus {
   blocked: boolean;
   block_reason: string | null;
   migration_count: number;
+  migration_grace_active: boolean;
+  migration_grace_days_remaining: number;
+  migration_detected_at: string | null;
+  migration_expires_at: string | null;
   email: string | null;
   activated_at: string | null;
   trial_expires_at: string | null;

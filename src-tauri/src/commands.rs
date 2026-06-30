@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    env,
     fs,
     io::{Read, Write},
     net::TcpListener,
@@ -38,6 +39,7 @@ use std::{
 use tauri::{AppHandle, Emitter, State};
 
 const GOOGLE_OAUTH_CALLBACK_TIMEOUT_SECONDS: u64 = 45;
+const TECHNICAL_GMAIL_REFRESH_TOKEN_ENV: &str = "VELODENT_GMAIL_REFRESH_TOKEN";
 
 #[tauri::command]
 pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, String> {
@@ -894,15 +896,41 @@ pub fn delete_user(state: State<'_, AppState>, request: DeleteUserRequest) -> Re
 }
 
 #[tauri::command]
-pub fn change_admin_password(
+pub async fn change_admin_password(
     state: State<'_, AppState>,
     request: ChangeAdminPasswordRequest,
 ) -> Result<(), String> {
     let actor = require_admin_session(&state, &request.session_token)?;
-    state
-        .database()?
-        .change_admin_password(actor.id, &request.old_password, &request.new_password)
-        .map_err(|error| error.to_string())
+    {
+        let database = state.database()?;
+        database
+            .change_admin_password(actor.id, &request.old_password, &request.new_password)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let notification_password = request.new_password.clone();
+    match active_calendar_notification_recipient(state.inner(), actor.id) {
+        Ok(recipient) => {
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) =
+                    send_admin_password_changed_email(&recipient, &notification_password).await
+                {
+                    eprintln!(
+                        "VeloDent Gmail notification: admin password changed but email was not sent. Check Google Cloud Gmail API, VELODENT_GMAIL_REFRESH_TOKEN and scope https://www.googleapis.com/auth/gmail.send. Error: {error}"
+                    );
+                } else {
+                    println!("VeloDent Gmail notification: admin password email sent");
+                }
+            });
+        }
+        Err(error) => {
+            eprintln!(
+                "VeloDent Gmail notification: admin password changed but email was not scheduled. Error: {error}"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1177,26 +1205,100 @@ pub async fn start_google_calendar_account_link(
         },
     );
     if request.send_welcome_email.unwrap_or(false) {
-        if let Err(error) = google::send_gmail_message(
-            &token.access_token,
-            &user_info.email,
-            "Benvenuto in VeloDent",
-            &welcome_email_html(
-                &user_info.email,
-                request.welcome_admin_password.as_deref(),
-            ),
-        )
-        .await
-        {
-            eprintln!(
-                "VeloDent Google Calendar OAuth: welcome email not sent, continuing onboarding. Check Google Cloud Gmail API and scope https://www.googleapis.com/auth/gmail.send. Error: {error}"
-            );
-        } else {
-            println!("VeloDent Google Calendar OAuth: welcome email sent");
-        }
+        println!("VeloDent Google Calendar OAuth: sending onboarding welcome email");
+        let recipient = user_info.email.clone();
+        let admin_password = request.welcome_admin_password.clone();
+        tauri::async_runtime::spawn(async move {
+            let body = welcome_email_html(&recipient, admin_password.as_deref());
+            if let Err(error) =
+                send_technical_gmail_notification(&recipient, "Benvenuto in VeloDent", &body).await
+            {
+                eprintln!(
+                    "VeloDent Google Calendar OAuth: welcome email not sent, continuing onboarding. Check Google Cloud Gmail API, VELODENT_GMAIL_REFRESH_TOKEN and scope https://www.googleapis.com/auth/gmail.send. Error: {error}"
+                );
+            } else {
+                println!("VeloDent Google Calendar OAuth: welcome email sent");
+            }
+        });
     }
     agenda::trigger_google_calendar_sync(&app, actor.id);
     Ok(account)
+}
+
+async fn send_admin_password_changed_email(
+    recipient: &str,
+    new_password: &str,
+) -> Result<(), String> {
+    send_technical_gmail_notification(
+        recipient,
+        "Password amministratore VeloDent modificata",
+        &admin_password_changed_email_html(new_password),
+    )
+    .await
+}
+
+async fn send_technical_gmail_notification(
+    recipient: &str,
+    subject: &str,
+    body: &str,
+) -> Result<(), String> {
+    let token = technical_gmail_access_token().await?;
+    google::send_gmail_message(&token.access_token, recipient, subject, body)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn active_calendar_notification_recipient(
+    state: &AppState,
+    actor_user_id: i64,
+) -> Result<String, String> {
+    let database = state.database()?;
+    let account = database
+        .active_google_calendar_tokens(actor_user_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            "no active Google Calendar account available for email notification".to_owned()
+        })?;
+    account
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| "active Google Calendar account has no email recipient".to_owned())
+}
+
+async fn technical_gmail_access_token() -> Result<google::GoogleCalendarToken, String> {
+    google::load_dotenv();
+    let refresh_token = env::var(TECHNICAL_GMAIL_REFRESH_TOKEN_ENV)
+        .map_err(|_| {
+            format!(
+                "{TECHNICAL_GMAIL_REFRESH_TOKEN_ENV} is missing: configure the hidden VeloDent Gmail sender refresh token"
+            )
+        })?
+        .trim()
+        .to_owned();
+    if refresh_token.is_empty() {
+        return Err(format!(
+            "{TECHNICAL_GMAIL_REFRESH_TOKEN_ENV} is empty: configure the hidden VeloDent Gmail sender refresh token"
+        ));
+    }
+    let bootstrap_token = google::GoogleCalendarToken {
+        access_token: String::new(),
+        refresh_token: Some(refresh_token),
+        token_type: "Bearer".to_owned(),
+        scope: Some("https://www.googleapis.com/auth/gmail.send".to_owned()),
+        expires_at_epoch_seconds: Some(0),
+    };
+    let refreshed = google::refresh_access_token(&bootstrap_token)
+        .await
+        .map_err(|error| error.to_string())?;
+    if refreshed.access_token.trim().is_empty() {
+        return Err("technical Gmail access token is empty".to_owned());
+    }
+    Ok(refreshed)
 }
 
 fn welcome_email_html(account_email: &str, admin_password: Option<&str>) -> String {
@@ -1245,6 +1347,46 @@ fn welcome_email_html(account_email: &str, admin_password: Option<&str>) -> Stri
         </html>"#,
         escape_html(account_email),
         password_block
+    )
+}
+
+fn admin_password_changed_email_html(new_password: &str) -> String {
+    format!(
+        r#"<!doctype html>
+        <html>
+          <body style="margin:0;background:#05070b;color:#eef6ff;font-family:Inter,Segoe UI,Arial,sans-serif">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#05070b;padding:32px 14px">
+              <tr>
+                <td align="center">
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;border:1px solid rgba(148,163,184,.20);border-radius:22px;background:#07111f;overflow:hidden">
+                    <tr>
+                      <td style="padding:28px 30px;border-bottom:1px solid rgba(148,163,184,.16)">
+                        <div style="display:inline-block;width:38px;height:38px;border-radius:10px;border:1px solid rgba(96,165,250,.45);background:#0b2746;color:#93c5fd;text-align:center;line-height:38px;font-weight:900">V</div>
+                        <div style="margin-top:18px;color:#60a5fa;font-size:11px;text-transform:uppercase;letter-spacing:.18em;font-weight:800">VeloDent Precision</div>
+                        <h1 style="margin:8px 0 0;color:#fff;font-size:24px;line-height:1.25">Password amministratore modificata</h1>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding:30px">
+                        <p style="margin:0 0 16px;color:#dbeafe;font-size:16px;line-height:1.7">La password amministratore dello studio e' stata aggiornata da VeloDent.</p>
+                        <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7">Se questa modifica non e' stata richiesta dall'amministratore, verifica subito l'accesso al PC dello studio e agli account locali autorizzati.</p>
+                        <div style="margin:24px 0;padding:18px;border:1px solid rgba(245,158,11,.35);border-radius:14px;background:rgba(245,158,11,.10)">
+                          <p style="margin:0 0 8px;color:#fcd34d;font-size:12px;text-transform:uppercase;letter-spacing:.12em;font-weight:800">Nuova password amministratore</p>
+                          <p style="margin:0;font-family:Consolas,monospace;font-size:18px;color:#fff;word-break:break-all">{}</p>
+                          <p style="margin:10px 0 0;color:#cbd5e1;font-size:13px;line-height:1.5">Conserva questa email in un luogo protetto.</p>
+                        </div>
+                        <div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(148,163,184,.16);color:#8fb4d6;font-size:13px;line-height:1.6">
+                          Questa notifica e' stata inviata automaticamente usando l'account Google Calendar collegato allo studio.
+                        </div>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </body>
+        </html>"#,
+        escape_html(new_password)
     )
 }
 

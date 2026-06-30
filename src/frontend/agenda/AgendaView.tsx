@@ -1,4 +1,4 @@
-import { CalendarClock, ChevronLeft, ChevronRight, LockKeyhole, Trash2, X } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, LockKeyhole, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import type { L10nKey } from "@/frontend/shared/i18n/translations";
@@ -54,7 +54,6 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   const [patientQuery, setPatientQuery] = useState("");
   const [patientSuggestionsOpen, setPatientSuggestionsOpen] = useState(false);
   const [showBlockForm, setShowBlockForm] = useState(false);
-  const [statusTarget, setStatusTarget] = useState<Appointment | null>(null);
   const [timeTouched, setTimeTouched] = useState(false);
   const [appointmentSaving, setAppointmentSaving] = useState(false);
   const [form, setForm] = useState({
@@ -249,7 +248,6 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     if (status === "cancelled") {
       await deleteAppointment(currentUser.session_token, appointment.id);
       setAppointments((current) => current.filter((item) => item.id !== appointment.id));
-      setStatusTarget(null);
       setStatusMessage(t("agendaAppointmentDeleted"));
       await refreshAgenda();
       return;
@@ -257,7 +255,6 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     setAppointments((current) => current.map((item) => item.id === appointment.id ? { ...item, status } : item));
     const updated = await updateAppointmentStatus(currentUser.session_token, appointment.id, status);
     setAppointments((current) => current.map((item) => item.id === updated.id ? updated : item));
-    setStatusTarget(null);
     setStatusMessage(t("agendaStatusUpdated"));
     await refreshAgenda();
   }
@@ -476,7 +473,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
                     slot={slot}
                     onSlotSelect={selectAppointmentSlot}
                     onDrop={(targetDate, chairNumber, targetTime, data) => void handleDrop(targetDate, chairNumber, targetTime, data).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}
-                    onAppointmentClick={setStatusTarget}
+                    onStatusChange={(appointment, status) => void handleStatusChange(appointment, status).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}
                     t={t}
                   />
                 ))}
@@ -485,41 +482,6 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
           ))}
         </div>
       </div>
-
-      {statusTarget ? (
-        <div className="fixed inset-0 z-50 grid content-end bg-ink-black-950/72 p-4 backdrop-blur-sm">
-          <div className="mx-auto w-full max-w-lg rounded-t-2xl border border-alabaster-grey-500/20 bg-glaucous-950 p-4 shadow-[0_-18px_44px_rgba(0,0,0,0.42)]">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("agendaChangeStatus")}</p>
-                <p className="mt-1 truncate text-base font-semibold text-white">{statusTarget.title}</p>
-              </div>
-              <Button
-                aria-label={t("agendaCloseStatusMenu")}
-                className="h-10 w-10 justify-center p-0"
-                type="button"
-                variant="secondary"
-                onClick={() => setStatusTarget(null)}
-              >
-                <X aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
-              </Button>
-            </div>
-            <div className="grid gap-2">
-              {STATUS_OPTIONS.map((status) => (
-                <Button
-                  key={status}
-                  type="button"
-                  variant={statusTarget.status === status ? "navActive" : "secondary"}
-                  className={`h-12 justify-center text-base ${status === "cancelled" ? "border-red-500/35 text-red-300 hover:bg-red-500/15" : ""}`}
-                  onClick={() => void handleStatusChange(statusTarget, status).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError")))}
-                >
-                  {t(appointmentStatusLabelKey(status))}
-                </Button>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
     </section>
   );
 }
@@ -531,7 +493,7 @@ function AgendaTimeSlotRow({
   day,
   slot,
   onDrop,
-  onAppointmentClick,
+  onStatusChange,
   onSlotSelect,
   t
 }: {
@@ -541,7 +503,7 @@ function AgendaTimeSlotRow({
   day: string;
   slot: { key: string; label: string };
   onDrop: (day: string, chairNumber: number, time: string, data: string) => void;
-  onAppointmentClick: (appointment: Appointment) => void;
+  onStatusChange: (appointment: Appointment, status: AppointmentStatus) => void;
   onSlotSelect: (day: string, chairNumber: number, time: string) => void;
   t: (key: L10nKey) => string;
 }) {
@@ -576,7 +538,6 @@ function AgendaTimeSlotRow({
                   className={`rounded-md border p-2 shadow-[0_10px_26px_rgba(0,0,0,0.18)] ${appointmentStatusClass(appointment.status)}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onAppointmentClick(appointment);
                   }}
                   onDragStart={(event) => {
                     const duration = appointmentDurationMinutes(appointment);
@@ -592,9 +553,26 @@ function AgendaTimeSlotRow({
                     </div>
                     <span className="font-mono text-[10px] text-white/70">{formatAppointmentTime(appointment)}</span>
                   </div>
-                  <div className="mt-2 rounded border border-white/10 bg-ink-black-950/55 px-2 py-1 text-[11px] font-semibold text-white/80">
-                    {t(appointmentStatusLabelKey(appointment.status))}
-                  </div>
+                  <select
+                    aria-label={t("agendaChangeStatus")}
+                    className="mt-2 h-8 w-full rounded-md border border-white/10 bg-ink-black-950/65 px-2 text-[11px] font-semibold text-white outline-none transition-colors hover:border-powder-blue-500/45 focus:border-powder-blue-500 focus:ring-2 focus:ring-powder-blue-500/20"
+                    value={appointment.status}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) => {
+                      event.stopPropagation();
+                      onStatusChange(appointment, event.target.value as AppointmentStatus);
+                    }}
+                  >
+                    {STATUS_OPTIONS.map((status) => (
+                      <option
+                        key={status}
+                        className={status === "cancelled" ? "bg-ink-black-950 text-red-400" : "bg-ink-black-950 text-white"}
+                        value={status}
+                      >
+                        {t(appointmentStatusLabelKey(status))}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               ))}
           </div>
