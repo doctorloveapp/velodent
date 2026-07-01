@@ -1,4 +1,7 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
@@ -11,6 +14,7 @@ const GOOGLE_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URI: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
 const GOOGLE_CALENDAR_EVENTS_URI: &str = "https://www.googleapis.com/calendar/v3/calendars";
 const GOOGLE_GMAIL_SEND_URI: &str = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+const VELODENT_OFFICIAL_MAIL_SENDER: &str = "velodent@hotmail.com";
 const GOOGLE_SCOPES: [&str; 3] = [
     "openid email profile",
     "https://www.googleapis.com/auth/calendar.events",
@@ -124,6 +128,8 @@ pub enum GoogleApiError {
     Config(GoogleConfigError),
     Request(String),
     HttpStatus(u16, String),
+    GmailRequest(String),
+    GmailHttpStatus(u16, String),
     MissingEventId,
 }
 
@@ -142,9 +148,13 @@ impl std::fmt::Display for GoogleApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Config(error) => write!(f, "{error}"),
-            Self::Request(message) => write!(f, "google calendar request failed: {message}"),
+            Self::Request(message) => write!(f, "google api request failed: {message}"),
             Self::HttpStatus(status, message) => {
-                write!(f, "google calendar returned HTTP {status}: {message}")
+                write!(f, "google api returned HTTP {status}: {message}")
+            }
+            Self::GmailRequest(message) => write!(f, "gmail api request failed: {message}"),
+            Self::GmailHttpStatus(status, message) => {
+                write!(f, "gmail api returned HTTP {status}: {message}")
             }
             Self::MissingEventId => write!(f, "google calendar response did not include event id"),
         }
@@ -395,22 +405,19 @@ pub async fn send_gmail_message(
 ) -> Result<(), GoogleApiError> {
     let recipient = recipient.trim();
     if recipient.is_empty() {
-        return Err(GoogleApiError::Request(
+        return Err(GoogleApiError::GmailRequest(
             "welcome email recipient is missing".to_owned(),
         ));
     }
 
-    let mime = format!(
-        "To: {recipient}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{body}"
-    );
-    let raw = URL_SAFE_NO_PAD.encode(mime.as_bytes());
+    let raw = build_gmail_raw_message(recipient, subject, body)?;
     let response = reqwest::Client::new()
         .post(GOOGLE_GMAIL_SEND_URI)
         .bearer_auth(access_token)
         .json(&GmailSendPayload { raw: &raw })
         .send()
         .await
-        .map_err(|error| GoogleApiError::Request(error.to_string()))?;
+        .map_err(|error| GoogleApiError::GmailRequest(error.to_string()))?;
     let status = response.status();
 
     if !status.is_success() {
@@ -418,13 +425,31 @@ pub async fn send_gmail_message(
             .text()
             .await
             .unwrap_or_else(|_| "redacted google error".to_owned());
-        return Err(GoogleApiError::HttpStatus(
+        return Err(GoogleApiError::GmailHttpStatus(
             status.as_u16(),
-            sanitize_google_error(&body),
+            sanitize_gmail_error(status.as_u16(), &body),
         ));
     }
 
     Ok(())
+}
+
+fn build_gmail_raw_message(
+    recipient: &str,
+    subject: &str,
+    body: &str,
+) -> Result<String, GoogleApiError> {
+    let recipient = recipient.trim();
+    if recipient.is_empty() {
+        return Err(GoogleApiError::GmailRequest(
+            "welcome email recipient is missing".to_owned(),
+        ));
+    }
+    let encoded_subject = format!("=?UTF-8?B?{}?=", STANDARD.encode(subject.as_bytes()));
+    let mime = format!(
+        "From: VeloDent <{VELODENT_OFFICIAL_MAIL_SENDER}>\r\nTo: {recipient}\r\nSubject: {encoded_subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{body}"
+    );
+    Ok(URL_SAFE_NO_PAD.encode(mime.as_bytes()))
 }
 
 pub async fn upsert_calendar_event(
@@ -628,4 +653,57 @@ fn sanitize_google_error(message: &str) -> String {
         .filter(|character| !character.is_control())
         .take(240)
         .collect()
+}
+
+fn sanitize_gmail_error(status: u16, message: &str) -> String {
+    let sanitized = sanitize_google_error(message);
+    if status == 400 && sanitized.contains("failedPrecondition") {
+        format!(
+            "{sanitized} | Gmail precondition failed: verify that VELODENT_GMAIL_REFRESH_TOKEN belongs to {VELODENT_OFFICIAL_MAIL_SENDER}, Gmail API is enabled and scope https://www.googleapis.com/auth/gmail.send was granted."
+        )
+    } else {
+        sanitized
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gmail_endpoint_sender_and_payload_are_correct() {
+        assert_eq!(
+            GOOGLE_GMAIL_SEND_URI,
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+        );
+
+        let raw = build_gmail_raw_message(
+            "studio@example.test",
+            "Password amministratore VeloDent modificata",
+            "<p>ok</p>",
+        )
+        .expect("gmail raw payload");
+        assert!(!raw.contains('+'));
+        assert!(!raw.contains('/'));
+        assert!(!raw.contains('='));
+
+        let decoded = String::from_utf8(URL_SAFE_NO_PAD.decode(raw.as_bytes()).expect("decode"))
+            .expect("utf8");
+        assert!(decoded.contains("From: VeloDent <velodent@hotmail.com>\r\n"));
+        assert!(decoded.contains("To: studio@example.test\r\n"));
+        assert!(decoded.contains("Subject: =?UTF-8?B?"));
+        assert!(decoded.contains("Content-Type: text/html; charset=UTF-8"));
+        assert!(decoded.contains("<p>ok</p>"));
+    }
+
+    #[test]
+    fn gmail_errors_do_not_claim_calendar() {
+        let error = GoogleApiError::GmailHttpStatus(
+            400,
+            r#"{ "error": { "status": "FAILED_PRECONDITION" } }"#.to_owned(),
+        )
+        .to_string();
+        assert!(error.starts_with("gmail api returned HTTP 400"));
+        assert!(!error.contains("calendar"));
+    }
 }

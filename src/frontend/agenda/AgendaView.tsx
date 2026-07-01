@@ -72,7 +72,8 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
     allDay: true
   });
 
-  const range = useMemo(() => agendaRange(anchorDate, mode), [anchorDate, mode]);
+  const safeAnchorDate = useMemo(() => normalizeDateInput(anchorDate), [anchorDate]);
+  const range = useMemo(() => agendaRange(safeAnchorDate, mode), [safeAnchorDate, mode]);
   const visibleDays = useMemo(() => daysInRange(range.startDate, mode === "week" ? 7 : 1), [mode, range.startDate]);
   const chairNumbers = useMemo(() => Array.from({ length: chairCount }, (_, index) => index + 1), [chairCount]);
   const freePatientName = patientQuery.trim();
@@ -260,7 +261,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   }
 
   function selectAppointmentSlot(targetDate: string, chairNumber: number, time: string) {
-    setAnchorDate(targetDate);
+    setAnchorDate(normalizeDateInput(targetDate));
     setTimeTouched(true);
     setForm((current) => ({
       ...current,
@@ -318,8 +319,12 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
           </div>
           <Input placeholder={t("agendaAppointmentTitle")} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
           <Input type="date" value={form.date} onChange={(event) => {
+            const nextDate = event.target.value;
+            if (!isValidDateInput(nextDate)) {
+              return;
+            }
             setTimeTouched(false);
-            setForm({ ...form, date: event.target.value });
+            setForm({ ...form, date: nextDate });
           }} />
           <Input type="time" value={form.time} onChange={(event) => {
             setTimeTouched(true);
@@ -373,7 +378,12 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
             <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-3 xl:grid-cols-[1fr_auto]">
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
                 <Input placeholder={t("agendaBlockTitle")} value={blockForm.title} onChange={(event) => setBlockForm({ ...blockForm, title: event.target.value })} />
-                <Input type="date" value={blockForm.date} onChange={(event) => setBlockForm({ ...blockForm, date: event.target.value })} />
+                <Input type="date" value={blockForm.date} onChange={(event) => {
+                  const nextDate = event.target.value;
+                  if (isValidDateInput(nextDate)) {
+                    setBlockForm({ ...blockForm, date: nextDate });
+                  }
+                }} />
                 <Input type="time" disabled={blockForm.allDay} value={blockForm.startTime} onChange={(event) => setBlockForm({ ...blockForm, startTime: event.target.value })} />
                 <Input type="time" disabled={blockForm.allDay} value={blockForm.endTime} onChange={(event) => setBlockForm({ ...blockForm, endTime: event.target.value })} />
                 <label className="flex h-10 items-center gap-2 rounded-md border border-alabaster-grey-500/20 bg-ink-black-900 px-3 text-sm text-alabaster-grey-500">
@@ -421,11 +431,16 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Button type="button" variant="secondary" size="icon" aria-label={t("agendaPrevious")} onClick={() => setAnchorDate(shiftDate(anchorDate, mode === "week" ? -7 : -1))}>
+          <Button type="button" variant="secondary" size="icon" aria-label={t("agendaPrevious")} onClick={() => setAnchorDate(shiftDate(safeAnchorDate, mode === "week" ? -7 : -1))}>
             <ChevronLeft aria-hidden="true" className="h-4 w-4" />
           </Button>
-          <Input className="w-[168px]" type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} />
-          <Button type="button" variant="secondary" size="icon" aria-label={t("agendaNext")} onClick={() => setAnchorDate(shiftDate(anchorDate, mode === "week" ? 7 : 1))}>
+          <Input className="w-[168px]" type="date" value={safeAnchorDate} onChange={(event) => {
+            const nextDate = event.target.value;
+            if (isValidDateInput(nextDate)) {
+              setAnchorDate(nextDate);
+            }
+          }} />
+          <Button type="button" variant="secondary" size="icon" aria-label={t("agendaNext")} onClick={() => setAnchorDate(shiftDate(safeAnchorDate, mode === "week" ? 7 : 1))}>
             <ChevronRight aria-hidden="true" className="h-4 w-4" />
           </Button>
         </div>
@@ -620,7 +635,8 @@ function todayDateInput() {
 }
 
 function agendaRange(anchorDate: string, mode: "day" | "week") {
-  const startDate = mode === "week" ? weekStart(anchorDate) : anchorDate;
+  const normalizedAnchorDate = normalizeDateInput(anchorDate);
+  const startDate = mode === "week" ? weekStart(normalizedAnchorDate) : normalizedAnchorDate;
   const endDate = shiftDate(startDate, mode === "week" ? 7 : 1);
   return {
     startDate,
@@ -647,28 +663,62 @@ function daysInRange(startDate: string, count: number) {
 }
 
 function dateFromInput(dateInput: string) {
-  return new Date(`${dateInput}T00:00:00`);
+  return new Date(`${normalizeDateInput(dateInput)}T00:00:00`);
 }
 
 function toDateInput(date: Date) {
+  if (Number.isNaN(date.getTime())) {
+    const fallback = new Date();
+    return `${String(fallback.getFullYear())}-${String(fallback.getMonth() + 1).padStart(2, "0")}-${String(fallback.getDate()).padStart(2, "0")}`;
+  }
   return `${String(date.getFullYear())}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function localDateTimeWithOffset(dateInput: string, timeInput: string) {
-  return `${dateInput}T${timeInput}:00${localOffset(dateInput, timeInput)}`;
+  const safeDate = normalizeDateInput(dateInput);
+  const safeTime = normalizeTimeInput(timeInput);
+  return `${safeDate}T${safeTime}:00${localOffset(safeDate, safeTime)}`;
 }
 
 function addMinutesLocalDateTime(dateInput: string, timeInput: string, minutes: number) {
-  const date = new Date(`${dateInput}T${timeInput}:00`);
+  const safeDate = normalizeDateInput(dateInput);
+  const safeTime = normalizeTimeInput(timeInput);
+  const date = new Date(`${safeDate}T${safeTime}:00`);
   date.setMinutes(date.getMinutes() + minutes);
   return `${toDateInput(date)}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:00${localOffset(toDateInput(date), `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`)}`;
 }
 
 function localOffset(dateInput: string, timeInput: string) {
-  const offsetMinutes = -new Date(`${dateInput}T${timeInput}:00`).getTimezoneOffset();
+  const safeDate = normalizeDateInput(dateInput);
+  const safeTime = normalizeTimeInput(timeInput);
+  const offsetMinutes = -new Date(`${safeDate}T${safeTime}:00`).getTimezoneOffset();
   const sign = offsetMinutes >= 0 ? "+" : "-";
   const absolute = Math.abs(offsetMinutes);
   return `${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+}
+
+export function isValidDateInput(dateInput: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateInput);
+  if (!match) {
+    return false;
+  }
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const date = new Date(`${dateInput}T00:00:00`);
+  return !Number.isNaN(date.getTime())
+    && date.getFullYear() === year
+    && date.getMonth() + 1 === month
+    && date.getDate() === day;
+}
+
+function normalizeDateInput(dateInput: string) {
+  return isValidDateInput(dateInput) ? dateInput : todayDateInput();
+}
+
+function normalizeTimeInput(timeInput: string) {
+  return /^\d{2}:\d{2}$/.test(timeInput) ? timeInput : "00:00";
 }
 
 function appointmentsForDay(appointments: Appointment[], day: string) {
@@ -757,3 +807,9 @@ function appointmentStatusLabelKey(status: AppointmentStatus): L10nKey {
       return "agendaStatusBooked";
   }
 }
+
+export const agendaDateUtilsForTests = {
+  agendaRange,
+  formatDayLabel,
+  shiftDate
+};

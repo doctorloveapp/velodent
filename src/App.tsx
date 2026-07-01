@@ -214,7 +214,13 @@ function AuthGate() {
   }
 
   async function handleLogin() {
-    setCurrentUser(await login(loginForm));
+    try {
+      setStatusMessage("");
+      setCurrentUser(await login(loginForm));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatusMessage(message.toLowerCase().includes("invalid credentials") ? t("authGateInvalidCredentials") : t("authGateGenericError"));
+    }
   }
 
   if (currentUser?.session_token) {
@@ -344,7 +350,7 @@ function AuthGate() {
         className="grid gap-3"
         onSubmit={(event) => {
           event.preventDefault();
-          void handleLogin().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError")));
+          void handleLogin();
         }}
       >
         <Input placeholder={t("settingsUsername")} value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} />

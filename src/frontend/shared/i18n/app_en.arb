@@ -167,6 +167,7 @@
   "authGateGoogleCodeMissing": "Paste the Google code or callback URL",
   "authGateGoogleBrowserOpening": "Opening Google in the browser and waiting for the local confirmation.",
   "authGateGoogleBrowserHelp": "After Google consent, VeloDent will complete login automatically.",
+  "authGateInvalidCredentials": "Incorrect admin password. Check the password and try again.",
   "onboardingEyebrow": "First launch",
   "onboardingTitle": "Configure VeloDent",
   "onboardingChoiceBody": "Choose how to start. You can create a new clinic or restore an encrypted archive from a previous installation.",

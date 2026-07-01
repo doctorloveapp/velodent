@@ -167,6 +167,7 @@
   "authGateGoogleCodeMissing": "Incolla il codice Google o l'URL di callback",
   "authGateGoogleBrowserOpening": "Apro Google nel browser e attendo la conferma locale.",
   "authGateGoogleBrowserHelp": "Dopo il consenso Google, VeloDent completera' l'accesso automaticamente.",
+  "authGateInvalidCredentials": "Password admin non corretta. Controlla la password e riprova.",
   "onboardingEyebrow": "Primo avvio",
   "onboardingTitle": "Configura VeloDent",
   "onboardingChoiceBody": "Scegli come iniziare. Puoi creare uno studio nuovo oppure ripristinare un archivio cifrato da una precedente installazione.",
