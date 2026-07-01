@@ -8,6 +8,7 @@ import { Input } from "@/frontend/shared/ui/input";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { SettingsPanel } from "@/frontend/settings/SettingsPanel";
 import type { User } from "@/frontend/settings/settingsApi";
+import { LicenseActivationEasterEgg } from "@/frontend/license/LicenseActivationEasterEgg";
 import { CommandPalette } from "./CommandPalette";
 import { PatientsView } from "@/frontend/patients/PatientsView";
 import type { Patient } from "@/frontend/patients/patientsApi";
@@ -124,6 +125,7 @@ export function AppShell({ currentUser }: AppShellProps) {
             </p>
             <p className="mt-2 text-sm font-medium text-white">{t("sidebarClinicStationValue")}</p>
           </div>
+          <LicenseActivationEasterEgg compact className="mt-3 w-full justify-center" />
         </div>
       </aside>
 

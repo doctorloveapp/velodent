@@ -7,6 +7,7 @@ import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
 import { googleCalendarSyncStatus, type GoogleCalendarSyncStatus } from "@/frontend/agenda/agendaApi";
+import { LicenseActivationEasterEgg } from "@/frontend/license/LicenseActivationEasterEgg";
 import {
   listConsentTemplates,
   updateConsentTemplate,
@@ -704,6 +705,17 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             </SettingsActionButton>
           ])}
         />
+      </SettingsSurface>
+
+      <SettingsSurface
+        icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}
+        title={t("settingsAboutTitle")}
+        eyebrow={t("settingsAboutEyebrow")}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <LicenseActivationEasterEgg />
+          <p className="text-sm font-medium text-alabaster-grey-500">{t("settingsOpenSourceLicenses")}</p>
+        </div>
       </SettingsSurface>
     </div>
   );

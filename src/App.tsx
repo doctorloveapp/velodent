@@ -82,6 +82,18 @@ function AuthGate() {
   }, [backendAvailable, t]);
 
   useEffect(() => {
+    function handleLicenseActivated(event: Event) {
+      const nextLicense = (event as CustomEvent<LicenseStatus>).detail;
+      if (nextLicense) {
+        setLicense(nextLicense);
+      }
+    }
+
+    window.addEventListener("velodent-license-activated", handleLicenseActivated);
+    return () => window.removeEventListener("velodent-license-activated", handleLicenseActivated);
+  }, []);
+
+  useEffect(() => {
     if (backendAvailable) {
       return;
     }
