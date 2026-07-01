@@ -29,8 +29,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    env,
-    fs,
+    env, fs,
     io::{Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
@@ -1214,7 +1213,7 @@ pub async fn start_google_calendar_account_link(
                 send_technical_gmail_notification(&recipient, "Benvenuto in VeloDent", &body).await
             {
                 eprintln!(
-                    "VeloDent Google Calendar OAuth: welcome email not sent, continuing onboarding. Check Google Cloud Gmail API, VELODENT_GMAIL_REFRESH_TOKEN and scope https://www.googleapis.com/auth/gmail.send. Error: {error}"
+                    "VeloDent Google Calendar OAuth: welcome email not sent, continuing onboarding. Check the official VeloDent Google Cloud Gmail API, VELODENT_GMAIL_REFRESH_TOKEN and scope https://www.googleapis.com/auth/gmail.send. Error: {error}"
                 );
             } else {
                 println!("VeloDent Google Calendar OAuth: welcome email sent");
@@ -1275,14 +1274,14 @@ async fn technical_gmail_access_token() -> Result<google::GoogleCalendarToken, S
     let refresh_token = env::var(TECHNICAL_GMAIL_REFRESH_TOKEN_ENV)
         .map_err(|_| {
             format!(
-                "{TECHNICAL_GMAIL_REFRESH_TOKEN_ENV} is missing: configure the hidden VeloDent Gmail sender refresh token"
+                "{TECHNICAL_GMAIL_REFRESH_TOKEN_ENV} is missing: configure the official VeloDent mail sender refresh token"
             )
         })?
         .trim()
         .to_owned();
     if refresh_token.is_empty() {
         return Err(format!(
-            "{TECHNICAL_GMAIL_REFRESH_TOKEN_ENV} is empty: configure the hidden VeloDent Gmail sender refresh token"
+            "{TECHNICAL_GMAIL_REFRESH_TOKEN_ENV} is empty: configure the official VeloDent mail sender refresh token"
         ));
     }
     let bootstrap_token = google::GoogleCalendarToken {
@@ -2832,7 +2831,7 @@ fn wait_for_google_oauth_code(
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     eprintln!(
-                        "VeloDent Google OAuth: callback timed out after {GOOGLE_OAUTH_CALLBACK_TIMEOUT_SECONDS}s. The selected Google account may not be enabled as a test user in Google Cloud."
+                        "VeloDent Google OAuth: callback timed out after {GOOGLE_OAUTH_CALLBACK_TIMEOUT_SECONDS}s. The provider did not complete the authorization callback."
                     );
                     return Err("google oauth callback timed out".to_owned());
                 }

@@ -715,7 +715,7 @@ impl Database {
                     Err(license::LicenseError::HardwareMismatch) => (false, true, None, None),
                     Err(_) => (false, false, None, None),
                 }
-        } else {
+            } else {
                 (false, false, None, None)
             };
         let migration_required = license_hardware_mismatch || (!activated && migration_count > 0);
@@ -939,7 +939,10 @@ impl Database {
                     "last_migration_date",
                     "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
                 )?;
-                if self.system_integrity_value("migration_detected_at")?.is_none() {
+                if self
+                    .system_integrity_value("migration_detected_at")?
+                    .is_none()
+                {
                     self.set_system_integrity_value(
                         "migration_detected_at",
                         "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
@@ -6928,7 +6931,11 @@ fn normalize_province(value: Option<&str>) -> DbResult<Option<String>> {
     let Some(normalized) = normalize_optional(value).map(|value| value.to_ascii_uppercase()) else {
         return Ok(None);
     };
-    if normalized.chars().count() != 2 || !normalized.chars().all(|character| character.is_ascii_alphabetic()) {
+    if normalized.chars().count() != 2
+        || !normalized
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+    {
         return Err(DbError::Sql("province must use a 2-letter code".to_owned()));
     }
     Ok(Some(normalized))
@@ -7440,6 +7447,79 @@ fn initialize_system_integrity(conn: &Connection) -> DbResult<()> {
         WHERE database_identity_id IS NULL OR database_identity_id = ''
         "#,
         [],
+    )?;
+    record_official_google_credentials_migration(conn, &database_identity_id)?;
+    Ok(())
+}
+
+fn record_official_google_credentials_migration(
+    conn: &Connection,
+    database_identity_id: &str,
+) -> DbResult<()> {
+    google::load_dotenv();
+    let google_client_id_present = env::var("GOOGLE_CLIENT_ID")
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let google_client_secret_present = env::var("GOOGLE_CLIENT_SECRET")
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let official_sender_token_present = env::var("VELODENT_GMAIL_REFRESH_TOKEN")
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+
+    if !(google_client_id_present && google_client_secret_present && official_sender_token_present)
+    {
+        return Ok(());
+    }
+
+    let already_recorded = conn
+        .query_row(
+            "SELECT 1 FROM system_integrity WHERE key = 'official_google_credentials_migration_audited'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if already_recorded {
+        return Ok(());
+    }
+
+    conn.execute(
+        r#"
+        INSERT INTO audit_log (
+            user_id,
+            device_id,
+            patient_id,
+            action,
+            entity_type,
+            entity_id,
+            metadata_json
+        )
+        VALUES (
+            NULL,
+            NULL,
+            NULL,
+            'SECURITY_GOOGLE_OFFICIAL_CREDENTIALS_MIGRATED',
+            'system_integrity',
+            NULL,
+            '{"provider":"google","project":"velodent_official","sender":"velodent@hotmail.com"}'
+        )
+        "#,
+        [],
+    )?;
+    conn.execute(
+        r#"
+        INSERT OR IGNORE INTO system_integrity (key, value, database_identity_id)
+        VALUES (
+            'official_google_credentials_migration_audited',
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            ?1
+        )
+        "#,
+        [database_identity_id],
     )?;
     Ok(())
 }
@@ -8614,9 +8694,9 @@ mod tests {
                 birth_place: None,
                 phone: None,
                 email: Some("ada@example.test"),
-                    address: None,
-                    city: None,
-                    province: None,
+                address: None,
+                city: None,
+                province: None,
             })
             .expect("insert patient");
 
