@@ -2,6 +2,7 @@ import { CalendarCheck, FileText, Laptop, Save, ShieldCheck, SlidersHorizontal, 
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
+import type { L10nKey } from "@/frontend/shared/i18n/translations";
 import { Badge } from "@/frontend/shared/ui/badge";
 import { Button } from "@/frontend/shared/ui/button";
 import { Input } from "@/frontend/shared/ui/input";
@@ -78,6 +79,8 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
   const [backupPassword, setBackupPassword] = useState("");
   const activeDevices = devices.filter((device) => !device.revoked_at);
   const activeUsers = users.filter((user) => user.active);
+  const calendarStatusKey = calendarSyncStatusKey(calendarSyncStatus);
+  const calendarStatusVariant = calendarSyncStatusVariant(calendarSyncStatus);
   const principalAdminId = activeUsers
     .filter((user) => user.role === "admin")
     .map((user) => user.id)
@@ -537,9 +540,9 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
             <p className="text-sm text-alabaster-grey-500">{t("settingsGoogleCalendarAccountsHelp")}</p>
             <Badge
               className="w-fit"
-              variant={calendarSyncStatus?.failed_jobs ? "danger" : calendarSyncStatus?.connected ? "success" : "warning"}
+              variant={calendarStatusVariant}
             >
-              {calendarSyncStatus?.failed_jobs || !calendarSyncStatus?.connected ? t("agendaCalendarDisconnected") : t("agendaCalendarConnected")}
+              {t(calendarStatusKey)}
             </Badge>
           </div>
           <SettingsActionButton disabled={calendarAccounts.length > 0 || calendarLinking} onClick={() => void handleLinkGoogleCalendar()}>
@@ -552,8 +555,8 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
           rows={calendarAccounts.map((account) => [
             account.email ?? "-",
             account.calendar_id,
-            <Badge key={account.id} variant={account.active && !calendarSyncStatus?.failed_jobs ? "success" : "warning"}>
-              {account.active && !calendarSyncStatus?.failed_jobs ? t("agendaCalendarConnected") : t("agendaCalendarDisconnected")}
+            <Badge key={account.id} variant={account.active ? "success" : "warning"}>
+              {account.active ? t("agendaCalendarConnected") : t("agendaCalendarDisconnected")}
             </Badge>,
             <SettingsActionButton
               key={`remove-${String(account.id)}`}
@@ -733,6 +736,32 @@ function SettingsSurface({ children, eyebrow, icon, title }: { children: React.R
       {children}
     </section>
   );
+}
+
+function calendarSyncStatusKey(status: GoogleCalendarSyncStatus | null): L10nKey {
+  if (!status?.connected) {
+    return "agendaCalendarDisconnected";
+  }
+  if (status.failed_jobs > 0) {
+    return "agendaCalendarNeedsReview";
+  }
+  if (status.queued_jobs > 0) {
+    return "agendaCalendarUpdating";
+  }
+  return "agendaCalendarConnected";
+}
+
+function calendarSyncStatusVariant(status: GoogleCalendarSyncStatus | null): "success" | "warning" | "danger" {
+  if (!status?.connected) {
+    return "warning";
+  }
+  if (status.failed_jobs > 0) {
+    return "danger";
+  }
+  if (status.queued_jobs > 0) {
+    return "warning";
+  }
+  return "success";
 }
 
 function DenseForm({ children }: { children: React.ReactNode }) {

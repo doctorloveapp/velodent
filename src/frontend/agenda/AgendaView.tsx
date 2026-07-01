@@ -36,6 +36,7 @@ const TIME_SLOTS = Array.from({ length: 24 }, (_, index) => {
 });
 const STATUS_OPTIONS: AppointmentStatus[] = ["booked", "arrived", "waiting", "in_chair", "completed", "cancelled"];
 const DEFAULT_DURATION_MINUTES = 30;
+const AGENDA_SYNC_POLL_MS = 20_000;
 
 interface AgendaViewProps {
   currentUser: User | null;
@@ -78,6 +79,8 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
   const chairNumbers = useMemo(() => Array.from({ length: chairCount }, (_, index) => index + 1), [chairCount]);
   const freePatientName = patientQuery.trim();
   const canCreateAppointment = Boolean(form.patientId || freePatientName);
+  const calendarStatusKey = calendarSyncStatusKey(syncStatus);
+  const calendarStatusVariant = calendarSyncStatusVariant(syncStatus);
 
   async function refreshAgenda() {
     if (!currentUser?.session_token) {
@@ -126,6 +129,29 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
       setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError"));
     });
   }, [currentUser, range.startsFrom, range.startsTo, t]);
+
+  useEffect(() => {
+    if (!currentUser?.session_token) {
+      return;
+    }
+
+    let running = false;
+    const intervalId = window.setInterval(() => {
+      if (document.hidden || running) {
+        return;
+      }
+      running = true;
+      void refreshAgenda()
+        .catch((error: unknown) => {
+          setStatusMessage(error instanceof Error ? error.message : t("agendaGenericError"));
+        })
+        .finally(() => {
+          running = false;
+        });
+    }, AGENDA_SYNC_POLL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [currentUser?.session_token, range.startsFrom, range.startsTo, t]);
 
   useEffect(() => {
     if (timeTouched) {
@@ -276,8 +302,8 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <PageTitle eyebrow={t("agendaEyebrow")} title={t("agendaTitle")} />
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={syncStatus?.failed_jobs ? "danger" : syncStatus?.connected ? "success" : "warning"}>
-            {syncStatus?.failed_jobs || !syncStatus?.connected ? t("agendaCalendarDisconnected") : t("agendaCalendarConnected")}
+          <Badge variant={calendarStatusVariant}>
+            {t(calendarStatusKey)}
           </Badge>
           <Badge variant="default">
             {t("agendaQueuedJobs")}: {syncStatus?.queued_jobs ?? 0}
@@ -499,6 +525,32 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
       </div>
     </section>
   );
+}
+
+function calendarSyncStatusKey(status: GoogleCalendarSyncStatus | null): L10nKey {
+  if (!status?.connected) {
+    return "agendaCalendarDisconnected";
+  }
+  if (status.failed_jobs > 0) {
+    return "agendaCalendarNeedsReview";
+  }
+  if (status.queued_jobs > 0) {
+    return "agendaCalendarUpdating";
+  }
+  return "agendaCalendarConnected";
+}
+
+function calendarSyncStatusVariant(status: GoogleCalendarSyncStatus | null): "success" | "warning" | "danger" {
+  if (!status?.connected) {
+    return "warning";
+  }
+  if (status.failed_jobs > 0) {
+    return "danger";
+  }
+  if (status.queued_jobs > 0) {
+    return "warning";
+  }
+  return "success";
 }
 
 function AgendaTimeSlotRow({

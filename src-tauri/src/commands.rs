@@ -39,6 +39,9 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const GOOGLE_OAUTH_CALLBACK_TIMEOUT_SECONDS: u64 = 45;
+const EMAIL_I18N_IT: &str = include_str!("../../src/frontend/shared/i18n/app_it.arb");
+const EMAIL_I18N_EN: &str = include_str!("../../src/frontend/shared/i18n/app_en.arb");
+const EMAIL_GENERATED_AUTOMATICALLY_KEY: &str = "emailGeneratedAutomatically";
 
 #[tauri::command]
 pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, String> {
@@ -1368,6 +1371,7 @@ fn email_recipient_hash(recipient: &str) -> String {
 }
 
 fn welcome_email_html(account_email: &str, admin_password: Option<&str>) -> String {
+    let generated_notice = email_i18n_text("it", EMAIL_GENERATED_AUTOMATICALLY_KEY);
     let password_block = admin_password
         .map(|password| {
             format!(
@@ -1401,7 +1405,8 @@ fn welcome_email_html(account_email: &str, admin_password: Option<&str>) -> Stri
                         <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7">Da questo momento puoi gestire agenda, anagrafica pazienti, cartella clinica, documenti e backup locali cifrati.</p>
                         {}
                         <div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(148,163,184,.16);color:#8fb4d6;font-size:13px;line-height:1.6">
-                          VeloDent archivia i dati localmente nello studio. Esegui backup periodici in formato .vdbk.
+                          VeloDent archivia i dati localmente nello studio. Esegui backup periodici in formato .vdbk.<br>
+                          {}
                         </div>
                       </td>
                     </tr>
@@ -1412,11 +1417,13 @@ fn welcome_email_html(account_email: &str, admin_password: Option<&str>) -> Stri
           </body>
         </html>"#,
         escape_html(account_email),
-        password_block
+        password_block,
+        escape_html(&generated_notice)
     )
 }
 
 fn admin_password_changed_email_html(new_password: &str) -> String {
+    let generated_notice = email_i18n_text("it", EMAIL_GENERATED_AUTOMATICALLY_KEY);
     format!(
         r#"<!doctype html>
         <html>
@@ -1442,7 +1449,7 @@ fn admin_password_changed_email_html(new_password: &str) -> String {
                           <p style="margin:10px 0 0;color:#cbd5e1;font-size:13px;line-height:1.5">Conserva questa email in un luogo protetto.</p>
                         </div>
                         <div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(148,163,184,.16);color:#8fb4d6;font-size:13px;line-height:1.6">
-                          Questa notifica e' stata inviata automaticamente usando l'account Google Calendar collegato allo studio.
+                          {}
                         </div>
                       </td>
                     </tr>
@@ -1452,8 +1459,26 @@ fn admin_password_changed_email_html(new_password: &str) -> String {
             </table>
           </body>
         </html>"#,
-        escape_html(new_password)
+        escape_html(new_password),
+        escape_html(&generated_notice)
     )
+}
+
+fn email_i18n_text(locale: &str, key: &str) -> String {
+    let source = if locale == "en" {
+        EMAIL_I18N_EN
+    } else {
+        EMAIL_I18N_IT
+    };
+    serde_json::from_str::<serde_json::Value>(source)
+        .ok()
+        .and_then(|value| {
+            value
+                .get(key)
+                .and_then(|entry| entry.as_str())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| key.to_owned())
 }
 
 fn escape_html(value: &str) -> String {
