@@ -6805,6 +6805,35 @@ impl Database {
         Ok(())
     }
 
+    pub fn record_email_notification_audit(
+        &self,
+        user_id: Option<i64>,
+        action: &str,
+        notification_kind: &str,
+        status: &str,
+        recipient_hash: &str,
+        provider_message_id: Option<&str>,
+        error_message: Option<&str>,
+    ) -> DbResult<()> {
+        let metadata_json = serde_json::json!({
+            "provider": "resend",
+            "notification_kind": notification_kind,
+            "status": status,
+            "recipient_sha256": recipient_hash,
+            "provider_message_id": provider_message_id,
+            "error": error_message.map(sanitize_audit_error),
+        })
+        .to_string();
+        self.insert_audit(
+            user_id,
+            None,
+            action,
+            Some("email_notifications"),
+            None,
+            &metadata_json,
+        )
+    }
+
     fn insert_patient_audit(
         &self,
         user_id: i64,
@@ -7216,6 +7245,14 @@ fn sanitize_sync_error(error_message: &str) -> String {
         .collect()
 }
 
+fn sanitize_audit_error(error_message: &str) -> String {
+    error_message
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(160)
+        .collect()
+}
+
 fn join_i64_list(values: &[i64]) -> String {
     values
         .iter()
@@ -7465,12 +7502,19 @@ fn record_official_google_credentials_migration(
         .ok()
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
-    let official_sender_token_present = env::var("VELODENT_GMAIL_REFRESH_TOKEN")
+    let resend_api_key_present = env::var("RESEND_API_KEY")
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let resend_from_email_present = env::var("RESEND_FROM_EMAIL")
         .ok()
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
-    if !(google_client_id_present && google_client_secret_present && official_sender_token_present)
+    if !(google_client_id_present
+        && google_client_secret_present
+        && resend_api_key_present
+        && resend_from_email_present)
     {
         return Ok(());
     }
@@ -8899,7 +8943,7 @@ mod tests {
                 admin.id,
                 Some("calendar@example.test"),
                 "primary",
-                r#"{"access_token":"access-token","refresh_token":"refresh-token","token_type":"Bearer","scope":"https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.send","expires_at_epoch_seconds":4102444800}"#,
+                r#"{"access_token":"access-token","refresh_token":"refresh-token","token_type":"Bearer","scope":"https://www.googleapis.com/auth/calendar.events","expires_at_epoch_seconds":4102444800}"#,
             )
             .expect("store google calendar token");
         let backup_file = test_database_path().with_extension("backup.sqlite");

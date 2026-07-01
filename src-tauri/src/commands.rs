@@ -17,6 +17,7 @@ use crate::{
     dicom_meta, files,
     integrations::{
         google::{self, GoogleAuthorizationUrl, GoogleOAuthStatus},
+        resend,
         sumup::{self, SumupCheckout},
     },
     rx_acquisition::{MockRxAdapter, RxAcquisitionAdapter},
@@ -29,16 +30,15 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    env, fs,
+    fs,
     io::{Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const GOOGLE_OAUTH_CALLBACK_TIMEOUT_SECONDS: u64 = 45;
-const TECHNICAL_GMAIL_REFRESH_TOKEN_ENV: &str = "VELODENT_GMAIL_REFRESH_TOKEN";
 
 #[tauri::command]
 pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, String> {
@@ -896,6 +896,7 @@ pub fn delete_user(state: State<'_, AppState>, request: DeleteUserRequest) -> Re
 
 #[tauri::command]
 pub async fn change_admin_password(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: ChangeAdminPasswordRequest,
 ) -> Result<(), String> {
@@ -910,21 +911,28 @@ pub async fn change_admin_password(
     let notification_password = request.new_password.clone();
     match active_calendar_notification_recipient(state.inner(), actor.id) {
         Ok(recipient) => {
+            let app_handle = app.clone();
+            let actor_id = actor.id;
             tauri::async_runtime::spawn(async move {
-                if let Err(error) =
-                    send_admin_password_changed_email(&recipient, &notification_password).await
+                if let Err(error) = send_admin_password_changed_email(
+                    &recipient,
+                    &notification_password,
+                    actor_id,
+                    &app_handle,
+                )
+                .await
                 {
                     eprintln!(
-                        "VeloDent Gmail notification: admin password changed but email was not sent. Check Google Cloud Gmail API, VELODENT_GMAIL_REFRESH_TOKEN and scope https://www.googleapis.com/auth/gmail.send. Error: {error}"
+                        "VeloDent Resend notification: admin password changed but email was not sent. Check RESEND_API_KEY and RESEND_FROM_EMAIL. Error: {error}"
                     );
                 } else {
-                    println!("VeloDent Gmail notification: admin password email sent");
+                    println!("VeloDent Resend notification: admin password email sent");
                 }
             });
         }
         Err(error) => {
             eprintln!(
-                "VeloDent Gmail notification: admin password changed but email was not scheduled. Error: {error}"
+                "VeloDent Resend notification: admin password changed but email was not scheduled. Error: {error}"
             );
         }
     }
@@ -1207,16 +1215,25 @@ pub async fn start_google_calendar_account_link(
         println!("VeloDent Google Calendar OAuth: sending onboarding welcome email");
         let recipient = user_info.email.clone();
         let admin_password = request.welcome_admin_password.clone();
+        let app_handle = app.clone();
+        let actor_id = actor.id;
         tauri::async_runtime::spawn(async move {
             let body = welcome_email_html(&recipient, admin_password.as_deref());
-            if let Err(error) =
-                send_technical_gmail_notification(&recipient, "Benvenuto in VeloDent", &body).await
+            if let Err(error) = send_resend_notification(
+                &recipient,
+                "Benvenuto in VeloDent",
+                &body,
+                "welcome_email",
+                actor_id,
+                &app_handle,
+            )
+            .await
             {
                 eprintln!(
-                    "VeloDent Google Calendar OAuth: welcome email not sent, continuing onboarding. Check the official VeloDent Google Cloud Gmail API, VELODENT_GMAIL_REFRESH_TOKEN and scope https://www.googleapis.com/auth/gmail.send. Error: {error}"
+                    "VeloDent Google Calendar OAuth: welcome email not sent, continuing onboarding. Check RESEND_API_KEY and RESEND_FROM_EMAIL. Error: {error}"
                 );
             } else {
-                println!("VeloDent Google Calendar OAuth: welcome email sent");
+                println!("VeloDent Resend notification: welcome email sent");
             }
         });
     }
@@ -1227,24 +1244,56 @@ pub async fn start_google_calendar_account_link(
 async fn send_admin_password_changed_email(
     recipient: &str,
     new_password: &str,
+    actor_user_id: i64,
+    app: &AppHandle,
 ) -> Result<(), String> {
-    send_technical_gmail_notification(
+    send_resend_notification(
         recipient,
         "Password amministratore VeloDent modificata",
         &admin_password_changed_email_html(new_password),
+        "admin_password_changed",
+        actor_user_id,
+        app,
     )
     .await
 }
 
-async fn send_technical_gmail_notification(
+async fn send_resend_notification(
     recipient: &str,
     subject: &str,
     body: &str,
+    notification_kind: &str,
+    actor_user_id: i64,
+    app: &AppHandle,
 ) -> Result<(), String> {
-    let token = technical_gmail_access_token().await?;
-    google::send_gmail_message(&token.access_token, recipient, subject, body)
-        .await
-        .map_err(|error| error.to_string())
+    let idempotency_key = notification_idempotency_key(notification_kind, actor_user_id, recipient);
+    match resend::send_transactional_email(recipient, subject, body, Some(&idempotency_key)).await {
+        Ok(message_id) => {
+            record_resend_notification_audit(
+                app,
+                actor_user_id,
+                notification_kind,
+                "sent",
+                recipient,
+                Some(&message_id),
+                None,
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let message = error.to_string();
+            record_resend_notification_audit(
+                app,
+                actor_user_id,
+                notification_kind,
+                "failed",
+                recipient,
+                None,
+                Some(&message),
+            );
+            Err(message)
+        }
+    }
 }
 
 fn active_calendar_notification_recipient(
@@ -1269,35 +1318,53 @@ fn active_calendar_notification_recipient(
         .ok_or_else(|| "active Google Calendar account has no email recipient".to_owned())
 }
 
-async fn technical_gmail_access_token() -> Result<google::GoogleCalendarToken, String> {
-    google::load_dotenv();
-    let refresh_token = env::var(TECHNICAL_GMAIL_REFRESH_TOKEN_ENV)
-        .map_err(|_| {
-            format!(
-                "{TECHNICAL_GMAIL_REFRESH_TOKEN_ENV} is missing: configure the official VeloDent mail sender refresh token"
-            )
-        })?
-        .trim()
-        .to_owned();
-    if refresh_token.is_empty() {
-        return Err(format!(
-            "{TECHNICAL_GMAIL_REFRESH_TOKEN_ENV} is empty: configure the official VeloDent mail sender refresh token"
-        ));
-    }
-    let bootstrap_token = google::GoogleCalendarToken {
-        access_token: String::new(),
-        refresh_token: Some(refresh_token),
-        token_type: "Bearer".to_owned(),
-        scope: Some("https://www.googleapis.com/auth/gmail.send".to_owned()),
-        expires_at_epoch_seconds: Some(0),
+fn notification_idempotency_key(
+    notification_kind: &str,
+    actor_user_id: i64,
+    recipient: &str,
+) -> String {
+    let now_minute = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() / 60)
+        .unwrap_or_default();
+    let recipient_hash = email_recipient_hash(recipient);
+    format!("velodent-{notification_kind}-{actor_user_id}-{recipient_hash}-{now_minute}")
+}
+
+fn record_resend_notification_audit(
+    app: &AppHandle,
+    actor_user_id: i64,
+    notification_kind: &str,
+    status: &str,
+    recipient: &str,
+    provider_message_id: Option<&str>,
+    error_message: Option<&str>,
+) {
+    let recipient_hash = email_recipient_hash(recipient);
+    let state = app.state::<AppState>();
+    let Ok(database) = state.database() else {
+        return;
     };
-    let refreshed = google::refresh_access_token(&bootstrap_token)
-        .await
-        .map_err(|error| error.to_string())?;
-    if refreshed.access_token.trim().is_empty() {
-        return Err("technical Gmail access token is empty".to_owned());
+    if let Err(error) = database.record_email_notification_audit(
+        Some(actor_user_id),
+        if status == "sent" {
+            "notification.email_sent"
+        } else {
+            "notification.email_failed"
+        },
+        notification_kind,
+        status,
+        &recipient_hash,
+        provider_message_id,
+        error_message,
+    ) {
+        eprintln!("VeloDent Resend notification audit failed: {error}");
     }
-    Ok(refreshed)
+}
+
+fn email_recipient_hash(recipient: &str) -> String {
+    let normalized = recipient.trim().to_ascii_lowercase();
+    hex::encode(Sha256::digest(normalized.as_bytes()))
 }
 
 fn welcome_email_html(account_email: &str, admin_password: Option<&str>) -> String {
