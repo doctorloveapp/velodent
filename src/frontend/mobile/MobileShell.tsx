@@ -15,7 +15,6 @@ import type { L10nKey } from "@/frontend/shared/i18n/L10nProvider";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import type { User } from "@/frontend/settings/settingsApi";
 import { Button } from "@/frontend/shared/ui/button";
-import { LicenseActivationEasterEgg } from "@/frontend/license/LicenseActivationEasterEgg";
 
 export type MobileRouteKey =
   | "dashboard"
@@ -194,7 +193,6 @@ export function MobileShell({
                   <LogOut aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
                   <span>{t("mobileLogout")}</span>
                 </Button>
-                <LicenseActivationEasterEgg compact className="mt-3 w-full justify-center" />
               </div>
             </motion.aside>
           </motion.div>
