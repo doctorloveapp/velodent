@@ -8,6 +8,7 @@
     "pretauri": "node scripts/free-dev-port.cjs 1420 && node scripts/free-tauri-dev-exe.cjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:exe": "tauri build --bundles nsis",
     "preview": "vite preview",
     "manager": "vite --host 127.0.0.1 --config licensing-tools/manager/vite.config.ts",
     "typecheck": "tsc --noEmit",
