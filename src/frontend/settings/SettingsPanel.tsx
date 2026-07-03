@@ -1,5 +1,5 @@
 import { CalendarCheck, FileText, Laptop, Save, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, UsersRound, Wifi } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import QRCode from "qrcode";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import type { L10nKey } from "@/frontend/shared/i18n/translations";
@@ -24,6 +24,9 @@ import {
   listGoogleCalendarAccounts,
   listDevices,
   listUsers,
+  openApacheLicense,
+  openMitLicense,
+  openPrivacyPolicy,
   pickStudioLogoPath,
   removeGoogleAccount,
   restoreEncryptedBackup,
@@ -39,6 +42,9 @@ import {
 } from "./settingsApi";
 
 const roleOptions: Role[] = ["admin", "odontoiatra", "aso"];
+const privacyPolicyUrl = "https://www.velodent.eu/privacy.html";
+const mitLicenseUrl = "https://github.com/velodent/velodent/blob/main/LICENSE-MIT.md";
+const apacheLicenseUrl = "https://github.com/velodent/velodent/blob/main/LICENSE-APACHE.md";
 
 interface SettingsPanelProps {
   currentUser: User | null;
@@ -86,6 +92,23 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
     .filter((user) => user.role === "admin")
     .map((user) => user.id)
     .sort((left, right) => left - right)[0];
+
+  async function handleOpenLegalLink(
+    event: MouseEvent<HTMLAnchorElement>,
+    opener: () => Promise<void>,
+    fallbackUrl: string
+  ) {
+    event.preventDefault();
+    if (!backendAvailable) {
+      window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      await opener();
+    } catch {
+      window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+    }
+  }
 
   async function refresh() {
     if (!backendAvailable) {
@@ -714,7 +737,37 @@ export function SettingsPanel({ currentUser }: SettingsPanelProps) {
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <LicenseActivationEasterEgg />
-          <p className="text-sm font-medium text-alabaster-grey-500">{t("settingsOpenSourceLicenses")}</p>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium leading-6">
+            <a
+              className="text-powder-blue-500 underline-offset-4 transition hover:text-powder-blue-300 hover:underline"
+              href={privacyPolicyUrl}
+              onClick={(event) => void handleOpenLegalLink(event, openPrivacyPolicy, privacyPolicyUrl)}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {t("settingsPrivacyPolicy")}
+            </a>
+            <span className="text-alabaster-grey-500">{t("settingsLegalSeparator")}</span>
+            <a
+              className="text-powder-blue-500 underline-offset-4 transition hover:text-powder-blue-300 hover:underline"
+              href={mitLicenseUrl}
+              onClick={(event) => void handleOpenLegalLink(event, openMitLicense, mitLicenseUrl)}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {t("settingsLicenseMit")}
+            </a>
+            <span className="text-alabaster-grey-500">{t("settingsLegalSeparator")}</span>
+            <a
+              className="text-powder-blue-500 underline-offset-4 transition hover:text-powder-blue-300 hover:underline"
+              href={apacheLicenseUrl}
+              onClick={(event) => void handleOpenLegalLink(event, openApacheLicense, apacheLicenseUrl)}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {t("settingsLicenseApache")}
+            </a>
+          </div>
         </div>
       </SettingsSurface>
     </div>

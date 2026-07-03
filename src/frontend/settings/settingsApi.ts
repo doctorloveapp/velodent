@@ -137,6 +137,18 @@ export async function activateLicense(email: string, activation_key: string) {
   return invoke<LicenseStatus>("activate_license", { request: { email, activation_key } });
 }
 
+export async function openPrivacyPolicy() {
+  return invoke<void>("open_privacy_policy");
+}
+
+export async function openMitLicense() {
+  return invoke<void>("open_mit_license");
+}
+
+export async function openApacheLicense() {
+  return invoke<void>("open_apache_license");
+}
+
 export async function createEncryptedBackup(session_token: string, admin_password: string, destination_path?: string) {
   return invoke<BackupResult>("create_encrypted_backup", {
     request: { session_token, admin_password, destination_path }

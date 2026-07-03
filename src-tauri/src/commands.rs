@@ -42,6 +42,30 @@ const GOOGLE_OAUTH_CALLBACK_TIMEOUT_SECONDS: u64 = 45;
 const EMAIL_I18N_IT: &str = include_str!("../../src/frontend/shared/i18n/app_it.arb");
 const EMAIL_I18N_EN: &str = include_str!("../../src/frontend/shared/i18n/app_en.arb");
 const EMAIL_GENERATED_AUTOMATICALLY_KEY: &str = "emailGeneratedAutomatically";
+const PRIVACY_POLICY_URL: &str = "https://www.velodent.eu/privacy.html";
+const MIT_LICENSE_URL: &str = "https://github.com/velodent/velodent/blob/main/LICENSE-MIT.md";
+const APACHE_LICENSE_URL: &str =
+    "https://github.com/velodent/velodent/blob/main/LICENSE-APACHE.md";
+
+#[tauri::command]
+pub fn open_privacy_policy() -> Result<(), String> {
+    open_fixed_legal_url(PRIVACY_POLICY_URL, "privacy policy")
+}
+
+#[tauri::command]
+pub fn open_mit_license() -> Result<(), String> {
+    open_fixed_legal_url(MIT_LICENSE_URL, "MIT license")
+}
+
+#[tauri::command]
+pub fn open_apache_license() -> Result<(), String> {
+    open_fixed_legal_url(APACHE_LICENSE_URL, "Apache license")
+}
+
+fn open_fixed_legal_url(url: &str, label: &str) -> Result<(), String> {
+    opener::open(url)
+        .map_err(|error| format!("unable to open {label} in default browser: {error}"))
+}
 
 #[tauri::command]
 pub fn database_status(state: State<'_, AppState>) -> Result<DatabaseStatus, String> {

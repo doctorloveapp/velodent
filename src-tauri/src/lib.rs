@@ -44,6 +44,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             health::health_check,
+            commands::open_privacy_policy,
+            commands::open_mit_license,
+            commands::open_apache_license,
             commands::license_status,
             commands::activate_license,
             commands::create_encrypted_backup,
