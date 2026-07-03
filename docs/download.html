@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Scarica VeloDent 1.0.3 per Windows. Gestionale odontoiatrico locale-first con dati cifrati, agenda e sincronizzazione Google Calendar.">
+  <title>Scarica VeloDent - Download Windows</title>
+  <style>
+    :root {
+      --ink: #070f1c;
+      --panel: #0a111a;
+      --panel-soft: #07121d;
+      --powder: #2f7fd0;
+      --powder-soft: #79b7f2;
+      --pale-sky: #3c7bc3;
+      --alabaster: #6a8d95;
+      --foreground: #ebf0fa;
+      --border: rgba(106, 141, 149, 0.22);
+      --success: #10b981;
+      --warning: #f59e0b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 18% 0%, rgba(47, 127, 208, 0.18), transparent 34rem),
+        linear-gradient(180deg, #070f1c 0%, #050a13 100%);
+      color: var(--foreground);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+      line-height: 1.6;
+    }
+
+    a {
+      color: var(--powder-soft);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+      text-underline-offset: 0.2rem;
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 36px;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 0 28px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand img {
+      width: 44px;
+      height: 44px;
+      border: 1px solid rgba(47, 127, 208, 0.35);
+      border-radius: 10px;
+      background: var(--panel);
+    }
+
+    .brand-name {
+      display: grid;
+      line-height: 1.1;
+    }
+
+    .brand-name strong {
+      font-size: 1rem;
+      letter-spacing: 0.01em;
+    }
+
+    .brand-name span {
+      color: var(--alabaster);
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      color: var(--alabaster);
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+
+    .hero {
+      display: grid;
+      gap: 28px;
+      grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.75fr);
+      align-items: stretch;
+      padding: 34px 0 28px;
+    }
+
+    .hero-copy {
+      display: grid;
+      align-content: center;
+      gap: 22px;
+      min-height: 430px;
+    }
+
+    .eyebrow {
+      color: var(--pale-sky);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 760px;
+      color: #fff;
+      font-size: clamp(3rem, 8vw, 6.8rem);
+      line-height: 0.95;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 650px;
+      margin: 0;
+      color: #b8c9d6;
+      font-size: clamp(1.05rem, 2vw, 1.25rem);
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 14px;
+      margin-top: 4px;
+    }
+
+    .primary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 54px;
+      padding: 0 24px;
+      border: 1px solid rgba(121, 183, 242, 0.35);
+      border-radius: 8px;
+      background: linear-gradient(180deg, #3a8cde, var(--powder));
+      box-shadow: 0 18px 42px rgba(47, 127, 208, 0.22);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 800;
+      text-decoration: none;
+      transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+    }
+
+    .primary-button:hover {
+      border-color: rgba(121, 183, 242, 0.7);
+      box-shadow: 0 18px 52px rgba(47, 127, 208, 0.34);
+      text-decoration: none;
+      transform: translateY(-1px);
+    }
+
+    .version-note {
+      color: var(--alabaster);
+      font-size: 0.92rem;
+    }
+
+    .hero-card,
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(10, 17, 26, 0.82);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.25);
+    }
+
+    .hero-card {
+      display: grid;
+      gap: 18px;
+      align-content: start;
+      padding: 22px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      width: fit-content;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border: 1px solid rgba(16, 185, 129, 0.28);
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.1);
+      color: #b9f8dc;
+      font-size: 0.78rem;
+      font-weight: 800;
+    }
+
+    .check-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 18px rgba(16, 185, 129, 0.9);
+    }
+
+    .release-box {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border: 1px solid rgba(47, 127, 208, 0.18);
+      border-radius: 10px;
+      background: rgba(7, 18, 29, 0.7);
+    }
+
+    .release-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid rgba(106, 141, 149, 0.12);
+      padding-bottom: 10px;
+      color: var(--alabaster);
+      font-size: 0.92rem;
+    }
+
+    .release-row:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .release-row strong {
+      color: #fff;
+      text-align: right;
+    }
+
+    .grid {
+      display: grid;
+      gap: 22px;
+    }
+
+    .two-columns {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .panel {
+      padding: 24px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 18px;
+      color: #fff;
+      font-size: 1.35rem;
+      line-height: 1.25;
+    }
+
+    .section-title svg,
+    .primary-button svg {
+      flex: 0 0 auto;
+    }
+
+    .requirements {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      font-size: 0.94rem;
+    }
+
+    .requirements th,
+    .requirements td {
+      border-bottom: 1px solid rgba(106, 141, 149, 0.16);
+      padding: 13px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .requirements th {
+      color: var(--pale-sky);
+      font-size: 0.74rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .requirements td {
+      color: #c6d5df;
+    }
+
+    .requirements td:first-child {
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .guide-steps {
+      display: grid;
+      gap: 14px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 14px;
+      padding: 14px;
+      border: 1px solid rgba(106, 141, 149, 0.14);
+      border-radius: 10px;
+      background: rgba(7, 15, 28, 0.52);
+    }
+
+    .step-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(47, 127, 208, 0.32);
+      border-radius: 9px;
+      background: rgba(47, 127, 208, 0.12);
+      color: var(--powder-soft);
+    }
+
+    .step h3 {
+      margin: 0 0 4px;
+      color: #fff;
+      font-size: 1rem;
+    }
+
+    .step p {
+      margin: 0;
+      color: #b8c9d6;
+      font-size: 0.94rem;
+    }
+
+    .security-note {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border: 1px solid rgba(16, 185, 129, 0.24);
+      border-radius: 10px;
+      background: rgba(16, 185, 129, 0.08);
+      color: #d4f8e8;
+      font-size: 0.94rem;
+    }
+
+    footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-top: 28px;
+      padding: 22px 0 4px;
+      color: var(--alabaster);
+      font-size: 0.92rem;
+    }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+
+    @media (max-width: 860px) {
+      .hero,
+      .two-columns {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-copy {
+        min-height: auto;
+      }
+
+      .nav {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .panel,
+      .hero-card {
+        padding: 18px;
+      }
+
+      .requirements {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .page {
+        width: min(100% - 20px, 1120px);
+        padding-top: 14px;
+      }
+
+      h1 {
+        font-size: 3.2rem;
+      }
+
+      .primary-button {
+        width: 100%;
+      }
+
+      .release-row {
+        display: grid;
+        gap: 3px;
+      }
+
+      .release-row strong {
+        text-align: left;
+      }
+
+      .step {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <nav class="nav" aria-label="Navigazione principale">
+      <a class="brand" href="index.html" aria-label="Torna alla home VeloDent">
+        <img src="velodent-icon-1024.png" alt="Logo VeloDent">
+        <span class="brand-name">
+          <strong>VeloDent</strong>
+          <span>Precision</span>
+        </span>
+      </a>
+      <div class="nav-links">
+        <a href="index.html">Home</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="mailto:velodent@hotmail.com">Supporto</a>
+      </div>
+    </nav>
+
+    <section class="hero" aria-labelledby="download-title">
+      <div class="hero-copy">
+        <div class="eyebrow">Distribuzione ufficiale Windows</div>
+        <h1 id="download-title">Scarica VeloDent</h1>
+        <p class="lead">
+          Installa VeloDent 1.0.3 sul PC principale dello studio. Il gestionale lavora in locale,
+          protegge i dati clinici con cifratura SQLCipher e mantiene il controllo operativo nello studio.
+        </p>
+        <div class="actions">
+          <a class="primary-button" href="https://github.com/velodent/velodent/releases/download/v1.0.3/VeloDent_1.0.3_x64-setup.exe">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 3v12m0 0 5-5m-5 5-5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+            Download VeloDent 1.0.3
+          </a>
+          <span class="version-note">Installer Windows x64 - circa 39 MB</span>
+        </div>
+      </div>
+
+      <aside class="hero-card" aria-label="Dettagli release">
+        <span class="status-pill"><span class="check-dot"></span> Release ufficiale</span>
+        <div class="release-box">
+          <div class="release-row">
+            <span>Versione</span>
+            <strong>1.0.3</strong>
+          </div>
+          <div class="release-row">
+            <span>Piattaforma</span>
+            <strong>Windows x64</strong>
+          </div>
+          <div class="release-row">
+            <span>Formato</span>
+            <strong>Installer .exe</strong>
+          </div>
+          <div class="release-row">
+            <span>Dati clinici</span>
+            <strong>Locale-first</strong>
+          </div>
+        </div>
+        <p class="version-note">
+          Gli aggiornamenti dell'app non cancellano la cartella dati dello studio. Database,
+          documenti e radiografie restano nella directory dati locale di VeloDent.
+        </p>
+      </aside>
+    </section>
+
+    <section class="grid two-columns" aria-label="Informazioni installazione">
+      <div class="panel">
+        <h2 class="section-title">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v11H4V5Z" stroke="#79b7f2" stroke-width="1.6" stroke-linejoin="round"/>
+            <path d="M2 20h20M9 16v4m6-4v4" stroke="#79b7f2" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          Requisiti di sistema
+        </h2>
+        <table class="requirements">
+          <thead>
+            <tr>
+              <th>Componente</th>
+              <th>Minimo</th>
+              <th>Consigliato</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Sistema operativo</td>
+              <td>Windows 10 64-bit</td>
+              <td>Windows 11 64-bit</td>
+            </tr>
+            <tr>
+              <td>Architettura</td>
+              <td>x64</td>
+              <td>x64</td>
+            </tr>
+            <tr>
+              <td>Memoria RAM</td>
+              <td>4 GB</td>
+              <td>8 GB</td>
+            </tr>
+            <tr>
+              <td>Spazio su disco</td>
+              <td>200 MB per installazione</td>
+              <td>Spazio dedicato per dati clinici e radiografie</td>
+            </tr>
+            <tr>
+              <td>Connettivita'</td>
+              <td>Non richiesta per uso locale</td>
+              <td>Internet per sincronizzazione Google Calendar (facoltativo)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h2 class="section-title">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 3 4 6v6c0 5 3.4 7.9 8 9 4.6-1.1 8-4 8-9V6l-8-3Z" stroke="#79b7f2" stroke-width="1.6" stroke-linejoin="round"/>
+            <path d="m9 12 2 2 4-5" stroke="#79b7f2" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Guida all'installazione
+        </h2>
+        <div class="guide-steps">
+          <div class="step">
+            <span class="step-icon">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 9v4m0 4h.01M10.3 4.3 2.8 17.2A2 2 0 0 0 4.5 20h15a2 2 0 0 0 1.7-2.8L13.7 4.3a2 2 0 0 0-3.4 0Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <div>
+              <h3>Avviso di protezione Windows</h3>
+              <p>Al primo avvio potrebbe comparire il riquadro blu "PC protetto da Windows".</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-icon">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M8 12h8m-8 4h5M6 3h9l3 3v15H6V3Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <div>
+              <h3>Ulteriori informazioni</h3>
+              <p>Clicca su "Ulteriori informazioni" per visualizzare le opzioni dell'installer.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-icon">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <div>
+              <h3>Esegui comunque</h3>
+              <p>Premi "Esegui comunque" e completa la procedura guidata di installazione.</p>
+            </div>
+          </div>
+        </div>
+        <div class="security-note">
+          VeloDent e' un software indipendente e sicuro. La privacy dei tuoi dati e' garantita dalla
+          crittografia locale SQLCipher.
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="footer-links">
+        <a href="index.html">Home</a>
+        <a href="privacy.html">Informativa Privacy</a>
+        <a href="https://github.com/velodent/velodent/blob/main/LICENSE-MIT.md">Licenza MIT</a>
+      </div>
+      <div>Supporto: <a href="mailto:velodent@hotmail.com">velodent@hotmail.com</a></div>
+    </footer>
+  </main>
+</body>
+</html>

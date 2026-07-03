@@ -1,83 +1,535 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-    <meta charset="UTF-8">
-<meta name="google-site-verification" content="-X8uJtEitLCEPbxr-tfsIGQQvsbp1-DafQep0ykZz4c" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VeloDent - Gestionale Odontoiatrico</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 40px;
-            line-height: 1.6;
-            max-width: 900px;
-            background-color: #000000;
-            color: #ffffff;
-        }
-        h1 {
-            color: #1a73e8;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            font-size: 2.8rem;
-            margin-bottom: 10px;
-        }
-        .logo {
-            width: 90px;
-            height: 90px;
-            border-radius: 12px;
-        }
-        .velo {
-            color: #ffffff;
-        }
-        .dent {
-            color: #4a9eff;
-        }
-        a {
-            color: #4a9eff;
-        }
-        a:visited {
-            color: #a870ff;
-        }
-        .license {
-            margin-top: 40px;
-            padding: 15px;
-            background: #1c1c1e;
-            border-radius: 8px;
-            font-size: 0.95em;
-            color: #f8f9fa;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="google-site-verification" content="-X8uJtEitLCEPbxr-tfsIGQQvsbp1-DafQep0ykZz4c">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="VeloDent e' il gestionale odontoiatrico desktop locale-first per studi professionali, con dati cifrati, agenda, cartella clinica e sincronizzazione Google Calendar.">
+  <title>VeloDent - Gestionale odontoiatrico desktop</title>
+  <style>
+    :root {
+      --ink: #070f1c;
+      --panel: #0a111a;
+      --panel-soft: #07121d;
+      --powder: #2f7fd0;
+      --powder-soft: #79b7f2;
+      --pale-sky: #3c7bc3;
+      --alabaster: #6a8d95;
+      --foreground: #ebf0fa;
+      --border: rgba(106, 141, 149, 0.22);
+      --success: #10b981;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 15% 0%, rgba(47, 127, 208, 0.18), transparent 32rem),
+        linear-gradient(180deg, var(--ink) 0%, #050a13 100%);
+      color: var(--foreground);
+      font-family: Geist, Inter, "Segoe UI", Arial, sans-serif;
+      line-height: 1.6;
+    }
+
+    a {
+      color: var(--powder-soft);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+      text-underline-offset: 0.2rem;
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 36px;
+    }
+
+    .site-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 12px 0 34px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand img {
+      width: 44px;
+      height: 44px;
+      border: 1px solid rgba(47, 127, 208, 0.35);
+      border-radius: 10px;
+      background: var(--panel);
+    }
+
+    .brand-text {
+      display: grid;
+      line-height: 1.1;
+    }
+
+    .brand-title {
+      font-size: 1.08rem;
+      font-weight: 800;
+      letter-spacing: 0.01em;
+    }
+
+    .brand-subtitle {
+      color: var(--powder-soft);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .nav-links a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      padding: 7px 12px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--alabaster);
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    .nav-links a:hover,
+    .nav-links a.active {
+      border-color: var(--border);
+      background: rgba(10, 17, 26, 0.82);
+      color: var(--foreground);
+      text-decoration: none;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+      align-items: stretch;
+      gap: 24px;
+      padding: 30px 0 26px;
+    }
+
+    .hero-copy,
+    .hero-panel,
+    .section-card,
+    .license-card {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: rgba(10, 17, 26, 0.78);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
+    }
+
+    .hero-copy {
+      padding: clamp(28px, 5vw, 56px);
+    }
+
+    .eyebrow {
+      color: var(--powder-soft);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 14px 0 18px;
+      color: #fff;
+      font-size: clamp(2.7rem, 7vw, 5.8rem);
+      line-height: 0.92;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      width: min(660px, 100%);
+      margin: 0;
+      color: #c9d6e7;
+      font-size: clamp(1.03rem, 2vw, 1.22rem);
+    }
+
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 28px;
+    }
+
+    .cta {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 54px;
+      padding: 0 22px;
+      border: 1px solid rgba(121, 183, 242, 0.36);
+      border-radius: 10px;
+      background: linear-gradient(180deg, #3488dc 0%, var(--powder) 100%);
+      color: #fff;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      box-shadow: 0 18px 42px rgba(47, 127, 208, 0.32);
+    }
+
+    .cta:hover {
+      border-color: rgba(121, 183, 242, 0.72);
+      box-shadow: 0 20px 52px rgba(47, 127, 208, 0.42);
+      text-decoration: none;
+      transform: translateY(-1px);
+    }
+
+    .secondary-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      padding: 0 12px;
+      color: var(--powder-soft);
+      font-weight: 800;
+    }
+
+    .hero-panel {
+      display: grid;
+      align-content: center;
+      gap: 14px;
+      padding: 24px;
+      background:
+        linear-gradient(180deg, rgba(7, 18, 29, 0.96), rgba(10, 17, 26, 0.86)),
+        var(--panel);
+    }
+
+    .metric {
+      display: grid;
+      gap: 4px;
+      padding: 16px;
+      border: 1px solid rgba(106, 141, 149, 0.18);
+      border-radius: 12px;
+      background: rgba(7, 15, 28, 0.62);
+    }
+
+    .metric strong {
+      color: #fff;
+      font-size: 1.02rem;
+    }
+
+    .metric span {
+      color: var(--alabaster);
+      font-size: 0.9rem;
+    }
+
+    .section-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+      margin: 28px 0;
+    }
+
+    .section-card {
+      padding: 20px;
+    }
+
+    .icon-box {
+      display: inline-grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      margin-bottom: 16px;
+      border: 1px solid rgba(47, 127, 208, 0.3);
+      border-radius: 10px;
+      background: rgba(47, 127, 208, 0.08);
+      color: var(--powder-soft);
+    }
+
+    .section-card h2,
+    .license-card h2 {
+      margin: 0 0 8px;
+      color: #fff;
+      font-size: 1rem;
+      line-height: 1.25;
+    }
+
+    .section-card p,
+    .license-card p {
+      margin: 0;
+      color: var(--alabaster);
+      font-size: 0.94rem;
+    }
+
+    .license-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 24px;
+      margin-top: 34px;
+      padding: 24px;
+    }
+
+    .license-links {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .pill-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 38px;
+      padding: 7px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(7, 18, 29, 0.78);
+      color: var(--powder-soft);
+      font-size: 0.9rem;
+      font-weight: 800;
+    }
+
+    .pill-link:hover {
+      border-color: rgba(121, 183, 242, 0.48);
+      text-decoration: none;
+    }
+
+    footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 34px;
+      padding-top: 22px;
+      border-top: 1px solid var(--border);
+      color: var(--alabaster);
+      font-size: 0.92rem;
+    }
+
+    .footer-links {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 860px) {
+      .site-header,
+      .license-card {
+        grid-template-columns: 1fr;
+      }
+
+      .site-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .nav-links {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .hero {
+        grid-template-columns: 1fr;
+        padding-top: 12px;
+      }
+
+      .section-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .license-links {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .page {
+        width: min(100% - 24px, 1120px);
+        padding-top: 14px;
+      }
+
+      .brand img {
+        width: 40px;
+        height: 40px;
+      }
+
+      .nav-links {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .nav-links a {
+        width: 100%;
+        padding-inline: 8px;
+        font-size: 0.84rem;
+      }
+
+      .hero-copy,
+      .hero-panel,
+      .license-card {
+        border-radius: 12px;
+        padding: 20px;
+      }
+
+      .hero-actions,
+      .cta,
+      .secondary-link {
+        width: 100%;
+      }
+
+      .section-grid {
+        grid-template-columns: 1fr;
+      }
+
+      footer {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+  </style>
 </head>
 <body>
-    <h1>
-        <img src="velodent-icon-1024.png" alt="VeloDent Logo" class="logo">
-        <span class="velo">Velo</span><span class="dent">Dent</span>
-    </h1>
-    <p><strong>Gestionale odontoiatrico desktop open source</strong></p>
-    <p>VeloDent è un software completo per studi odontoiatrici: gestione pazienti, agenda appuntamenti, cartelle cliniche e sincronizzazione bidirezionale con Google Calendar.</p>
-   
-    <h2>Funzionalità principali</h2>
-    <ul>
-        <li>Gestione completa dei pazienti e cartelle cliniche</li>
-        <li>Agenda appuntamenti avanzata</li>
-        <li>Sincronizzazione con Google Calendar</li>
-        <li>Funzionamento completamente offline e locale</li>
-    </ul>
-    <p>
-        <strong>Repository:</strong>
-        <a href="mailto:velodent@hotmail.com">velodent@hotmail.com</a>
-    </p>
-    <p><a href="privacy.html">Privacy Policy</a> • <a href="#license">Licenza</a></p>
-    <div class="license" id="license">
-        <h3>Licenza</h3>
-        <p>Copyright © 2026 Danilo Passamonte - VeloDent</p>
-        <p>Questo software è rilasciato con doppia licenza:</p>
-        <ul>
-            <li><strong>Apache License 2.0</strong></li>
-            <li><strong>MIT License</strong></li>
-        </ul>
-        <p>Puoi trovare il testo completo delle licenze nel repository.</p>
-    </div>
+  <main class="page">
+    <header class="site-header">
+      <a class="brand" href="./index.html" aria-label="VeloDent home">
+        <img src="./velodent-icon-1024.png" alt="VeloDent Logo">
+        <span class="brand-text">
+          <span class="brand-title">VeloDent</span>
+          <span class="brand-subtitle">Precision</span>
+        </span>
+      </a>
+      <nav class="nav-links" aria-label="Navigazione principale">
+        <a class="active" href="./index.html">Home</a>
+        <a href="./download.html">Scarica</a>
+        <a href="./privacy.html">Privacy Policy</a>
+      </nav>
+    </header>
+
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <div class="eyebrow">Gestionale odontoiatrico desktop</div>
+        <h1 id="hero-title">VeloDent</h1>
+        <p class="lead">
+          Software locale-first per studi odontoiatrici: pazienti, agenda,
+          cartella clinica, odontogramma, documenti, fatturazione e
+          sincronizzazione Google Calendar con dati protetti sul PC dello studio.
+        </p>
+        <div class="hero-actions">
+          <a class="cta" href="./download.html">
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            SCARICA VELODENT
+          </a>
+          <a class="secondary-link" href="./privacy.html">Leggi l'informativa privacy</a>
+        </div>
+      </div>
+
+      <aside class="hero-panel" aria-label="Punti chiave VeloDent">
+        <div class="metric">
+          <strong>Locale-first</strong>
+          <span>Database e documenti restano nello studio.</span>
+        </div>
+        <div class="metric">
+          <strong>SQLCipher</strong>
+          <span>Cifratura locale dei dati clinici.</span>
+        </div>
+        <div class="metric">
+          <strong>Windows 10 / 11</strong>
+          <span>Installer desktop x64 pronto per studi professionali.</span>
+        </div>
+      </aside>
+    </section>
+
+    <section class="section-grid" aria-label="Funzionalita' principali">
+      <article class="section-card">
+        <span class="icon-box" aria-hidden="true">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <h2>Pazienti</h2>
+        <p>Anagrafica, documenti, consensi, cartella clinica e storico operativo.</p>
+      </article>
+
+      <article class="section-card">
+        <span class="icon-box" aria-hidden="true">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none">
+            <path d="M8 2v4m8-4v4M3 10h18M5 4h14a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <h2>Agenda</h2>
+        <p>Appuntamenti, riuniti, chiusure e sincronizzazione Google Calendar.</p>
+      </article>
+
+      <article class="section-card">
+        <span class="icon-box" aria-hidden="true">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2c2.5 0 4 2.1 4 5.2 0 2.4-1.2 5.2-2 7.1-.6 1.4-.9 2.9-1.1 4.4L12.6 21h-1.2l-.3-2.3c-.2-1.5-.5-3-1.1-4.4-.8-1.9-2-4.7-2-7.1C8 4.1 9.5 2 12 2Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <h2>Clinica</h2>
+        <p>Odontogramma ISO, diario clinico, RX, foto e flussi di preventivo.</p>
+      </article>
+
+      <article class="section-card">
+        <span class="icon-box" aria-hidden="true">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="m9 12 2 2 4-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <h2>Sicurezza</h2>
+        <p>Audit, cifratura locale e gestione dati progettata per uso clinico.</p>
+      </article>
+    </section>
+
+    <section class="license-card" id="license" aria-labelledby="license-title">
+      <div>
+        <div class="eyebrow">Licenza</div>
+        <h2 id="license-title">Open source con doppia licenza</h2>
+        <p>
+          Copyright 2026 Danilo Passamonte - VeloDent. Il software e' rilasciato
+          con licenza MIT e Apache 2.0.
+        </p>
+      </div>
+      <div class="license-links" aria-label="Link licenze">
+        <a class="pill-link" href="https://github.com/velodent/velodent/blob/main/LICENSE-MIT.md">Licenza MIT</a>
+        <a class="pill-link" href="https://github.com/velodent/velodent/blob/main/LICENSE-APACHE.md">Licenza Apache 2.0</a>
+      </div>
+    </section>
+
+    <footer>
+      <div class="footer-links">
+        <a href="./index.html">Home</a>
+        <a href="./download.html">Scarica</a>
+        <a href="./privacy.html">Privacy Policy</a>
+      </div>
+      <div>Supporto: <a href="mailto:velodent@hotmail.com">velodent@hotmail.com</a></div>
+    </footer>
+  </main>
 </body>
 </html>
