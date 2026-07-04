@@ -81,9 +81,9 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
         </div>
       </div>
 
-      <div className="grid gap-3 xl:grid-cols-[300px_minmax(0,1fr)] 2xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)]">
         <div className="grid content-start gap-3">
-          <section className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-3">
+          <section className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2.5">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("clinicalAgendaToday")}</p>
@@ -95,19 +95,19 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
               <Button type="button" variant="secondary" size="icon" aria-label={t("agendaPrevious")} onClick={() => setDate(shiftDate(date, -1))}>
                 <ChevronLeft aria-hidden="true" className="h-4 w-4" />
               </Button>
-              <Input className="h-9 text-sm" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+              <Input className="h-8 min-w-0 text-xs" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
               <Button type="button" variant="secondary" size="icon" aria-label={t("agendaNext")} onClick={() => setDate(shiftDate(date, 1))}>
                 <ChevronRight aria-hidden="true" className="h-4 w-4" />
               </Button>
             </div>
-            <div className="grid max-h-[210px] gap-2 overflow-y-auto">
+            <div className="grid max-h-[160px] gap-1.5 overflow-y-auto">
               {dayPatients.length ? dayPatients.map((appointment) => {
                 const selected = selectedPatient?.id === appointment.patient_id;
                 return (
                   <button
                     key={appointment.id}
                     className={[
-                      "rounded-md border p-2 text-left transition",
+                      "rounded-md border p-1.5 text-left transition",
                       selected
                         ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_24px_rgba(251,191,36,0.16)]"
                         : "border-alabaster-grey-500/20 bg-ink-black-950 hover:border-powder-blue-500/55"
@@ -120,34 +120,34 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
                       <span className="truncate text-xs font-semibold text-white">{appointment.patient_name ?? t("agendaNoPatient")}</span>
                       <Badge variant={selected ? "warning" : "default"}>{appointment.starts_at.slice(11, 16)}</Badge>
                     </div>
-                    <p className="mt-1 truncate text-[11px] text-alabaster-grey-500">{appointment.title}</p>
+                    <p className="mt-0.5 truncate text-[10px] text-alabaster-grey-500">{appointment.title}</p>
                   </button>
                 );
               }) : (
-                <p className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2 text-xs text-alabaster-grey-500">{t("agendaAppointmentsEmpty")}</p>
+                <p className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-1.5 text-[11px] text-alabaster-grey-500">{t("agendaAppointmentsEmpty")}</p>
               )}
             </div>
           </section>
 
-          <section className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-3">
+          <section className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2.5">
             <div className="relative">
               <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-alabaster-grey-500" />
               <Input
-                className="h-9 pl-9 text-sm"
+                className="h-8 pl-8 text-xs"
                 placeholder={t("clinicalPatientSearch")}
                 type="search"
                 value={query}
                 onChange={(event) => void handlePatientSearch(event.target.value).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
               />
             </div>
-            <div className="mt-3 grid max-h-[230px] gap-2 overflow-y-auto">
+            <div className="mt-2 grid max-h-[190px] gap-1.5 overflow-y-auto">
               {patients.map((patient) => {
                 const selected = selectedPatient?.id === patient.id;
                 return (
                   <button
                     key={patient.id}
                     className={[
-                      "rounded-md border p-2 text-left transition",
+                      "rounded-md border p-1.5 text-left transition",
                       selected
                         ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_24px_rgba(251,191,36,0.16)]"
                         : "border-alabaster-grey-500/20 bg-ink-black-950 hover:border-powder-blue-500/55"
@@ -155,8 +155,8 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
                     type="button"
                     onClick={() => void openPatient(patient.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
                   >
-                    <span className="block text-xs font-semibold text-white">{patient.last_name} {patient.first_name}</span>
-                    <span className="mt-1 block font-mono text-[11px] text-alabaster-grey-500">{patient.tax_code}</span>
+                    <span className="block truncate text-xs font-semibold text-white">{patient.last_name} {patient.first_name}</span>
+                    <span className="mt-0.5 block truncate font-mono text-[10px] text-alabaster-grey-500">{patient.tax_code}</span>
                   </button>
                 );
               })}

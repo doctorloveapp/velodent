@@ -704,7 +704,7 @@ impl Database {
     }
 
     pub fn license_status(&self) -> DbResult<LicenseStatus> {
-        let hardware_id = license::hardware_id();
+        let hardware_id = license::hardware_id().map_err(|error| DbError::Sql(error.to_string()))?;
         self.sync_hardware_integrity(&hardware_id)?;
         let migration_count = self.system_integrity_i64("migration_count")?.unwrap_or(0);
         let database_identity_id = self.database_identity_id()?;
@@ -810,7 +810,7 @@ impl Database {
     }
 
     pub fn activate_license(&self, activation_key: &str) -> DbResult<LicenseStatus> {
-        let hardware_id = license::hardware_id();
+        let hardware_id = license::hardware_id().map_err(|error| DbError::Sql(error.to_string()))?;
         let payload = license::verify_activation_key(activation_key, &hardware_id)
             .map_err(|error| DbError::Sql(error.to_string()))?;
         if let Some(payload_database_id) = payload.database_identity_id.as_deref() {
@@ -1083,7 +1083,7 @@ impl Database {
                 return Ok(trimmed.to_owned());
             }
         }
-        let generated = generate_database_identity_id();
+        let generated = generate_database_identity_id()?;
         self.set_database_identity_literal(&generated)?;
         Ok(generated)
     }
@@ -7459,8 +7459,8 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
 }
 
 fn initialize_system_integrity(conn: &Connection) -> DbResult<()> {
-    let hardware_id = license::hardware_id();
-    let database_identity_id = conn
+    let hardware_id = license::hardware_id().map_err(|error| DbError::Sql(error.to_string()))?;
+    let database_identity_id = if let Some(value) = conn
         .query_row(
             "SELECT value FROM system_integrity WHERE key = 'database_identity_id'",
             [],
@@ -7468,7 +7468,11 @@ fn initialize_system_integrity(conn: &Connection) -> DbResult<()> {
         )
         .optional()?
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(generate_database_identity_id);
+    {
+        value
+    } else {
+        generate_database_identity_id()?
+    };
     conn.execute(
         r#"
         INSERT OR IGNORE INTO system_integrity (key, value)
@@ -7593,20 +7597,20 @@ fn record_official_google_credentials_migration(
     Ok(())
 }
 
-fn generate_database_identity_id() -> String {
+fn generate_database_identity_id() -> DbResult<String> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let material = format!(
         "{}|{}|{}",
-        license::hardware_id(),
+        license::hardware_id().map_err(|error| DbError::Sql(error.to_string()))?,
         nanos,
         std::process::id()
     );
     let digest = sha2::Sha256::digest(material.as_bytes());
     let hex = hex::encode_upper(digest);
-    format!("VDDB-{}", &hex[..16])
+    Ok(format!("VDDB-{}", &hex[..16]))
 }
 
 fn seed_consent_templates(conn: &Connection) -> DbResult<()> {

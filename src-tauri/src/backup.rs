@@ -1,4 +1,4 @@
-use crate::{db::Database, files, license};
+use crate::{db::Database, files};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
@@ -89,7 +89,7 @@ pub fn create_encrypted_backup(
         salt_b64: STANDARD_NO_PAD.encode(salt),
         nonce_b64: STANDARD_NO_PAD.encode(nonce),
         created_at_epoch: unix_seconds()?,
-        source_hwid: license::hardware_id(),
+        source_hwid: status.hardware_id.clone(),
         migration_count: status.migration_count,
         payload_sha256_hex,
     };

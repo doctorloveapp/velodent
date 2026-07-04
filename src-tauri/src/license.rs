@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::process::Command;
+use std::sync::OnceLock;
 
 const LICENSE_PUBLIC_KEY_B64: &str = "QJr2NdjByJ72nc8H4LPp0hH46Q-NvOz8Lpl2Z8Uwf88";
 const LICENSE_KEY_PREFIX: &str = "VDLK1";
@@ -35,6 +35,7 @@ pub enum LicenseError {
     InvalidSignature,
     InvalidPayload,
     HardwareMismatch,
+    HardwareIdUnavailable(String),
     ProductMismatch,
 }
 
@@ -46,6 +47,7 @@ impl std::fmt::Display for LicenseError {
             Self::InvalidSignature => write!(f, "activation key signature is invalid"),
             Self::InvalidPayload => write!(f, "activation key payload is invalid"),
             Self::HardwareMismatch => write!(f, "activation key is not valid for this PC"),
+            Self::HardwareIdUnavailable(message) => write!(f, "hardware id unavailable: {message}"),
             Self::ProductMismatch => write!(f, "activation key is not valid for this product"),
         }
     }
@@ -53,11 +55,48 @@ impl std::fmt::Display for LicenseError {
 
 impl std::error::Error for LicenseError {}
 
-pub fn hardware_id() -> String {
-    let material = hardware_material();
-    let digest = Sha256::digest(material.as_bytes());
-    let hex = hex::encode_upper(&digest);
-    format!("VD-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
+pub fn hardware_id() -> Result<String, LicenseError> {
+    static HARDWARE_ID: OnceLock<Result<String, String>> = OnceLock::new();
+    HARDWARE_ID
+        .get_or_init(|| {
+            let material = hardware_material()?;
+            let digest = Sha256::digest(material.as_bytes());
+            let hex = hex::encode_upper(&digest);
+            Ok(format!("VD-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12]))
+        })
+        .clone()
+        .map_err(LicenseError::HardwareIdUnavailable)
+}
+
+#[cfg(windows)]
+fn hardware_material() -> Result<String, String> {
+    use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let cryptography = hklm
+        .open_subkey("SOFTWARE\\Microsoft\\Cryptography")
+        .map_err(|error| format!("impossibile aprire HKLM\\SOFTWARE\\Microsoft\\Cryptography: {error}"))?;
+    let machine_guid: String = cryptography
+        .get_value("MachineGuid")
+        .map_err(|error| format!("impossibile leggere MachineGuid dal registro Windows: {error}"))?;
+    let machine_guid = machine_guid.trim();
+    if machine_guid.is_empty() {
+        return Err("MachineGuid Windows vuoto".to_owned());
+    }
+
+    Ok(format!("windows-machine-guid:{machine_guid}"))
+}
+
+#[cfg(not(windows))]
+fn hardware_material() -> Result<String, String> {
+    let hostname = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .map_err(|_| "nome macchina non disponibile".to_owned())?;
+    let hostname = hostname.trim();
+    if hostname.is_empty() {
+        return Err("nome macchina vuoto".to_owned());
+    }
+    Ok(format!("host:{hostname}"))
 }
 
 pub fn request_code(hardware_id: &str, database_identity_id: &str, migration_count: i64) -> String {
@@ -130,26 +169,6 @@ pub fn verify_activation_key(
     Ok(payload)
 }
 
-fn hardware_material() -> String {
-    let mut values = Vec::new();
-    for command in [
-        ("wmic", ["csproduct", "get", "UUID"]),
-        ("wmic", ["baseboard", "get", "serialnumber"]),
-        ("wmic", ["cpu", "get", "processorid"]),
-    ] {
-        if let Some(value) = command_output(command.0, &command.1) {
-            values.push(value);
-        }
-    }
-
-    if values.is_empty() {
-        values.push(std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown-pc".to_owned()));
-        values.push(std::env::var("USERNAME").unwrap_or_else(|_| "unknown-user".to_owned()));
-    }
-
-    values.join("|")
-}
-
 fn xor_bytes(input: &[u8], mask: &[u8]) -> Vec<u8> {
     input
         .iter()
@@ -158,32 +177,13 @@ fn xor_bytes(input: &[u8], mask: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-fn command_output(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| {
-            !line.eq_ignore_ascii_case("uuid")
-                && !line.eq_ignore_ascii_case("serialnumber")
-                && !line.eq_ignore_ascii_case("processorid")
-        })
-        .find(|line| !line.eq_ignore_ascii_case("to be filled by o.e.m."))
-        .map(str::to_owned)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn hardware_id_is_readable() {
-        let hwid = hardware_id();
+        let hwid = hardware_id().expect("hardware id");
         assert!(hwid.starts_with("VD-"));
         assert_eq!(hwid.len(), 17);
     }
