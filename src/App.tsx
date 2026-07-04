@@ -114,7 +114,7 @@ function AuthGate() {
   }, [backendAvailable]);
 
   useEffect(() => {
-    if (!backendAvailable || licenseChecking || !license?.allowed) {
+    if (!backendAvailable) {
       setChecking(false);
       return;
     }
@@ -128,7 +128,7 @@ function AuthGate() {
         setStatusMessage(error instanceof Error ? error.message : t("authGateGenericError"));
       })
       .finally(() => setChecking(false));
-  }, [backendAvailable, license?.allowed, licenseChecking, t]);
+  }, [backendAvailable, t]);
 
   useEffect(() => {
     if (!backendAvailable || onboardingStep !== "calendar" || !onboardingUser) {
@@ -290,7 +290,7 @@ function AuthGate() {
     );
   }
 
-  if (!license?.allowed) {
+  if (!needsFirstAdmin && !license?.allowed) {
     return (
       <AuthSurface
         icon={<ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />}

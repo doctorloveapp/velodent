@@ -75,15 +75,16 @@ npm run tauri:dev
 
 ### Variabili ambiente database
 
-Il backend richiede una chiave SQLCipher. In sviluppo usare una chiave locale tramite variabile ambiente:
+Il backend usa SQLCipher per cifrare il database locale. In produzione la chiave viene gestita internamente dall'applicazione, senza richiedere un file `.env` sul PC dell'utente finale.
+
+In sviluppo puoi impostare una chiave locale esplicita:
 
 ```powershell
-$env:VELODENT_DB_PATH = ".\data\velodent.sqlite"
 $env:VELODENT_DB_KEY = "una-chiave-di-sviluppo-lunga-e-non-versionata"
 npm run tauri:dev
 ```
 
-`VELODENT_DB_KEY` non deve mai essere versionata, loggata o inserita nel codice. Il backend fallisce chiuso se la chiave manca.
+`VELODENT_DB_KEY` non deve mai essere versionata, loggata o inserita nel codice. Il percorso del database non deve essere relativo: l'app risolve sempre la cartella dati tramite il PathResolver di Tauri e salva il DB in `app_data_dir/data/velodent.sqlite`.
 
 Solo per test locali non sensibili e' disponibile un fallback esplicito:
 

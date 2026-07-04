@@ -13,6 +13,7 @@ mod health;
 mod integrations;
 mod license;
 mod patients;
+mod paths;
 mod rx_acquisition;
 mod server;
 mod state;
@@ -25,6 +26,22 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             integrations::google::load_dotenv();
+            let app_data_dir = match app.path().app_data_dir() {
+                Ok(path) => path,
+                Err(error) => {
+                    show_startup_error(&format!(
+                        "Impossibile risolvere la cartella dati di VeloDent tramite Windows/Tauri: {error}"
+                    ));
+                    return Err(Box::<dyn std::error::Error>::from(error));
+                }
+            };
+            if let Err(error) = paths::initialize(app_data_dir.clone()) {
+                show_startup_error(&error);
+                return Err(Box::<dyn std::error::Error>::from(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    error,
+                )));
+            }
             let app_state = match state::AppState::initialize() {
                 Ok(app_state) => app_state,
                 Err(error) => {

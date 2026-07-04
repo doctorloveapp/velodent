@@ -2,6 +2,7 @@ use crate::{
     auth::{self, Role},
     integrations::google,
     license,
+    paths,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -642,17 +643,20 @@ pub struct LicenseStatus {
 
 impl Database {
     pub fn open_default() -> DbResult<Self> {
-        let path = default_database_path();
+        let path = default_database_path()?;
         let key = EncryptionKey::from_environment()?;
         Self::open(path, key)
     }
 
     pub fn open(path: PathBuf, key: EncryptionKey) -> DbResult<Self> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        paths::ensure_parent_dir(&path).map_err(DbError::Io)?;
 
-        let conn = Connection::open(&path)?;
+        let conn = Connection::open(&path).map_err(|error| {
+            DbError::Io(format!(
+                "impossibile aprire il database '{}': {error}",
+                path.display()
+            ))
+        })?;
         configure_encryption(&conn, key.value())?;
         configure_connection(&conn)?;
         run_migrations(&conn)?;
@@ -7337,15 +7341,8 @@ fn required_checkbox_count(rendered_body: &str) -> i64 {
         .count() as i64
 }
 
-fn default_database_path() -> PathBuf {
-    if let Ok(path) = env::var("VELODENT_DB_PATH") {
-        return PathBuf::from(path);
-    }
-
-    env::current_dir()
-        .unwrap_or_else(|_| Path::new(".").to_path_buf())
-        .join("data")
-        .join("velodent.sqlite")
+fn default_database_path() -> DbResult<PathBuf> {
+    paths::database_path().map_err(DbError::Io)
 }
 
 fn configure_encryption(conn: &Connection, key: &str) -> DbResult<()> {

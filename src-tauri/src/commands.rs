@@ -734,8 +734,7 @@ pub fn restore_encrypted_backup(
 }
 
 #[tauri::command]
-pub fn pick_backup_file(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    require_license(&state)?;
+pub fn pick_backup_file(_state: State<'_, AppState>) -> Result<Option<String>, String> {
     Ok(rfd::FileDialog::new()
         .add_filter("VeloDent Backup", &["vdbk"])
         .pick_file()
@@ -747,7 +746,6 @@ pub fn restore_onboarding_backup(
     state: State<'_, AppState>,
     request: RestoreOnboardingBackupRequest,
 ) -> Result<LicenseStatus, String> {
-    require_license(&state)?;
     let bootstrap = state
         .database()?
         .bootstrap_status()
@@ -776,7 +774,6 @@ pub fn restore_onboarding_backup(
 
 #[tauri::command]
 pub fn bootstrap_status(state: State<'_, AppState>) -> Result<BootstrapStatus, String> {
-    require_license(&state)?;
     state
         .database()?
         .bootstrap_status()
@@ -788,7 +785,6 @@ pub fn create_first_admin(
     state: State<'_, AppState>,
     request: CreateFirstAdminRequest,
 ) -> Result<AuthSession, String> {
-    require_license(&state)?;
     let database = state.database()?;
     let user = database
         .create_first_admin(

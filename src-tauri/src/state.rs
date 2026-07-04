@@ -28,7 +28,6 @@ pub struct PairingCodeInfo {
     pub expires_at_epoch_ms: u128,
     pub public_url: Option<String>,
     pub server_port: u16,
-    pub tunnel_error: Option<String>,
 }
 
 impl AppState {
@@ -73,7 +72,6 @@ impl AppState {
             expires_at_epoch_ms,
             public_url: None,
             server_port,
-            tunnel_error: None,
         })
     }
 

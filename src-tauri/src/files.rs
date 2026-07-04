@@ -1,3 +1,4 @@
+use crate::paths;
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
@@ -16,11 +17,13 @@ pub struct StoredClinicalFile {
 }
 
 pub fn patients_root() -> Result<PathBuf, String> {
-    let appdata = env::var("APPDATA")
-        .map(PathBuf::from)
-        .map_err(|_| "%APPDATA% is not available".to_owned())?;
-    let root = appdata.join("VeloDent").join("patients");
-    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let root = paths::patients_root()?;
+    fs::create_dir_all(&root).map_err(|error| {
+        format!(
+            "impossibile creare la cartella pazienti '{}': {error}",
+            root.display()
+        )
+    })?;
     Ok(root)
 }
 
@@ -58,11 +61,14 @@ pub fn store_patient_rx_file(
         .join("rx")
         .join(&unique_name);
 
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
+    paths::ensure_parent_dir(&destination)?;
 
-    fs::copy(source, &destination).map_err(|error| error.to_string())?;
+    fs::copy(source, &destination).map_err(|error| {
+        format!(
+            "impossibile copiare il file clinico in '{}': {error}",
+            destination.display()
+        )
+    })?;
     let (sha256_hex, size_bytes) = hash_and_size(&destination)?;
 
     Ok(StoredClinicalFile {
@@ -99,11 +105,14 @@ pub fn store_patient_document_bytes(
         .join("documents")
         .join(&unique_name);
 
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
+    paths::ensure_parent_dir(&destination)?;
 
-    fs::write(&destination, bytes).map_err(|error| error.to_string())?;
+    fs::write(&destination, bytes).map_err(|error| {
+        format!(
+            "impossibile salvare il documento in '{}': {error}",
+            destination.display()
+        )
+    })?;
     let (sha256_hex, size_bytes) = hash_and_size(&destination)?;
 
     Ok(StoredClinicalFile {
@@ -121,17 +130,24 @@ pub fn read_patient_file(relative_path: &str) -> Result<Vec<u8>, String> {
         return Err("invalid clinical file path".to_owned());
     }
 
-    let path = patients_root()?
-        .parent()
-        .ok_or_else(|| "invalid VeloDent data directory".to_owned())?
-        .join(relative);
-    fs::read(path).map_err(|error| error.to_string())
+    let path = absolute_patient_file_path(&relative)?;
+    fs::read(&path).map_err(|error| {
+        format!(
+            "impossibile leggere il file clinico '{}': {error}",
+            path.display()
+        )
+    })
 }
 
 pub fn delete_patient_file(relative_path: &str) -> Result<(), String> {
     let path = absolute_patient_file_path(relative_path)?;
     if path.is_file() {
-        fs::remove_file(path).map_err(|error| error.to_string())?;
+        fs::remove_file(&path).map_err(|error| {
+            format!(
+                "impossibile eliminare il file clinico '{}': {error}",
+                path.display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -176,10 +192,7 @@ fn absolute_patient_file_path(relative_path: &str) -> Result<PathBuf, String> {
         return Err("invalid clinical file path".to_owned());
     }
 
-    Ok(patients_root()?
-        .parent()
-        .ok_or_else(|| "invalid VeloDent data directory".to_owned())?
-        .join(relative))
+    Ok(paths::app_data_dir()?.join(relative))
 }
 
 fn sanitize_download_filename(filename: &str) -> String {

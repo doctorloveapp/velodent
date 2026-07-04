@@ -62,7 +62,6 @@ export interface PairingCodeInfo {
   expires_at_epoch_ms: number;
   public_url: string | null;
   server_port: number;
-  tunnel_error: string | null;
 }
 
 export interface GoogleAuthorizationUrl {
