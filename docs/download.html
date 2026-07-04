@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Scarica VeloDent 1.0.3 per Windows. Gestionale odontoiatrico locale-first con dati cifrati, agenda e sincronizzazione Google Calendar.">
+  <meta name="description" content="Scarica l'ultima versione di VeloDent per Windows. Gestionale odontoiatrico locale-first con dati cifrati, agenda e sincronizzazione Google Calendar.">
   <title>Scarica VeloDent - Download Windows</title>
   <style>
     :root {
@@ -176,6 +176,19 @@
     .version-note {
       color: var(--alabaster);
       font-size: 0.92rem;
+    }
+
+    .release-status {
+      color: var(--alabaster);
+      font-size: 0.84rem;
+    }
+
+    .release-status.is-ready {
+      color: #b9f8dc;
+    }
+
+    .release-status.is-fallback {
+      color: #ffd89a;
     }
 
     .hero-card,
@@ -390,10 +403,58 @@
         padding: 18px;
       }
 
-      .requirements {
+      .requirements,
+      .requirements thead,
+      .requirements tbody,
+      .requirements tr,
+      .requirements th,
+      .requirements td {
         display: block;
-        overflow-x: auto;
+      }
+
+      .requirements thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
         white-space: nowrap;
+      }
+
+      .requirements tr {
+        padding: 12px 0;
+        border-bottom: 1px solid rgba(106, 141, 149, 0.18);
+      }
+
+      .requirements tr:last-child {
+        border-bottom: 0;
+      }
+
+      .requirements td {
+        display: grid;
+        grid-template-columns: minmax(112px, 0.42fr) 1fr;
+        gap: 12px;
+        border-bottom: 0;
+        padding: 7px 0;
+        white-space: normal;
+      }
+
+      .requirements td::before {
+        color: var(--pale-sky);
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        content: attr(data-label);
+      }
+
+      .requirements td:first-child {
+        grid-template-columns: 1fr;
+        padding-top: 0;
+      }
+
+      .requirements td:first-child::before {
+        display: none;
       }
     }
 
@@ -409,6 +470,8 @@
 
       .primary-button {
         width: 100%;
+        padding-inline: 16px;
+        text-align: center;
       }
 
       .release-row {
@@ -448,18 +511,18 @@
         <div class="eyebrow">Distribuzione ufficiale Windows</div>
         <h1 id="download-title">Scarica VeloDent</h1>
         <p class="lead">
-          Installa VeloDent 1.0.3 sul PC principale dello studio. Il gestionale lavora in locale,
+          Installa VeloDent sul PC principale dello studio. Il gestionale lavora in locale,
           protegge i dati clinici con cifratura SQLCipher e mantiene il controllo operativo nello studio.
         </p>
         <div class="actions">
-          <a class="primary-button" href="https://github.com/velodent/velodent/releases/download/v1.0.3/VeloDent_1.0.3_x64-setup.exe">
+          <a id="download-button" class="primary-button" href="https://github.com/velodent/velodent/releases">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M12 3v12m0 0 5-5m-5 5-5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
             </svg>
-            Download VeloDent 1.0.3
+            <span id="download-button-label">Scarica VeloDent</span>
           </a>
-          <span class="version-note">Installer Windows x64 - circa 39 MB</span>
+          <span id="download-note" class="version-note">Ricerca ultima release...</span>
         </div>
       </div>
 
@@ -468,7 +531,7 @@
         <div class="release-box">
           <div class="release-row">
             <span>Versione</span>
-            <strong>1.0.3</strong>
+            <strong id="release-version">Ultima release</strong>
           </div>
           <div class="release-row">
             <span>Piattaforma</span>
@@ -476,13 +539,14 @@
           </div>
           <div class="release-row">
             <span>Formato</span>
-            <strong>Installer .exe</strong>
+            <strong id="release-format">Installer .exe</strong>
           </div>
           <div class="release-row">
             <span>Dati clinici</span>
             <strong>Locale-first</strong>
           </div>
         </div>
+        <p id="release-status" class="release-status">Collegamento automatico alle Release GitHub.</p>
         <p class="version-note">
           Gli aggiornamenti dell'app non cancellano la cartella dati dello studio. Database,
           documenti e radiografie restano nella directory dati locale di VeloDent.
@@ -509,29 +573,29 @@
           </thead>
           <tbody>
             <tr>
-              <td>Sistema operativo</td>
-              <td>Windows 10 64-bit</td>
-              <td>Windows 11 64-bit</td>
+              <td data-label="Componente">Sistema operativo</td>
+              <td data-label="Minimo">Windows 10 64-bit</td>
+              <td data-label="Consigliato">Windows 11 64-bit</td>
             </tr>
             <tr>
-              <td>Architettura</td>
-              <td>x64</td>
-              <td>x64</td>
+              <td data-label="Componente">Architettura</td>
+              <td data-label="Minimo">x64</td>
+              <td data-label="Consigliato">x64</td>
             </tr>
             <tr>
-              <td>Memoria RAM</td>
-              <td>4 GB</td>
-              <td>8 GB</td>
+              <td data-label="Componente">Memoria RAM</td>
+              <td data-label="Minimo">4 GB</td>
+              <td data-label="Consigliato">8 GB</td>
             </tr>
             <tr>
-              <td>Spazio su disco</td>
-              <td>200 MB per installazione</td>
-              <td>Spazio dedicato per dati clinici e radiografie</td>
+              <td data-label="Componente">Spazio su disco</td>
+              <td data-label="Minimo">200 MB per installazione</td>
+              <td data-label="Consigliato">Spazio dedicato per dati clinici e radiografie</td>
             </tr>
             <tr>
-              <td>Connettivita'</td>
-              <td>Non richiesta per uso locale</td>
-              <td>Internet per sincronizzazione Google Calendar (facoltativo)</td>
+              <td data-label="Componente">Connettivita'</td>
+              <td data-label="Minimo">Non richiesta per uso locale</td>
+              <td data-label="Consigliato">Internet per sincronizzazione Google Calendar (facoltativo)</td>
             </tr>
           </tbody>
         </table>
@@ -596,5 +660,70 @@
       <div>Supporto: <a href="mailto:velodent@hotmail.com">velodent@hotmail.com</a></div>
     </footer>
   </main>
+  <script>
+    (function () {
+      const latestReleaseApiUrl = "https://api.github.com/repos/velodent/velodent/releases/latest";
+      const fallbackReleaseUrl = "https://github.com/velodent/velodent/releases";
+      const button = document.getElementById("download-button");
+      const buttonLabel = document.getElementById("download-button-label");
+      const note = document.getElementById("download-note");
+      const version = document.getElementById("release-version");
+      const format = document.getElementById("release-format");
+      const status = document.getElementById("release-status");
+
+      function useFallback() {
+        button.href = fallbackReleaseUrl;
+        buttonLabel.textContent = "Scarica VeloDent";
+        note.textContent = "Apri la pagina Release GitHub per scaricare l'installer piu' recente.";
+        version.textContent = "Release GitHub";
+        format.textContent = "Pagina download";
+        status.textContent = "Download automatico non disponibile: usa il link Release.";
+        status.classList.add("is-fallback");
+      }
+
+      function formatBytes(bytes) {
+        if (!Number.isFinite(bytes) || bytes <= 0) {
+          return "";
+        }
+        const mib = bytes / 1024 / 1024;
+        return " - circa " + mib.toFixed(1).replace(".", ",") + " MB";
+      }
+
+      fetch(latestReleaseApiUrl, {
+        headers: { "Accept": "application/vnd.github+json" },
+        cache: "no-store"
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("GitHub API unavailable");
+          }
+          return response.json();
+        })
+        .then(function (release) {
+          const assets = Array.isArray(release.assets) ? release.assets : [];
+          const installer = assets.find(function (asset) {
+            return asset &&
+              typeof asset.name === "string" &&
+              asset.name.toLowerCase().endsWith(".exe") &&
+              typeof asset.browser_download_url === "string";
+          });
+
+          if (!installer) {
+            useFallback();
+            return;
+          }
+
+          const tagName = release.tag_name || release.name || "ultima versione";
+          button.href = installer.browser_download_url;
+          buttonLabel.textContent = "Scarica VeloDent " + tagName;
+          note.textContent = "Installer Windows x64" + formatBytes(installer.size);
+          version.textContent = tagName;
+          format.textContent = installer.name;
+          status.textContent = "Download collegato automaticamente all'ultima release GitHub.";
+          status.classList.add("is-ready");
+        })
+        .catch(useFallback);
+    })();
+  </script>
 </body>
 </html>

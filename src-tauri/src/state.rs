@@ -1,5 +1,3 @@
-#[cfg(feature = "mobile-tunnel")]
-use crate::tunnel::{self, MobileTunnelInfo, MobileTunnelProcess};
 use crate::{
     auth,
     db::{Database, DbError},
@@ -15,8 +13,6 @@ const PAIRING_CODE_TTL: Duration = Duration::from_secs(300);
 
 pub struct AppState {
     database: Mutex<Database>,
-    #[cfg(feature = "mobile-tunnel")]
-    mobile_tunnel: Mutex<Option<MobileTunnelProcess>>,
     pairing_code: Mutex<Option<PairingCode>>,
 }
 
@@ -39,8 +35,6 @@ impl AppState {
     pub fn initialize() -> Result<Self, DbError> {
         Ok(Self {
             database: Mutex::new(Database::open_default()?),
-            #[cfg(feature = "mobile-tunnel")]
-            mobile_tunnel: Mutex::new(None),
             pairing_code: Mutex::new(None),
         })
     }
@@ -81,24 +75,6 @@ impl AppState {
             server_port,
             tunnel_error: None,
         })
-    }
-
-    #[cfg(feature = "mobile-tunnel")]
-    pub fn ensure_mobile_tunnel(&self, app: &tauri::AppHandle) -> Result<MobileTunnelInfo, String> {
-        let mut tunnel_process = self
-            .mobile_tunnel
-            .lock()
-            .map_err(|_| "mobile tunnel lock poisoned".to_owned())?;
-        if let Some(process) = tunnel_process.as_mut() {
-            if process.is_running() {
-                return Ok(process.info.clone());
-            }
-            process.stop();
-        }
-        let next_process = tunnel::start_cloudflare_quick_tunnel(app)?;
-        let info = next_process.info.clone();
-        *tunnel_process = Some(next_process);
-        Ok(info)
     }
 
     pub fn consume_pairing_code(&self, code: &str) -> Result<i64, String> {

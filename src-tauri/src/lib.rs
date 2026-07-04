@@ -17,8 +17,6 @@ mod rx_acquisition;
 mod server;
 mod state;
 mod ts_cns;
-#[cfg(feature = "mobile-tunnel")]
-mod tunnel;
 
 use tauri::Manager;
 
@@ -27,7 +25,14 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             integrations::google::load_dotenv();
-            app.manage(state::AppState::initialize()?);
+            let app_state = match state::AppState::initialize() {
+                Ok(app_state) => app_state,
+                Err(error) => {
+                    show_startup_error(&error);
+                    return Err(Box::<dyn std::error::Error>::from(error));
+                }
+            };
+            app.manage(app_state);
             server::lan::start(app.handle().clone());
             Ok(())
         })
@@ -143,4 +148,15 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VeloDent");
+}
+
+fn show_startup_error(error: &dyn std::fmt::Display) {
+    let message = format!(
+        "VeloDent non puo' avviarsi per un errore di inizializzazione.\n\nDettaglio tecnico:\n{error}\n\nSe il problema persiste, contatta il supporto VeloDent."
+    );
+    let _ = rfd::MessageDialog::new()
+        .set_title("VeloDent - errore di avvio")
+        .set_description(&message)
+        .set_level(rfd::MessageLevel::Error)
+        .show();
 }

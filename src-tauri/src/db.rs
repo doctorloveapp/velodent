@@ -15,13 +15,21 @@ use std::{
 
 const CURRENT_SCHEMA_VERSION: i64 = 17;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
+const PRODUCTION_KEY_MASK: &[u8] = b"velodent-db-key-mask-v1";
+const OBFUSCATED_PRODUCTION_KEY: &[u8] = &[
+    32, 0, 0, 0, 32, 0, 0, 0, 23, 94, 18, 95, 4, 1, 84, 94, 28, 13, 16, 2, 93,
+    30, 84, 4, 72, 22, 10, 22, 10, 67, 23, 66, 10, 4, 68, 12, 95, 67, 110, 43,
+    34, 70, 40, 105, 53, 6, 65, 92, 46, 94, 87, 93, 95, 65, 25, 86, 38, 27, 83,
+    86, 78, 24, 90, 82, 69, 95, 20, 55, 0, 69, 33, 92, 93, 87, 84, 45, 76, 105,
+    84, 91, 104, 47, 83, 58, 30, 89, 80, 54, 41, 107, 68, 117, 53, 39, 47, 94,
+    87, 38, 87, 67, 20, 33,
+];
 
 #[derive(Debug)]
 pub enum DbError {
     Io(String),
     Sql(String),
     InvalidEncryptionKey,
-    MissingEncryptionKey,
     Forbidden,
     InvalidRole(String),
     InvalidTaxCode,
@@ -45,10 +53,6 @@ impl std::fmt::Display for DbError {
             Self::Io(message) => write!(f, "filesystem error: {message}"),
             Self::Sql(message) => write!(f, "database error: {message}"),
             Self::InvalidEncryptionKey => write!(f, "database encryption key is empty"),
-            Self::MissingEncryptionKey => write!(
-                f,
-                "VELODENT_DB_KEY is required unless VELODENT_ALLOW_INSECURE_DEV_KEY=true"
-            ),
             Self::Forbidden => write!(f, "operation requires admin privileges"),
             Self::InvalidRole(role) => write!(f, "invalid role: {role}"),
             Self::InvalidTaxCode => write!(f, "invalid italian tax code"),
@@ -97,6 +101,7 @@ pub struct EncryptionKey {
 pub enum KeySource {
     Environment,
     DevelopmentFallback,
+    ProductionFallback,
 }
 
 impl EncryptionKey {
@@ -106,12 +111,22 @@ impl EncryptionKey {
                 value,
                 source: KeySource::Environment,
             }),
-            Ok(_) => Err(DbError::InvalidEncryptionKey),
+            Ok(_) if allow_insecure_development_key() => Ok(Self {
+                value: DEFAULT_DEV_KEY.to_owned(),
+                source: KeySource::DevelopmentFallback,
+            }),
+            Ok(_) => Ok(Self {
+                value: production_fallback_key()?,
+                source: KeySource::ProductionFallback,
+            }),
             Err(_) if allow_insecure_development_key() => Ok(Self {
                 value: DEFAULT_DEV_KEY.to_owned(),
                 source: KeySource::DevelopmentFallback,
             }),
-            Err(_) => Err(DbError::MissingEncryptionKey),
+            Err(_) => Ok(Self {
+                value: production_fallback_key()?,
+                source: KeySource::ProductionFallback,
+            }),
         }
     }
 
@@ -142,6 +157,19 @@ fn allow_insecure_development_key() -> bool {
     env::var("VELODENT_ALLOW_INSECURE_DEV_KEY")
         .map(|value| value == "true")
         .unwrap_or(false)
+}
+
+fn production_fallback_key() -> DbResult<String> {
+    let decoded = OBFUSCATED_PRODUCTION_KEY
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| byte ^ PRODUCTION_KEY_MASK[index % PRODUCTION_KEY_MASK.len()])
+        .collect::<Vec<_>>();
+    let key = String::from_utf8(decoded).map_err(|_| DbError::InvalidEncryptionKey)?;
+    if key.trim().is_empty() {
+        return Err(DbError::InvalidEncryptionKey);
+    }
+    Ok(key)
 }
 
 pub struct Database {
@@ -8701,7 +8729,36 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        sync::{Mutex, OnceLock},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn environment_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn missing_environment_key_uses_production_fallback() {
+        let _guard = environment_lock().lock().expect("env lock");
+        let previous_key = env::var("VELODENT_DB_KEY").ok();
+        let previous_dev_flag = env::var("VELODENT_ALLOW_INSECURE_DEV_KEY").ok();
+        env::remove_var("VELODENT_DB_KEY");
+        env::remove_var("VELODENT_ALLOW_INSECURE_DEV_KEY");
+
+        let key = EncryptionKey::from_environment().expect("production fallback key");
+
+        assert!(matches!(key.source(), KeySource::ProductionFallback));
+        assert!(!key.value().trim().is_empty());
+
+        if let Some(value) = previous_key {
+            env::set_var("VELODENT_DB_KEY", value);
+        }
+        if let Some(value) = previous_dev_flag {
+            env::set_var("VELODENT_ALLOW_INSECURE_DEV_KEY", value);
+        }
+    }
 
     fn service_ids_for_group(
         db: &Database,

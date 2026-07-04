@@ -1,6 +1,6 @@
 [package]
 name = "velodent"
-version = "1.0.3"
+version = "1.0.4"
 description = "VeloDent clinical management desktop application"
 authors = ["VeloDent"]
 edition = "2021"
@@ -12,7 +12,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
-mobile-tunnel = []
 
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
