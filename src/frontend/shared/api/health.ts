@@ -13,12 +13,13 @@ interface TauriHealthResponse {
 
 declare global {
   interface Window {
+    __TAURI__?: unknown;
     __TAURI_INTERNALS__?: unknown;
   }
 }
 
 export async function getHealthStatus(t: TFunction): Promise<HealthStatus> {
-  if (!window.__TAURI_INTERNALS__) {
+  if (!(window.__TAURI_INTERNALS__ ?? window.__TAURI__)) {
     return {
       status: "ready",
       message: t("healthReady")

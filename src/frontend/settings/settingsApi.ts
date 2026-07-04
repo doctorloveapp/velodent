@@ -116,12 +116,13 @@ export interface BackupResult {
 
 declare global {
   interface Window {
+    __TAURI__?: unknown;
     __TAURI_INTERNALS__?: unknown;
   }
 }
 
 export function isTauriRuntime() {
-  return Boolean(window.__TAURI_INTERNALS__);
+  return Boolean(window.__TAURI_INTERNALS__ ?? window.__TAURI__);
 }
 
 export async function bootstrapStatus() {

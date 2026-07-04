@@ -20,7 +20,10 @@ pub mod lan {
     use tauri::{AppHandle, Manager};
 
     pub const LAN_SERVER_PORT: u16 = 1422;
-    pub const PWA_FRONTEND_PORT: u16 = 1420;
+
+    mod frontend_assets {
+        include!(concat!(env!("OUT_DIR"), "/frontend_assets.rs"));
+    }
 
     pub fn frontend_pairing_url(pairing_pin: &str) -> String {
         let host = lan_ipv4_address()
@@ -28,7 +31,7 @@ pub mod lan {
             .unwrap_or_else(|| "velodent.local".to_owned());
         format!(
             "http://{host}:{}?mobile=1&pairing_pin={}",
-            PWA_FRONTEND_PORT,
+            LAN_SERVER_PORT,
             pairing_pin
         )
     }
@@ -242,6 +245,11 @@ pub mod lan {
             );
         }
         let (path, query) = split_target(target);
+        if method == "GET" {
+            if let Some(response) = frontend_response_for_path(&path) {
+                return response;
+            }
+        }
 
         match (method, path.as_str()) {
             ("GET", "/health") => json_response(200, &json!({ "status": "ready" })),
@@ -598,8 +606,8 @@ pub mod lan {
                 ("app", "VeloDent"),
                 ("api_port", "1422"),
                 ("api_protocol", "http"),
-                ("frontend_port", "1420"),
-                ("url", "http://velodent.local:1420/"),
+                ("frontend_port", "1422"),
+                ("url", "http://velodent.local:1422/"),
                 ("path", "/"),
             ];
             let service_info = match ServiceInfo::new(
@@ -607,7 +615,7 @@ pub mod lan {
                 "VeloDent",
                 "velodent.local.",
                 "",
-                PWA_FRONTEND_PORT,
+                LAN_SERVER_PORT,
                 &properties[..],
             ) {
                 Ok(info) => info.enable_addr_auto(),
@@ -833,6 +841,26 @@ pub mod lan {
         response(status, "application/json", body.as_bytes())
     }
 
+    fn frontend_response_for_path(path: &str) -> Option<Vec<u8>> {
+        if path == "/health" || path == "/pair" || path.starts_with("/api/") {
+            return None;
+        }
+        let requested = if path == "/" { "/index.html" } else { path };
+        let asset = frontend_assets::FRONTEND_ASSETS
+            .iter()
+            .find(|asset| asset.path == requested)
+            .or_else(|| {
+                if requested.contains('.') {
+                    None
+                } else {
+                    frontend_assets::FRONTEND_ASSETS
+                        .iter()
+                        .find(|asset| asset.path == "/index.html")
+                }
+            })?;
+        Some(response(200, asset.content_type, asset.bytes))
+    }
+
     fn empty_response(status: u16) -> Vec<u8> {
         response(status, "text/plain", b"")
     }
@@ -860,10 +888,17 @@ pub mod lan {
 
 #[cfg(test)]
 mod tests {
-    use super::lan::LAN_SERVER_PORT;
+    use super::lan::{frontend_pairing_url, LAN_SERVER_PORT};
 
     #[test]
     fn lan_server_uses_expected_port() {
         assert_eq!(LAN_SERVER_PORT, 1422);
+    }
+
+    #[test]
+    fn pairing_url_uses_lan_server_port_for_packaged_mobile_app() {
+        let url = frontend_pairing_url("123456");
+        assert!(url.contains(":1422?mobile=1&pairing_pin=123456"));
+        assert!(!url.contains(":1420"));
     }
 }

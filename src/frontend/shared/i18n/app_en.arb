@@ -363,6 +363,7 @@
   "settingsServiceReordered": "Price list order updated",
   "settingsOpenServices": "Clinical price list",
   "settingsBackToSettings": "Back to settings",
+  "tariffarioEmpty": "The price list has no entries. Restart VeloDent to complete migrations or contact support.",
   "tariffarioMoveUp": "Move service up",
   "tariffarioMoveDown": "Move service down",
   "tariffarioUncategorized": "Uncategorized",

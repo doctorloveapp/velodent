@@ -104,20 +104,37 @@ pub async fn send_transactional_email(
 
 fn load_config() -> Result<ResendConfig, ResendError> {
     let _ = dotenvy::dotenv();
-    let api_key = env::var("RESEND_API_KEY")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .ok_or(ResendError::MissingApiKey)?;
-    let from_email = env::var("RESEND_FROM_EMAIL")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .ok_or(ResendError::MissingFromEmail)?;
+    let api_key = runtime_or_embedded_env("RESEND_API_KEY").ok_or(ResendError::MissingApiKey)?;
+    let from_email =
+        runtime_or_embedded_env("RESEND_FROM_EMAIL").ok_or(ResendError::MissingFromEmail)?;
     Ok(ResendConfig {
         api_key,
         from_email,
     })
+}
+
+pub fn configured() -> bool {
+    let _ = dotenvy::dotenv();
+    runtime_or_embedded_env("RESEND_API_KEY").is_some()
+        && runtime_or_embedded_env("RESEND_FROM_EMAIL").is_some()
+}
+
+fn runtime_or_embedded_env(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| embedded_env(key))
+}
+
+fn embedded_env(key: &str) -> Option<String> {
+    let value = match key {
+        "RESEND_API_KEY" => option_env!("VELODENT_EMBEDDED_RESEND_API_KEY"),
+        "RESEND_FROM_EMAIL" => option_env!("VELODENT_EMBEDDED_RESEND_FROM_EMAIL"),
+        _ => None,
+    }?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 fn build_payload<'a>(

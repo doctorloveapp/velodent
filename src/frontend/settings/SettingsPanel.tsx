@@ -776,7 +776,7 @@ function displayPairingUrl(publicUrl: string | null) {
     const url = new URL(publicUrl);
     return `${url.protocol}//${url.host}`;
   } catch {
-    return "http://velodent.local:1420";
+    return "http://velodent.local:1422";
   }
 }
 

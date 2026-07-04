@@ -155,6 +155,11 @@ export function TariffarioView({ currentUser }: TariffarioViewProps) {
   return (
     <TariffarioSurface statusMessage={statusMessage}>
       <div className="grid gap-4">
+        {groupedServices.length === 0 ? (
+          <div className="rounded-md border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
+            {t("tariffarioEmpty")}
+          </div>
+        ) : null}
         {groupedServices.map(([group, rows]) => {
           const newDraft = newDrafts[group] ?? emptyNewServiceDraft();
           return (

@@ -66,33 +66,54 @@ fn open_fixed_legal_url(url: &str, label: &str) -> Result<(), String> {
     open_external_url(url, label)
 }
 
+#[cfg(windows)]
 fn open_external_url(url: &str, label: &str) -> Result<(), String> {
-    match opener::open(url) {
-        Ok(()) => Ok(()),
-        Err(primary_error) => open_external_url_fallback(url)
-            .map_err(|fallback_error| {
-                format!(
-                    "unable to open {label} in default browser: {primary_error}; fallback failed: {fallback_error}"
-                )
-            }),
+    open_external_url_windows(url).or_else(|primary_error| {
+        opener::open(url).map_err(|fallback_error| {
+            format!(
+                "unable to open {label} in default browser: ShellExecuteW failed: {primary_error}; opener fallback failed: {fallback_error}"
+            )
+        })
+    })
+}
+
+#[cfg(not(windows))]
+fn open_external_url(url: &str, label: &str) -> Result<(), String> {
+    opener::open(url)
+        .map_err(|error| format!("unable to open {label} in default browser: {error}"))
+}
+
+#[cfg(windows)]
+fn open_external_url_windows(url: &str) -> Result<(), String> {
+    use std::ptr;
+    use windows_sys::Win32::{
+        UI::Shell::ShellExecuteW,
+        UI::WindowsAndMessaging::SW_SHOWNORMAL,
+    };
+
+    let operation = wide_null("open");
+    let target = wide_null(url);
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            operation.as_ptr(),
+            target.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    if result <= 32 {
+        Err(format!("code {result}"))
+    } else {
+        Ok(())
     }
 }
 
 #[cfg(windows)]
-fn open_external_url_fallback(url: &str) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(not(windows))]
-fn open_external_url_fallback(_url: &str) -> Result<(), String> {
-    Err("no browser fallback available for this platform".to_owned())
+fn wide_null(value: &str) -> Vec<u16> {
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+    OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
 #[tauri::command]

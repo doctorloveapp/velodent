@@ -158,17 +158,11 @@ pub fn load_dotenv() {
 pub fn load_oauth_config() -> Result<GoogleOAuthConfig, GoogleConfigError> {
     load_dotenv();
 
-    let client_id = env::var("GOOGLE_CLIENT_ID")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+    let client_id = runtime_or_embedded_env("GOOGLE_CLIENT_ID")
         .ok_or(GoogleConfigError::MissingClientId)?;
-    let client_secret = env::var("GOOGLE_CLIENT_SECRET")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+    let client_secret = runtime_or_embedded_env("GOOGLE_CLIENT_SECRET")
         .ok_or(GoogleConfigError::MissingClientSecret)?;
-    let redirect_uri = env::var("GOOGLE_REDIRECT_URI")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+    let redirect_uri = runtime_or_embedded_env("GOOGLE_REDIRECT_URI")
         .unwrap_or_else(|| DEFAULT_REDIRECT_URI.to_owned());
 
     Ok(GoogleOAuthConfig {
@@ -182,15 +176,9 @@ pub fn oauth_status() -> GoogleOAuthStatus {
     load_dotenv();
 
     let loaded_config = load_oauth_config().ok();
-    let client_id_present = env::var("GOOGLE_CLIENT_ID")
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    let client_secret_present = env::var("GOOGLE_CLIENT_SECRET")
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    let redirect_uri = env::var("GOOGLE_REDIRECT_URI")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+    let client_id_present = runtime_or_embedded_env("GOOGLE_CLIENT_ID").is_some();
+    let client_secret_present = runtime_or_embedded_env("GOOGLE_CLIENT_SECRET").is_some();
+    let redirect_uri = runtime_or_embedded_env("GOOGLE_REDIRECT_URI")
         .unwrap_or_else(|| DEFAULT_REDIRECT_URI.to_owned());
     let redirect_uri = loaded_config
         .as_ref()
@@ -217,6 +205,25 @@ pub fn oauth_status() -> GoogleOAuthStatus {
             .map(|scope| (*scope).to_owned())
             .collect(),
     }
+}
+
+pub fn runtime_or_embedded_env(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| embedded_env(key))
+}
+
+fn embedded_env(key: &str) -> Option<String> {
+    let value = match key {
+        "GOOGLE_CLIENT_ID" => option_env!("VELODENT_EMBEDDED_GOOGLE_CLIENT_ID"),
+        "GOOGLE_CLIENT_SECRET" => option_env!("VELODENT_EMBEDDED_GOOGLE_CLIENT_SECRET"),
+        "GOOGLE_REDIRECT_URI" => option_env!("VELODENT_EMBEDDED_GOOGLE_REDIRECT_URI"),
+        _ => None,
+    }?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 pub fn authorization_url(state: &str) -> Result<GoogleAuthorizationUrl, GoogleConfigError> {

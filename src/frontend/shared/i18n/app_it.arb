@@ -363,6 +363,7 @@
   "settingsServiceReordered": "Ordine tariffario aggiornato",
   "settingsOpenServices": "Tariffario clinico",
   "settingsBackToSettings": "Torna alle impostazioni",
+  "tariffarioEmpty": "Il tariffario non contiene voci. Riavvia VeloDent per completare le migrazioni o contatta il supporto.",
   "tariffarioMoveUp": "Sposta voce su",
   "tariffarioMoveDown": "Sposta voce giu'",
   "tariffarioUncategorized": "Senza categoria",

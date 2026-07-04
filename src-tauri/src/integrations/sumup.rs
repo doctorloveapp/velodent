@@ -116,18 +116,31 @@ pub async fn create_checkout(
 
 fn load_config() -> Result<SumupConfig, SumupError> {
     let _ = dotenvy::dotenv();
-    let api_key = env::var("SUMUP_API_KEY")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(SumupError::MissingApiKey)?;
-    let merchant_code = env::var("SUMUP_MERCHANT_CODE")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(SumupError::MissingMerchantCode)?;
+    let api_key = runtime_or_embedded_env("SUMUP_API_KEY").ok_or(SumupError::MissingApiKey)?;
+    let merchant_code =
+        runtime_or_embedded_env("SUMUP_MERCHANT_CODE").ok_or(SumupError::MissingMerchantCode)?;
     Ok(SumupConfig {
         api_key,
         merchant_code,
     })
+}
+
+fn runtime_or_embedded_env(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| embedded_env(key))
+}
+
+fn embedded_env(key: &str) -> Option<String> {
+    let value = match key {
+        "SUMUP_API_KEY" => option_env!("VELODENT_EMBEDDED_SUMUP_API_KEY"),
+        "SUMUP_MERCHANT_CODE" => option_env!("VELODENT_EMBEDDED_SUMUP_MERCHANT_CODE"),
+        _ => None,
+    }?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 fn format_cents_for_sumup(amount_cents: i64) -> String {

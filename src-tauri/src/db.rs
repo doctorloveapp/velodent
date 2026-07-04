@@ -1,6 +1,6 @@
 use crate::{
     auth::{self, Role},
-    integrations::google,
+    integrations::{google, resend},
     license,
     paths,
 };
@@ -7522,29 +7522,7 @@ fn record_official_google_credentials_migration(
     conn: &Connection,
     database_identity_id: &str,
 ) -> DbResult<()> {
-    google::load_dotenv();
-    let google_client_id_present = env::var("GOOGLE_CLIENT_ID")
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    let google_client_secret_present = env::var("GOOGLE_CLIENT_SECRET")
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    let resend_api_key_present = env::var("RESEND_API_KEY")
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    let resend_from_email_present = env::var("RESEND_FROM_EMAIL")
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-
-    if !(google_client_id_present
-        && google_client_secret_present
-        && resend_api_key_present
-        && resend_from_email_present)
-    {
+    if !(google::oauth_status().configured && resend::configured()) {
         return Ok(());
     }
 
@@ -11042,6 +11020,27 @@ mod tests {
             .active_google_calendar_tokens(admin.id)
             .expect("active tokens after removal")
             .is_empty());
+    }
+
+    #[test]
+    fn fresh_database_seeds_complete_clinical_price_list() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+
+        let catalog = db
+            .list_clinical_services_catalog(admin.id)
+            .expect("clinical services catalog");
+        assert!(
+            catalog.len() >= 111,
+            "fresh catalog should include the complete default tariffario"
+        );
+        assert!(catalog.iter().any(|service| service.code == "NOM-001"));
+        assert!(catalog.iter().any(|service| service.code == "NOM-111"));
+        assert!(catalog.iter().any(|service| service.category.as_deref() == Some("ortodonzia")));
+        assert!(catalog.iter().any(|service| service.category.as_deref() == Some("igiene e profilassi")));
     }
 
     fn test_database_path() -> PathBuf {
