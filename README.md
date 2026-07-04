@@ -84,7 +84,7 @@ $env:VELODENT_DB_KEY = "una-chiave-di-sviluppo-lunga-e-non-versionata"
 npm run tauri:dev
 ```
 
-`VELODENT_DB_KEY` non deve mai essere versionata, loggata o inserita nel codice. Il percorso del database non deve essere relativo: l'app risolve sempre la cartella dati tramite il PathResolver di Tauri e salva il DB in `app_data_dir/data/velodent.sqlite`.
+`VELODENT_DB_KEY` non deve mai essere versionata, loggata o inserita nel codice. Il percorso del database non deve essere relativo: l'app risolve sempre la cartella dati tramite il PathResolver di Tauri e salva il DB in `%APPDATA%/VeloDent/data/velodent.sqlite`.
 
 Solo per test locali non sensibili e' disponibile un fallback esplicito:
 

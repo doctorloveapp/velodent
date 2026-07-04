@@ -1,6 +1,6 @@
 [package]
 name = "velodent"
-version = "1.0.5"
+version = "1.0.6"
 description = "VeloDent clinical management desktop application"
 authors = ["VeloDent"]
 edition = "2021"

@@ -311,8 +311,8 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
         </div>
       </div>
 
-      <div className="grid items-end gap-3 border-y border-alabaster-grey-500/15 py-3 xl:grid-cols-[minmax(0,1fr)_auto]">
-        <div className="grid items-end gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(190px,1.2fr)_minmax(180px,1fr)_minmax(150px,0.8fr)_minmax(118px,0.62fr)_minmax(120px,0.62fr)_minmax(150px,0.75fr)]">
+      <div className="grid items-end gap-3 border-y border-alabaster-grey-500/15 py-3 2xl:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="grid items-end gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(190px,1.2fr)_minmax(180px,1fr)_minmax(150px,0.9fr)] 2xl:grid-cols-[minmax(190px,1.2fr)_minmax(180px,1fr)_minmax(150px,0.8fr)_minmax(118px,0.62fr)_minmax(120px,0.62fr)_minmax(150px,0.75fr)]">
           <div className="relative">
             <Input
               placeholder={t("agendaPatientRequiredPlaceholder")}
@@ -384,7 +384,7 @@ export function AgendaView({ currentUser }: AgendaViewProps) {
           disabled={!canCreateAppointment || appointmentSaving}
           title={!canCreateAppointment ? t("agendaPatientOrNameTooltip") : undefined}
           type="button"
-          className="h-10 whitespace-nowrap"
+          className="h-10 justify-center whitespace-nowrap xl:w-full 2xl:w-auto"
           onClick={() => void handleCreateAppointment()}
         >
           <CalendarClock aria-hidden="true" className="h-4 w-4" />

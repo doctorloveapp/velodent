@@ -26,7 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             integrations::google::load_dotenv();
-            let app_data_dir = match app.path().app_data_dir() {
+            let legacy_app_data_dir = match app.path().app_data_dir() {
                 Ok(path) => path,
                 Err(error) => {
                     show_startup_error(&format!(
@@ -35,7 +35,11 @@ pub fn run() {
                     return Err(Box::<dyn std::error::Error>::from(error));
                 }
             };
-            if let Err(error) = paths::initialize(app_data_dir.clone()) {
+            let app_data_dir = legacy_app_data_dir
+                .parent()
+                .map(|parent| parent.join("VeloDent"))
+                .unwrap_or_else(|| legacy_app_data_dir.clone());
+            if let Err(error) = paths::initialize(app_data_dir, Some(legacy_app_data_dir)) {
                 show_startup_error(&error);
                 return Err(Box::<dyn std::error::Error>::from(std::io::Error::new(
                     std::io::ErrorKind::Other,

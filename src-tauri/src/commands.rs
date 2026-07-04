@@ -63,8 +63,36 @@ pub fn open_apache_license() -> Result<(), String> {
 }
 
 fn open_fixed_legal_url(url: &str, label: &str) -> Result<(), String> {
-    opener::open(url)
-        .map_err(|error| format!("unable to open {label} in default browser: {error}"))
+    open_external_url(url, label)
+}
+
+fn open_external_url(url: &str, label: &str) -> Result<(), String> {
+    match opener::open(url) {
+        Ok(()) => Ok(()),
+        Err(primary_error) => open_external_url_fallback(url)
+            .map_err(|fallback_error| {
+                format!(
+                    "unable to open {label} in default browser: {primary_error}; fallback failed: {fallback_error}"
+                )
+            }),
+    }
+}
+
+#[cfg(windows)]
+fn open_external_url_fallback(url: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(windows))]
+fn open_external_url_fallback(_url: &str) -> Result<(), String> {
+    Err("no browser fallback available for this platform".to_owned())
 }
 
 #[tauri::command]
@@ -863,7 +891,7 @@ pub async fn start_google_login(
     listener
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
-    opener::open(&authorization.authorization_url)
+    open_external_url(&authorization.authorization_url, "Google login")
         .map_err(|error| format!("unable to open the default browser: {error}"))?;
 
     let code = tauri::async_runtime::spawn_blocking(move || {
@@ -1048,11 +1076,7 @@ pub fn get_pairing_code(
 ) -> Result<PairingCodeInfo, String> {
     let actor = require_session(&state, &request.session_token)?;
     let mut pairing_code = state.create_pairing_code(actor.id, server::lan::LAN_SERVER_PORT)?;
-    pairing_code.public_url = Some(format!(
-        "http://velodent.local:{}?mobile=1&pairing_pin={}",
-        server::lan::PWA_FRONTEND_PORT,
-        pairing_code.code
-    ));
+    pairing_code.public_url = Some(server::lan::frontend_pairing_url(&pairing_code.code));
     Ok(pairing_code)
 }
 
@@ -1199,7 +1223,7 @@ pub async fn start_google_calendar_account_link(
     listener
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
-    opener::open(&authorization.authorization_url)
+    open_external_url(&authorization.authorization_url, "Google Calendar authorization")
         .map_err(|error| format!("unable to open the default browser: {error}"))?;
 
     let code = tauri::async_runtime::spawn_blocking(move || {

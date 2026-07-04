@@ -248,7 +248,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
@@ -262,10 +262,10 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
               key={mode}
               type="button"
               variant={assetMode === mode ? "navActive" : "secondary"}
-              className="h-9 justify-center px-4"
+              className="h-8 justify-center px-3 text-xs"
               onClick={() => setAssetMode((current) => (current === mode ? null : mode))}
             >
-              <Images aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+              <Images aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
               {mode === "rx" ? t("clinicalAssetRx") : t("clinicalAssetPhoto")}
             </Button>
           ))}
@@ -281,12 +281,13 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
         <ClinicalAssetsViewer
           currentUser={currentUser}
           mode={assetMode}
+          onClose={() => setAssetMode(null)}
           patient={patient}
         />
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_300px] 2xl:grid-cols-[minmax(0,1fr)_320px]">
+        <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
           <OdontogramRow
             recordedToothRecords={recordedToothRecords}
             selectedTeeth={selectedTeeth}
@@ -294,7 +295,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
             toothStates={toothStates}
             onSelect={handleToothPress}
           />
-          <div className="my-4 h-px bg-alabaster-grey-500/20" />
+          <div className="my-3 h-px bg-alabaster-grey-500/20" />
           <OdontogramRow
             recordedToothRecords={recordedToothRecords}
             selectedTeeth={selectedTeeth}
@@ -305,7 +306,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           {statusMessage ? <p className="mt-3 text-xs text-powder-blue-500">{statusMessage}</p> : null}
         </section>
 
-        <aside className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
+        <aside className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
           <div className="flex items-center gap-2">
             <Stethoscope aria-hidden="true" className="h-4 w-4 text-powder-blue-500" strokeWidth={1.5} />
             <h4 className="text-sm font-semibold text-white">{t("clinicalQuickMenuTitle")}</h4>
@@ -324,8 +325,8 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           {selectionMode ? <p className="mt-2 text-xs text-powder-blue-500">{t("mobileSelectionMode")}</p> : null}
           {selectedTeeth.length ? (
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <Button type="button" className="h-12 justify-center border-powder-blue-500/45 bg-powder-blue-950 text-white hover:bg-powder-blue-500/25" onClick={() => setSelectionMode(true)}>
-                <Plus aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+              <Button type="button" className="h-9 justify-center border-powder-blue-500/45 bg-powder-blue-950 px-2 text-xs text-white hover:bg-powder-blue-500/25" onClick={() => setSelectionMode(true)}>
+                <Plus aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
                 {t("mobileAddToSelection")}
               </Button>
               {(["caries", "endodontics", "periodontics", "crown", "extraction"] as QuickAction[]).map((action) => (
@@ -333,7 +334,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                   key={action}
                   type="button"
                   variant="secondary"
-                  className={`h-12 justify-center ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
+                  className={`h-9 justify-center px-2 text-xs ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
                   onClick={() => setActiveAction(action)}
                 >
                   {quickActionLabel(action, selectedTeeth.length >= 2, t)}
@@ -343,10 +344,10 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                 <Button
                   type="button"
                   variant="secondary"
-                  className="col-span-2 h-12 justify-center border-red-500/45 text-red-300 hover:bg-red-500/15 hover:text-red-100"
+                  className="col-span-2 h-9 justify-center border-red-500/45 px-2 text-xs text-red-300 hover:bg-red-500/15 hover:text-red-100"
                   onClick={() => void handleClearSelection().catch(() => setStatusMessage(t("clinicalGenericError")))}
                 >
-                  <Trash2 aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+                  <Trash2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
                   {t("mobileClearTooth")}
                 </Button>
               ) : null}
@@ -358,7 +359,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                   key={action}
                   type="button"
                   variant="secondary"
-                  className={`h-12 justify-center ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
+                  className={`h-9 justify-center px-2 text-xs ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
                   onClick={() => setActiveAction(action)}
                 >
                   {quickActionLabel(action, false, t)}
@@ -368,13 +369,13 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           )}
 
           {selectionMode ? (
-            <Button type="button" className="mt-3 h-12 w-full justify-center" onClick={() => setSelectionMode(false)}>
+            <Button type="button" className="mt-3 h-9 w-full justify-center text-xs" onClick={() => setSelectionMode(false)}>
               {t("mobileFinishSelection")}
             </Button>
           ) : null}
 
           {activeAction ? (
-            <div className="mt-4 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-3">
+            <div className="mt-3 rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
                   {quickActionLabel(activeAction, selectedTeeth.length >= 2, t)}
@@ -383,10 +384,10 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                   {t("mobileCloseMenu")}
                 </Button>
               </div>
-              <div className="grid max-h-[380px] gap-2 overflow-y-auto">
+              <div className="grid max-h-[260px] gap-2 overflow-y-auto">
                 {visibleServices.length ? (
                   visibleServices.map((service) => (
-                    <Button key={service.id} type="button" variant="secondary" className="h-auto min-h-12 justify-start py-2 text-left" onClick={() => void handleServiceSelect(service).catch(() => setStatusMessage(t("clinicalGenericError")))}>
+                    <Button key={service.id} type="button" variant="secondary" className="h-auto min-h-9 justify-start px-3 py-2 text-left text-xs" onClick={() => void handleServiceSelect(service).catch(() => setStatusMessage(t("clinicalGenericError")))}>
                       {service.name}
                     </Button>
                   ))
@@ -399,7 +400,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
         </aside>
       </div>
 
-      <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
+      <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
         <div className="mb-3 flex items-center gap-2">
           <ListFilter aria-hidden="true" className="h-4 w-4 text-powder-blue-500" strokeWidth={1.5} />
           <h4 className="text-sm font-semibold text-white">{t("clinicalDiaryTitle")}</h4>
@@ -442,12 +443,12 @@ function OdontogramRow({
   const singleProsthesisTeeth = new Set(groups.filter((group) => group.teeth.length === 1).map((group) => group.teeth[0]));
 
   return (
-    <div className="relative grid [grid-template-columns:repeat(16,minmax(0,1fr))] gap-2 overflow-visible pt-6">
+    <div className="relative grid [grid-template-columns:repeat(16,minmax(0,1fr))] gap-1.5 overflow-visible pt-5">
       {bridgeGroups.map((group) => (
         <span
           key={group.key}
           aria-hidden="true"
-          className="pointer-events-none absolute top-2 z-10 h-1 rounded-full bg-amber-400 shadow-[0_0_14px_rgba(251,191,36,0.55)]"
+          className="pointer-events-none absolute top-1.5 z-10 h-1 rounded-full bg-amber-400 shadow-[0_0_14px_rgba(251,191,36,0.55)]"
           style={{
             left: formatPercent(((group.startIndex + 0.16) / teeth.length) * 100),
             width: formatPercent(((group.endIndex - group.startIndex + 0.68) / teeth.length) * 100)
@@ -464,7 +465,7 @@ function OdontogramRow({
             key={toothNumber}
             aria-label={`${t("clinicalToothNumber")} ${String(toothNumber)}`}
             className={[
-              "relative z-20 flex min-h-20 flex-col items-center justify-center gap-1 rounded-md border px-1 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-powder-blue-500/70",
+              "relative z-20 flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-md border px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-powder-blue-500/70",
               recordedAction
                 ? recordedToothClasses[recordedAction]
                 : selected
@@ -477,10 +478,10 @@ function OdontogramRow({
             whileTap={{ scale: 0.96 }}
             onClick={() => onSelect(toothNumber)}
           >
-            {singleProsthesis ? <span className="pointer-events-none absolute inset-2 rounded-full border-2 border-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.5)]" /> : null}
+            {singleProsthesis ? <span className="pointer-events-none absolute inset-1.5 rounded-full border-2 border-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.5)]" /> : null}
             {selected ? (
-              <span className="absolute -right-1 -top-1 grid h-5 w-5 place-items-center rounded-full bg-powder-blue-500 text-white">
-                <Check aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={2} />
+              <span className="absolute -right-1 -top-1 grid h-4 w-4 place-items-center rounded-full bg-powder-blue-500 text-white">
+                <Check aria-hidden="true" className="h-3 w-3" strokeWidth={2} />
               </span>
             ) : null}
             <ToothGlyph
@@ -488,7 +489,7 @@ function OdontogramRow({
               toothNumber={toothNumber}
               state={recordedAction ? "healthy" : toothState ?? "healthy"}
             />
-            <span className="font-mono text-[11px] font-semibold">{toothNumber}</span>
+            <span className="font-mono text-[10px] font-semibold">{toothNumber}</span>
           </motion.button>
         );
       })}
@@ -499,10 +500,12 @@ function OdontogramRow({
 function ClinicalAssetsViewer({
   currentUser,
   mode,
+  onClose,
   patient
 }: {
   currentUser: User | null;
   mode: "rx" | "photo";
+  onClose: () => void;
   patient: Patient;
 }) {
   const { t } = useL10n();
@@ -575,51 +578,63 @@ function ClinicalAssetsViewer({
   }
 
   return (
-    <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{mode === "rx" ? t("clinicalAssetRx") : t("clinicalAssetPhoto")}</p>
-          <h4 className="text-sm font-semibold text-white">{t("clinicalAssetsTitle")}</h4>
-        </div>
-        {mode === "rx" && rxSubTypes.length > 1 ? (
-          <div className="flex flex-wrap gap-2">
-            {(["ORTOPANTOMOGRAFIA", "ENDORALE"] as const).map((subType) => rxSubTypes.includes(subType) ? (
-              <Button key={subType} type="button" variant={selectedSubType === subType ? "navActive" : "secondary"} size="sm" onClick={() => setSelectedSubType(subType)}>
-                {t(rxSubTypeLabelKey(subType))}
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink-black-950/78 p-4 backdrop-blur-xl">
+      <section className="grid max-h-[calc(100vh-2rem)] w-full max-w-5xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-lg border border-alabaster-grey-500/20 bg-glaucous-950 shadow-[0_24px_90px_rgba(0,0,0,0.55)]">
+        <div className="border-b border-alabaster-grey-500/15 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{mode === "rx" ? t("clinicalAssetRx") : t("clinicalAssetPhoto")}</p>
+              <h4 className="text-sm font-semibold text-white">{t("clinicalAssetsTitle")}</h4>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {mode === "rx" && rxSubTypes.length > 1 ? (
+                <>
+                  {(["ORTOPANTOMOGRAFIA", "ENDORALE"] as const).map((subType) => rxSubTypes.includes(subType) ? (
+                    <Button key={subType} type="button" variant={selectedSubType === subType ? "navActive" : "secondary"} size="sm" onClick={() => setSelectedSubType(subType)}>
+                      {t(rxSubTypeLabelKey(subType))}
+                    </Button>
+                  ) : null)}
+                </>
+              ) : null}
+              <Button type="button" variant="secondary" size="sm" onClick={onClose}>
+                <X aria-hidden="true" className="h-4 w-4" />
+                {t("rxViewerClose")}
               </Button>
-            ) : null)}
+            </div>
           </div>
-        ) : null}
-      </div>
-      {statusMessage ? <p className="mb-3 text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
-      {modeAssets.length ? (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {modeAssets.map((asset) => (
-            <button
-              key={asset.id}
-              className="overflow-hidden rounded-md border border-alabaster-grey-500/20 bg-glaucous-950 text-left transition hover:border-powder-blue-500/60"
-              type="button"
-              onClick={() => void openAsset(asset).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}
-            >
-              <div className="flex aspect-[4/3] items-center justify-center bg-ink-black-950">
-                {previews[asset.file_asset_id] ? (
-                  <img alt={t("rxThumbnailAlt")} className="h-full w-full object-cover" src={previews[asset.file_asset_id]} />
-                ) : (
-                  <FileImage aria-hidden="true" className="h-10 w-10 text-powder-blue-500" strokeWidth={1.5} />
-                )}
-              </div>
-              <div className="grid gap-1 p-3">
-                <span className="text-sm font-semibold text-white">{t(rxSubTypeLabelKey(asset.sub_type))}</span>
-                <span className="text-[11px] text-alabaster-grey-500">{asset.acquired_at.slice(0, 10)}</span>
-              </div>
-            </button>
-          ))}
         </div>
-      ) : (
-        <p className="text-sm text-alabaster-grey-500">{mode === "rx" ? t("clinicalAssetRxEmpty") : t("clinicalAssetPhotoEmpty")}</p>
-      )}
+        <div className="min-h-0 overflow-y-auto p-4">
+          {statusMessage ? <p className="mb-3 text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
+          {modeAssets.length ? (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {modeAssets.map((asset) => (
+                <button
+                  key={asset.id}
+                  className="overflow-hidden rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 text-left transition hover:border-powder-blue-500/60"
+                  type="button"
+                  onClick={() => void openAsset(asset).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}
+                >
+                  <div className="flex aspect-[4/3] items-center justify-center bg-ink-black-950">
+                    {previews[asset.file_asset_id] ? (
+                      <img alt={t("rxThumbnailAlt")} className="h-full w-full object-cover" src={previews[asset.file_asset_id]} />
+                    ) : (
+                      <FileImage aria-hidden="true" className="h-10 w-10 text-powder-blue-500" strokeWidth={1.5} />
+                    )}
+                  </div>
+                  <div className="grid gap-1 p-3">
+                    <span className="text-sm font-semibold text-white">{t(rxSubTypeLabelKey(asset.sub_type))}</span>
+                    <span className="text-[11px] text-alabaster-grey-500">{asset.acquired_at.slice(0, 10)}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-alabaster-grey-500">{mode === "rx" ? t("clinicalAssetRxEmpty") : t("clinicalAssetPhotoEmpty")}</p>
+          )}
+        </div>
+      </section>
       {viewer ? (
-        <div className="fixed inset-0 z-50 grid bg-ink-black-950/90 p-4 backdrop-blur-xl">
+        <div className="fixed inset-0 z-[60] grid bg-ink-black-950/90 p-4 backdrop-blur-xl">
           <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-lg border border-alabaster-grey-500/20 bg-white/10">
             <div className="flex items-center justify-between border-b border-alabaster-grey-500/20 p-3">
               <h3 className="text-sm font-semibold text-white">{t(rxSubTypeLabelKey(viewer.asset.sub_type))}</h3>
@@ -638,7 +653,7 @@ function ClinicalAssetsViewer({
           </div>
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }
 
@@ -843,7 +858,7 @@ function ToothGlyph({ className = "", state, toothNumber }: { className?: string
 
   if (position <= 2) {
     return (
-      <svg aria-hidden="true" className={`h-8 w-6 ${classes}`} fill="none" viewBox="0 0 24 30">
+      <svg aria-hidden="true" className={`h-6 w-4 ${classes}`} fill="none" viewBox="0 0 24 30">
         <path d="M8 3.8c1.2-.8 2.6-.8 4-.2 1.4-.6 2.8-.6 4 .2 1.8 1.2 2.3 4.2 1.2 7.1-.8 2.1-1.2 4.4-1.4 7.2-.3 4.5-1.4 7.5-3.8 7.5s-3.5-3-3.8-7.5c-.2-2.8-.6-5.1-1.4-7.2-1.1-2.9-.6-5.9 1.2-7.1Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
         <path d="M9 10.2h6" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
       </svg>
@@ -852,7 +867,7 @@ function ToothGlyph({ className = "", state, toothNumber }: { className?: string
 
   if (position === 3) {
     return (
-      <svg aria-hidden="true" className={`h-8 w-6 ${classes}`} fill="none" viewBox="0 0 24 30">
+      <svg aria-hidden="true" className={`h-6 w-4 ${classes}`} fill="none" viewBox="0 0 24 30">
         <path d="M7.2 3.5c1.5-1 3.2-.3 4.8-.3s3.3-.7 4.8.3c2 1.4 2.2 4.8.9 7.9-.9 2.1-1.7 4.9-2.3 8.4-.6 3.8-1.5 6.1-3.4 6.1s-2.8-2.3-3.4-6.1c-.6-3.5-1.4-6.3-2.3-8.4-1.3-3.1-1.1-6.5.9-7.9Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
         <path d="M12 12.5v9" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
       </svg>
@@ -861,7 +876,7 @@ function ToothGlyph({ className = "", state, toothNumber }: { className?: string
 
   if (position <= 5) {
     return (
-      <svg aria-hidden="true" className={`h-8 w-7 ${classes}`} fill="none" viewBox="0 0 26 30">
+      <svg aria-hidden="true" className={`h-6 w-5 ${classes}`} fill="none" viewBox="0 0 26 30">
         <path d="M6.5 3.4c1.8-.9 3.9.1 6.5.1s4.7-1 6.5-.1c2.6 1.3 3.2 4.8 2.1 8.4-.7 2.3-1.9 4.1-2.5 7.2-.5 2.8-.9 6-3 6.4-1.7.3-2-3.8-3.1-3.8s-1.4 4.1-3.1 3.8c-2.1-.4-2.5-3.6-3-6.4-.6-3.1-1.8-4.9-2.5-7.2-1.1-3.6-.5-7.1 2.1-8.4Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
         <path d="M9.2 10.2h7.6M10 14.4h6" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
       </svg>
@@ -869,7 +884,7 @@ function ToothGlyph({ className = "", state, toothNumber }: { className?: string
   }
 
   return (
-    <svg aria-hidden="true" className={`h-8 w-8 ${classes}`} fill="none" viewBox="0 0 30 30">
+    <svg aria-hidden="true" className={`h-6 w-6 ${classes}`} fill="none" viewBox="0 0 30 30">
       <path d="M6.3 3.5c2.1-1 4.1.2 6.1.2 1.1 0 1.7-.5 2.6-.5s1.5.5 2.6.5c2 0 4-1.2 6.1-.2 2.9 1.4 3.6 5.1 2.3 9-.8 2.5-2.2 4.1-2.9 7.2-.6 2.8-1 5.8-3.3 6.1-1.7.2-2.1-3.8-3.2-3.8s-1.4 3.8-3.2 3.8-2.1-3.8-3.2-3.8-1.5 4-3.2 3.8c-2.3-.3-2.7-3.3-3.3-6.1-.7-3.1-2.1-4.7-2.9-7.2-1.3-3.9-.6-7.6 2.3-9Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
       <path d="M9 10.8h12M10.2 15h9.6M15 8.4v8.8" stroke="currentColor" strokeLinecap="round" strokeWidth="1" />
     </svg>

@@ -13,7 +13,7 @@ pub mod lan {
     use std::{
         collections::HashMap,
         io::{Read, Write},
-        net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+        net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket},
         thread,
         time::Duration,
     };
@@ -21,6 +21,17 @@ pub mod lan {
 
     pub const LAN_SERVER_PORT: u16 = 1422;
     pub const PWA_FRONTEND_PORT: u16 = 1420;
+
+    pub fn frontend_pairing_url(pairing_pin: &str) -> String {
+        let host = lan_ipv4_address()
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "velodent.local".to_owned());
+        format!(
+            "http://{host}:{}?mobile=1&pairing_pin={}",
+            PWA_FRONTEND_PORT,
+            pairing_pin
+        )
+    }
 
     #[derive(Debug, Deserialize)]
     struct PairRequest {
@@ -613,6 +624,29 @@ pub mod lan {
                 thread::park();
             }
         });
+    }
+
+    fn lan_ipv4_address() -> Option<Ipv4Addr> {
+        for target in ["8.8.8.8:80", "1.1.1.1:80", "192.168.1.1:80"] {
+            let socket = UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+            if socket.connect(target).is_err() {
+                continue;
+            }
+            let IpAddr::V4(ip) = socket.local_addr().ok()?.ip() else {
+                continue;
+            };
+            if is_private_lan_ipv4(ip) {
+                return Some(ip);
+            }
+        }
+        None
+    }
+
+    fn is_private_lan_ipv4(ip: Ipv4Addr) -> bool {
+        let octets = ip.octets();
+        octets[0] == 10
+            || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+            || (octets[0] == 192 && octets[1] == 168)
     }
 
     fn patient_clinical_query(

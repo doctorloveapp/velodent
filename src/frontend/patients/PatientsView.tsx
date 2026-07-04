@@ -1168,7 +1168,7 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
   return (
     <div className="grid gap-4">
       <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
-        <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_210px_120px_auto_auto_auto]">
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_190px_96px] 2xl:grid-cols-[minmax(0,1fr)_210px_120px_auto_auto_auto]">
           <Input
             placeholder={t("rxSourcePathPlaceholder")}
             value={sourcePath}
