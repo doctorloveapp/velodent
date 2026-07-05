@@ -78,8 +78,8 @@ export function AppShell({ currentUser }: AppShellProps) {
 
   return (
     <div className="flex min-h-screen bg-ink-black-950 text-ink-black-50">
-      <aside className="fixed inset-y-0 left-0 z-20 flex w-[260px] flex-col border-r border-white/5 bg-ink-black-950">
-        <div className="flex h-[60px] items-center gap-3 border-b border-white/5 px-5">
+      <aside className="fixed inset-y-0 left-0 z-20 flex w-[220px] flex-col border-r border-white/5 bg-ink-black-950">
+        <div className="flex h-[60px] items-center gap-3 border-b border-white/5 px-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-md border border-powder-blue-500/35 bg-powder-blue-950 text-powder-blue-500 shadow-[0_0_22px_rgba(47,127,208,0.24)]">
             <Activity aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
           </div>
@@ -91,7 +91,7 @@ export function AppShell({ currentUser }: AppShellProps) {
           </div>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
+        <nav className="flex flex-1 flex-col items-start gap-1 px-2.5 py-4">
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = activeKey === item.key;
@@ -106,29 +106,29 @@ export function AppShell({ currentUser }: AppShellProps) {
                 <Button
                   type="button"
                   variant={active ? "navActive" : "nav"}
-                  className="w-full justify-start"
+                  className="max-w-full justify-start px-2.5"
                   onClick={() => setActiveKey(item.key)}
                 >
-                  <Icon aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
-                  <span>{t(item.labelKey)}</span>
+                  <Icon aria-hidden="true" className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                  <span className="truncate">{t(item.labelKey)}</span>
                 </Button>
               </motion.div>
             );
           })}
         </nav>
 
-        <div className="border-t border-white/5 p-4">
-          <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
+        <div className="border-t border-white/5 p-2.5">
+          <div className="rounded-lg border border-alabaster-grey-500/20 bg-glaucous-950 p-2.5">
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-alabaster-grey-500">
               {t("sidebarClinicStationLabel")}
             </p>
-            <p className="mt-2 text-sm font-medium text-white">{t("sidebarClinicStationValue")}</p>
+            <p className="mt-1.5 truncate text-xs font-medium text-white">{t("sidebarClinicStationValue")}</p>
           </div>
         </div>
       </aside>
 
-      <div className="ml-[260px] flex min-h-screen flex-1 flex-col">
-        <header className="sticky top-0 z-10 flex h-[60px] items-center gap-4 border-b border-alabaster-grey-500/20 bg-ink-black-950/95 px-5 backdrop-blur">
+      <div className="ml-[220px] flex min-h-screen min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-10 flex h-[60px] items-center gap-4 border-b border-alabaster-grey-500/20 bg-ink-black-950/95 px-4 backdrop-blur">
           <div className="relative max-w-xl flex-1">
             <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-alabaster-grey-500" strokeWidth={1.5} />
             <Input
@@ -164,10 +164,11 @@ export function AppShell({ currentUser }: AppShellProps) {
           </Badge>
         </header>
 
-        <main className="flex-1 overflow-y-auto bg-ink-black-950 p-6">
+        <main className="min-w-0 flex-1 overflow-y-auto bg-ink-black-950 p-4 2xl:p-6">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeKey}
+              className="min-w-0"
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 10 }}
               initial={{ opacity: 0, y: 10 }}

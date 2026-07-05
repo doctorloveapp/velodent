@@ -65,7 +65,7 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
   }, [currentUser.session_token]);
 
   return (
-    <section className="grid gap-3">
+    <section className="grid min-w-0 gap-3">
       <div className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -81,9 +81,9 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
         </div>
       </div>
 
-      <div className="grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)]">
-        <div className="grid content-start gap-3">
-          <section className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2.5">
+      <div className="grid min-w-0 gap-3 xl:grid-cols-[190px_minmax(0,1fr)] 2xl:grid-cols-[210px_minmax(0,1fr)]">
+        <div className="grid min-w-0 content-start gap-2.5">
+          <section className="min-w-0 rounded-lg border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("clinicalAgendaToday")}</p>
@@ -91,23 +91,23 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
               </div>
               <CalendarDays aria-hidden="true" className="h-4 w-4 text-powder-blue-500" strokeWidth={1.5} />
             </div>
-            <div className="mb-2 flex items-center gap-2">
-              <Button type="button" variant="secondary" size="icon" aria-label={t("agendaPrevious")} onClick={() => setDate(shiftDate(date, -1))}>
-                <ChevronLeft aria-hidden="true" className="h-4 w-4" />
+            <div className="mb-2 flex min-w-0 items-center gap-1.5">
+              <Button type="button" variant="secondary" size="icon" className="h-8 w-8 shrink-0" aria-label={t("agendaPrevious")} onClick={() => setDate(shiftDate(date, -1))}>
+                <ChevronLeft aria-hidden="true" className="h-3.5 w-3.5" />
               </Button>
               <Input className="h-8 min-w-0 text-xs" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-              <Button type="button" variant="secondary" size="icon" aria-label={t("agendaNext")} onClick={() => setDate(shiftDate(date, 1))}>
-                <ChevronRight aria-hidden="true" className="h-4 w-4" />
+              <Button type="button" variant="secondary" size="icon" className="h-8 w-8 shrink-0" aria-label={t("agendaNext")} onClick={() => setDate(shiftDate(date, 1))}>
+                <ChevronRight aria-hidden="true" className="h-3.5 w-3.5" />
               </Button>
             </div>
-            <div className="grid max-h-[160px] gap-1.5 overflow-y-auto">
+            <div className="grid max-h-[150px] gap-1.5 overflow-y-auto">
               {dayPatients.length ? dayPatients.map((appointment) => {
                 const selected = selectedPatient?.id === appointment.patient_id;
                 return (
                   <button
                     key={appointment.id}
                     className={[
-                      "rounded-md border p-1.5 text-left transition",
+                      "min-w-0 rounded-md border p-1.5 text-left transition",
                       selected
                         ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_24px_rgba(251,191,36,0.16)]"
                         : "border-alabaster-grey-500/20 bg-ink-black-950 hover:border-powder-blue-500/55"
@@ -116,9 +116,9 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
                     type="button"
                     onClick={() => appointment.patient_id ? void openPatient(appointment.patient_id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError"))) : undefined}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-xs font-semibold text-white">{appointment.patient_name ?? t("agendaNoPatient")}</span>
-                      <Badge variant={selected ? "warning" : "default"}>{appointment.starts_at.slice(11, 16)}</Badge>
+                    <div className="flex min-w-0 items-center justify-between gap-1.5">
+                      <span className="min-w-0 truncate text-xs font-semibold text-white">{appointment.patient_name ?? t("agendaNoPatient")}</span>
+                      <Badge className="shrink-0 px-1.5 text-[10px]" variant={selected ? "warning" : "default"}>{appointment.starts_at.slice(11, 16)}</Badge>
                     </div>
                     <p className="mt-0.5 truncate text-[10px] text-alabaster-grey-500">{appointment.title}</p>
                   </button>
@@ -129,7 +129,7 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
             </div>
           </section>
 
-          <section className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2.5">
+          <section className="min-w-0 rounded-lg border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
             <div className="relative">
               <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-alabaster-grey-500" />
               <Input
@@ -140,14 +140,14 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
                 onChange={(event) => void handlePatientSearch(event.target.value).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
               />
             </div>
-            <div className="mt-2 grid max-h-[190px] gap-1.5 overflow-y-auto">
+            <div className="mt-2 grid max-h-[180px] gap-1.5 overflow-y-auto">
               {patients.map((patient) => {
                 const selected = selectedPatient?.id === patient.id;
                 return (
                   <button
                     key={patient.id}
                     className={[
-                      "rounded-md border p-1.5 text-left transition",
+                      "min-w-0 rounded-md border p-1.5 text-left transition",
                       selected
                         ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_24px_rgba(251,191,36,0.16)]"
                         : "border-alabaster-grey-500/20 bg-ink-black-950 hover:border-powder-blue-500/55"
@@ -164,7 +164,7 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
           </section>
         </div>
 
-        <section className="rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-3">
+        <section className="min-w-0 rounded-xl border border-alabaster-grey-500/20 bg-glaucous-950 p-2.5">
           {selectedPatient ? (
             <ClinicalPanel currentUser={currentUser} patient={selectedPatient} />
           ) : (

@@ -259,7 +259,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   }
 
   return (
-    <div className="grid gap-3">
+    <div className="grid min-w-0 gap-2.5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">
@@ -297,8 +297,8 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
         />
       ) : null}
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px] 2xl:grid-cols-[minmax(0,1fr)_240px]">
-        <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2.5">
+      <div className="grid min-w-0 gap-2.5 xl:grid-cols-[minmax(0,1fr)_190px] 2xl:grid-cols-[minmax(0,1fr)_220px]">
+        <section className="min-w-0 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2">
           <OdontogramRow
             recordedToothRecords={recordedToothRecords}
             selectedTeeth={selectedTeeth}
@@ -317,7 +317,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           {statusMessage ? <p className="mt-3 text-xs text-powder-blue-500">{statusMessage}</p> : null}
         </section>
 
-        <aside className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2.5">
+        <aside className="min-w-0 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2">
           <div className="flex items-center gap-2">
             <Stethoscope aria-hidden="true" className="h-4 w-4 text-powder-blue-500" strokeWidth={1.5} />
             <h4 className="text-xs font-semibold text-white">{t("clinicalQuickMenuTitle")}</h4>
@@ -336,16 +336,16 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           {selectionMode ? <p className="mt-2 text-[11px] text-powder-blue-500">{t("mobileSelectionMode")}</p> : null}
           {selectedTeeth.length ? (
             <div className="mt-2 grid grid-cols-2 gap-1.5">
-              <Button type="button" className="h-11 flex-col justify-center gap-1 border-powder-blue-500/45 bg-powder-blue-950 px-1 py-1 text-[10px] leading-tight text-white hover:bg-powder-blue-500/25" onClick={() => setSelectionMode(true)}>
+              <Button type="button" className="h-9 min-w-0 flex-col justify-center gap-0.5 border-powder-blue-500/45 bg-powder-blue-950 px-1 py-1 text-[10px] leading-tight text-white hover:bg-powder-blue-500/25" onClick={() => setSelectionMode(true)}>
                 <Plus aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
-                <span>{t("mobileAddToSelection")}</span>
+                <span className="max-w-full truncate">{t("mobileAddToSelection")}</span>
               </Button>
               {(["caries", "endodontics", "periodontics", "crown", "extraction"] as QuickAction[]).map((action) => (
                 <Button
                   key={action}
                   type="button"
                   variant="secondary"
-                  className={`h-11 flex-col justify-center gap-1 px-1 py-1 text-[10px] leading-tight ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
+                  className={`h-9 min-w-0 flex-col justify-center gap-0.5 px-1 py-1 text-[10px] leading-tight ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
                   onClick={() => setActiveAction(action)}
                 >
                   <QuickActionContent action={action} label={quickActionLabel(action, selectedTeeth.length >= 2, t)} />
@@ -370,7 +370,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                   key={action}
                   type="button"
                   variant="secondary"
-                  className={`h-11 flex-col justify-center gap-1 px-1 py-1 text-[10px] leading-tight ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
+                  className={`h-9 min-w-0 flex-col justify-center gap-0.5 px-1 py-1 text-[10px] leading-tight ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
                   onClick={() => setActiveAction(action)}
                 >
                   <QuickActionContent action={action} label={quickActionLabel(action, false, t)} />
@@ -395,7 +395,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                   {t("mobileCloseMenu")}
                 </Button>
               </div>
-              <div className="grid max-h-[180px] gap-1.5 overflow-y-auto">
+              <div className="grid max-h-[150px] gap-1.5 overflow-y-auto">
                 {visibleServices.length ? (
                   visibleServices.map((service) => (
                     <Button key={service.id} type="button" variant="secondary" className="h-auto min-h-8 justify-start px-2 py-1.5 text-left text-[11px] leading-4" onClick={() => void handleServiceSelect(service).catch(() => setStatusMessage(t("clinicalGenericError")))}>
@@ -411,17 +411,17 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
         </aside>
       </div>
 
-      <section className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2.5">
-        <div className="mb-3 flex items-center gap-2">
+      <section className="min-w-0 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2">
+        <div className="mb-2 flex items-center gap-2">
           <ListFilter aria-hidden="true" className="h-4 w-4 text-powder-blue-500" strokeWidth={1.5} />
           <h4 className="text-sm font-semibold text-white">{t("clinicalDiaryTitle")}</h4>
         </div>
-        <div className="grid gap-2 md:grid-cols-5">
-          <Input placeholder={t("clinicalDateFrom")} type="date" value={filters.dateFrom} onChange={(event) => setFilters({ ...filters, dateFrom: event.target.value })} />
-          <Input placeholder={t("clinicalDateTo")} type="date" value={filters.dateTo} onChange={(event) => setFilters({ ...filters, dateTo: event.target.value })} />
-          <Input className="font-mono" placeholder={t("clinicalToothNumber")} value={filters.toothNumber} onChange={(event) => setFilters({ ...filters, toothNumber: event.target.value })} />
-          <Input className="font-mono" placeholder={t("clinicalOperatorId")} value={filters.operatorUserId} onChange={(event) => setFilters({ ...filters, operatorUserId: event.target.value })} />
-          <Button type="button" variant="secondary" onClick={() => void refreshClinicalData()}>
+        <div className="grid min-w-0 gap-1.5 md:grid-cols-5">
+          <Input className="h-8 text-xs" placeholder={t("clinicalDateFrom")} type="date" value={filters.dateFrom} onChange={(event) => setFilters({ ...filters, dateFrom: event.target.value })} />
+          <Input className="h-8 text-xs" placeholder={t("clinicalDateTo")} type="date" value={filters.dateTo} onChange={(event) => setFilters({ ...filters, dateTo: event.target.value })} />
+          <Input className="h-8 font-mono text-xs" placeholder={t("clinicalToothNumber")} value={filters.toothNumber} onChange={(event) => setFilters({ ...filters, toothNumber: event.target.value })} />
+          <Input className="h-8 font-mono text-xs" placeholder={t("clinicalOperatorId")} value={filters.operatorUserId} onChange={(event) => setFilters({ ...filters, operatorUserId: event.target.value })} />
+          <Button type="button" variant="secondary" className="h-8 justify-center text-xs" onClick={() => void refreshClinicalData()}>
             {t("clinicalApplyFilters")}
           </Button>
         </div>
@@ -454,7 +454,7 @@ function OdontogramRow({
   const singleProsthesisTeeth = new Set(groups.filter((group) => group.teeth.length === 1).map((group) => group.teeth[0]));
 
   return (
-    <div className="relative grid [grid-template-columns:repeat(16,minmax(0,1fr))] gap-1 overflow-visible pt-4">
+    <div className="relative grid min-w-0 [grid-template-columns:repeat(16,minmax(0,1fr))] gap-0.5 overflow-visible pt-3">
       {bridgeGroups.map((group) => (
         <span
           key={group.key}
@@ -476,7 +476,7 @@ function OdontogramRow({
             key={toothNumber}
             aria-label={`${t("clinicalToothNumber")} ${String(toothNumber)}`}
             className={[
-              "relative z-20 flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-md border px-0.5 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-powder-blue-500/70",
+              "relative z-20 flex min-h-10 min-w-0 flex-col items-center justify-center gap-0.5 rounded-md border px-0.5 py-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-powder-blue-500/70",
               recordedAction
                 ? recordedToothClasses[recordedAction]
                 : selected
@@ -688,45 +688,45 @@ function ClinicalDiary({
 }) {
   const { t } = useL10n();
   return (
-    <div className="mt-4 overflow-hidden rounded-md border border-alabaster-grey-500/20">
-      <table className="w-full border-collapse text-left text-sm">
+    <div className="mt-3 overflow-hidden rounded-md border border-alabaster-grey-500/20">
+      <table className="w-full table-fixed border-collapse text-left text-xs">
         <thead className="bg-glaucous-950 text-[10px] uppercase tracking-widest text-alabaster-grey-500">
           <tr>
-            <th className="px-3 py-2">{t("clinicalDiaryDate")}</th>
-            <th className="px-3 py-2">{t("clinicalToothNumber")}</th>
-            <th className="px-3 py-2">{t("clinicalService")}</th>
-            <th className="px-3 py-2">{t("clinicalStatus")}</th>
-            <th className="px-3 py-2">{t("clinicalOperator")}</th>
-            <th className="px-3 py-2">{t("clinicalQuote")}</th>
-            <th className="px-3 py-2 text-right">{t("rxDeleteAction")}</th>
+            <th className="w-[18%] px-2 py-2">{t("clinicalDiaryDate")}</th>
+            <th className="w-[8%] px-2 py-2">{t("clinicalToothNumber")}</th>
+            <th className="px-2 py-2">{t("clinicalService")}</th>
+            <th className="w-[13%] px-2 py-2">{t("clinicalStatus")}</th>
+            <th className="w-[12%] px-2 py-2">{t("clinicalOperator")}</th>
+            <th className="w-[15%] px-2 py-2">{t("clinicalQuote")}</th>
+            <th className="w-[9%] px-2 py-2 text-right">{t("rxDeleteAction")}</th>
           </tr>
         </thead>
         <tbody>
           {records.length === 0 ? (
             <tr>
-              <td className="px-3 py-4 text-alabaster-grey-500" colSpan={7}>{t("clinicalDiaryEmpty")}</td>
+              <td className="px-2 py-3 text-alabaster-grey-500" colSpan={7}>{t("clinicalDiaryEmpty")}</td>
             </tr>
           ) : (
             records.map((record) => (
               <tr key={record.id} className="border-t border-alabaster-grey-500/10">
-                <td className="px-3 py-2 font-mono text-[11px] text-alabaster-grey-500">{record.created_at}</td>
-                <td className="px-3 py-2 font-mono text-white">{record.tooth_number ?? t("clinicalArch")}</td>
-                <td className="px-3 py-2 text-white">{record.service_name ?? t("clinicalNoService")}</td>
-                <td className="px-3 py-2 text-alabaster-grey-500">{t(recordStatusKey(record.status))}</td>
-                <td className="px-3 py-2 text-alabaster-grey-500">{record.operator_username ?? t("commonEmpty")}</td>
-                <td className="px-3 py-2">
+                <td className="truncate px-2 py-1.5 font-mono text-[10px] text-alabaster-grey-500">{record.created_at}</td>
+                <td className="truncate px-2 py-1.5 font-mono text-white">{record.tooth_number ?? t("clinicalArch")}</td>
+                <td className="truncate px-2 py-1.5 text-white">{record.service_name ?? t("clinicalNoService")}</td>
+                <td className="truncate px-2 py-1.5 text-alabaster-grey-500">{t(recordStatusKey(record.status))}</td>
+                <td className="truncate px-2 py-1.5 text-alabaster-grey-500">{record.operator_username ?? t("commonEmpty")}</td>
+                <td className="px-2 py-1.5">
                   {record.status === "diagnosed" ? (
-                    <Button type="button" variant={record.ready_for_quote ? "navActive" : "secondary"} size="sm" onClick={() => onToggleQuote(record)}>
+                    <Button type="button" variant={record.ready_for_quote ? "navActive" : "secondary"} size="sm" className="h-7 max-w-full px-2 text-[10px]" onClick={() => onToggleQuote(record)}>
                       {record.ready_for_quote ? t("clinicalQuoteReady") : t("clinicalQuoteMark")}
                     </Button>
                   ) : (
                     <Badge variant="default">{t(quoteEligibilityStatusKey(record.status))}</Badge>
                   )}
                 </td>
-                <td className="px-3 py-2 text-right">
+                <td className="px-2 py-1.5 text-right">
                   <Button
                     aria-label={t("clinicalDeleteRecord")}
-                    className="h-8 w-8 justify-center border-red-500/35 p-0 text-red-300 hover:bg-red-500/15 hover:text-red-100"
+                    className="h-7 w-7 justify-center border-red-500/35 p-0 text-red-300 hover:bg-red-500/15 hover:text-red-100"
                     type="button"
                     variant="secondary"
                     onClick={() => onDelete(record)}
