@@ -78,7 +78,7 @@ export function AppShell({ currentUser }: AppShellProps) {
 
   return (
     <div className="flex min-h-screen bg-ink-black-950 text-ink-black-50">
-      <aside className="fixed inset-y-0 left-0 z-20 flex w-[220px] flex-col border-r border-white/5 bg-ink-black-950">
+      <aside className="fixed inset-y-0 left-0 z-20 flex w-[194px] flex-col border-r border-white/5 bg-ink-black-950">
         <div className="flex h-[60px] items-center gap-3 border-b border-white/5 px-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-md border border-powder-blue-500/35 bg-powder-blue-950 text-powder-blue-500 shadow-[0_0_22px_rgba(47,127,208,0.24)]">
             <Activity aria-hidden="true" className="h-5 w-5" strokeWidth={1.5} />
@@ -127,7 +127,7 @@ export function AppShell({ currentUser }: AppShellProps) {
         </div>
       </aside>
 
-      <div className="ml-[220px] flex min-h-screen min-w-0 flex-1 flex-col">
+      <div className="ml-[194px] flex min-h-screen min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-10 flex h-[60px] items-center gap-4 border-b border-alabaster-grey-500/20 bg-ink-black-950/95 px-4 backdrop-blur">
           <div className="relative max-w-xl flex-1">
             <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-alabaster-grey-500" strokeWidth={1.5} />

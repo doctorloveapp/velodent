@@ -297,7 +297,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
         />
       ) : null}
 
-      <div className="grid min-w-0 gap-2.5 xl:grid-cols-[minmax(0,1fr)_190px] 2xl:grid-cols-[minmax(0,1fr)_220px]">
+      <div className="grid min-w-0 gap-2.5 xl:grid-cols-[minmax(0,1fr)_210px] 2xl:grid-cols-[minmax(0,1fr)_230px]">
         <section className="min-w-0 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2">
           <OdontogramRow
             recordedToothRecords={recordedToothRecords}
@@ -317,7 +317,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           {statusMessage ? <p className="mt-3 text-xs text-powder-blue-500">{statusMessage}</p> : null}
         </section>
 
-        <aside className="min-w-0 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2">
+        <aside className="min-w-0 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2.5">
           <div className="flex items-center gap-2">
             <Stethoscope aria-hidden="true" className="h-4 w-4 text-powder-blue-500" strokeWidth={1.5} />
             <h4 className="text-xs font-semibold text-white">{t("clinicalQuickMenuTitle")}</h4>
@@ -335,17 +335,17 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
           ) : null}
           {selectionMode ? <p className="mt-2 text-[11px] text-powder-blue-500">{t("mobileSelectionMode")}</p> : null}
           {selectedTeeth.length ? (
-            <div className="mt-2 grid grid-cols-2 gap-1.5">
-              <Button type="button" className="h-9 min-w-0 flex-col justify-center gap-0.5 border-powder-blue-500/45 bg-powder-blue-950 px-1 py-1 text-[10px] leading-tight text-white hover:bg-powder-blue-500/25" onClick={() => setSelectionMode(true)}>
+            <div className="mt-2 grid grid-cols-1 gap-1.5">
+              <Button type="button" className="h-10 min-w-0 justify-start gap-2 border-powder-blue-500/45 bg-powder-blue-950 px-2.5 py-1.5 text-xs leading-tight text-white hover:bg-powder-blue-500/25" onClick={() => setSelectionMode(true)}>
                 <Plus aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
-                <span className="max-w-full truncate">{t("mobileAddToSelection")}</span>
+                <span className="min-w-0 truncate">{t("mobileAddToSelection")}</span>
               </Button>
               {(["caries", "endodontics", "periodontics", "crown", "extraction"] as QuickAction[]).map((action) => (
                 <Button
                   key={action}
                   type="button"
                   variant="secondary"
-                  className={`h-9 min-w-0 flex-col justify-center gap-0.5 px-1 py-1 text-[10px] leading-tight ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
+                  className={`h-10 min-w-0 justify-start gap-2 px-2.5 py-1.5 text-xs leading-tight ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
                   onClick={() => setActiveAction(action)}
                 >
                   <QuickActionContent action={action} label={quickActionLabel(action, selectedTeeth.length >= 2, t)} />
@@ -355,7 +355,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                 <Button
                   type="button"
                   variant="secondary"
-                  className="col-span-2 h-9 justify-center border-red-500/45 px-2 text-xs text-red-300 hover:bg-red-500/15 hover:text-red-100"
+                  className="h-10 justify-center border-red-500/45 px-2 text-xs text-red-300 hover:bg-red-500/15 hover:text-red-100"
                   onClick={() => void handleClearSelection().catch(() => setStatusMessage(t("clinicalGenericError")))}
                 >
                   <Trash2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
@@ -364,13 +364,13 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
               ) : null}
             </div>
           ) : (
-            <div className="mt-2 grid grid-cols-3 gap-1.5">
+            <div className="mt-2 grid grid-cols-1 gap-1.5">
               {(["diagnosis", "hygiene", "mobileProsthesis"] as QuickAction[]).map((action) => (
                 <Button
                   key={action}
                   type="button"
                   variant="secondary"
-                  className={`h-9 min-w-0 flex-col justify-center gap-0.5 px-1 py-1 text-[10px] leading-tight ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
+                  className={`h-10 min-w-0 justify-start gap-2 px-2.5 py-1.5 text-xs leading-tight ${quickActionButtonClasses[action]} ${activeAction === action ? "ring-2 ring-powder-blue-500/55" : ""}`}
                   onClick={() => setActiveAction(action)}
                 >
                   <QuickActionContent action={action} label={quickActionLabel(action, false, t)} />
@@ -511,8 +511,8 @@ function OdontogramRow({
 function QuickActionContent({ action, label }: { action: QuickAction; label: string }) {
   return (
     <>
-      <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full shadow-[0_0_10px_currentColor] ${quickActionDotClasses[action]}`} />
-      <span className="max-w-full truncate text-[10px] leading-tight">{label}</span>
+      <span aria-hidden="true" className={`h-2.5 w-2.5 shrink-0 rounded-full shadow-[0_0_10px_currentColor] ${quickActionDotClasses[action]}`} />
+      <span className="min-w-0 truncate text-xs leading-tight">{label}</span>
     </>
   );
 }

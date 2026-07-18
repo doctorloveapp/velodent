@@ -81,8 +81,8 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
         </div>
       </div>
 
-      <div className="grid min-w-0 gap-3 xl:grid-cols-[190px_minmax(0,1fr)] 2xl:grid-cols-[210px_minmax(0,1fr)]">
-        <div className="grid min-w-0 content-start gap-2.5">
+      <div className="grid min-w-0 items-stretch gap-3 xl:grid-cols-[190px_minmax(0,1fr)] 2xl:grid-cols-[210px_minmax(0,1fr)]">
+        <div className="grid min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2.5">
           <section className="min-w-0 rounded-lg border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div>
@@ -129,7 +129,7 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
             </div>
           </section>
 
-          <section className="min-w-0 rounded-lg border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
+          <section className="flex min-h-0 min-w-0 flex-col rounded-lg border border-alabaster-grey-500/20 bg-glaucous-950 p-2">
             <div className="relative">
               <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-alabaster-grey-500" />
               <Input
@@ -140,7 +140,7 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
                 onChange={(event) => void handlePatientSearch(event.target.value).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("patientsGenericError")))}
               />
             </div>
-            <div className="mt-2 grid max-h-[180px] gap-1.5 overflow-y-auto">
+            <div className="mt-2 grid min-h-0 flex-1 content-start gap-1.5 overflow-y-auto">
               {patients.map((patient) => {
                 const selected = selectedPatient?.id === patient.id;
                 return (

@@ -1029,7 +1029,6 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
   const [previews, setPreviews] = useState<Record<number, string>>({});
   const [sourcePath, setSourcePath] = useState("");
   const [rxSubType, setRxSubType] = useState<"ORTOPANTOMOGRAFIA" | "ENDORALE">("ENDORALE");
-  const [toothNumber, setToothNumber] = useState("");
   const [viewerAsset, setViewerAsset] = useState<RxAsset | null>(null);
   const [viewerDataUrl, setViewerDataUrl] = useState("");
   const [brightness, setBrightness] = useState(100);
@@ -1066,8 +1065,7 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
       patient_id: patient.id,
       source_path: sourcePath,
       rx_type: rxTypeForSubType(rxSubType),
-      sub_type: rxSubType,
-      tooth_number: toothNumber.trim() ? Number(toothNumber) : undefined
+      sub_type: rxSubType
     });
     setStatusMessage(`${t("rxImportCompleted")}: ${imported.relative_path}`);
     setSourcePath("");
@@ -1084,8 +1082,7 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
       session_token: currentUser.session_token,
       patient_id: patient.id,
       rx_type: rxTypeForSubType(rxSubType),
-      sub_type: rxSubType,
-      tooth_number: toothNumber.trim() ? Number(toothNumber) : undefined
+      sub_type: rxSubType
     });
     setStatusMessage(`${t("rxImportCompleted")}: ${imported.relative_path}`);
     await refreshAssets();
@@ -1101,8 +1098,7 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
       session_token: currentUser.session_token,
       patient_id: patient.id,
       rx_type: rxTypeForSubType(rxSubType),
-      sub_type: rxSubType,
-      tooth_number: toothNumber.trim() ? Number(toothNumber) : undefined
+      sub_type: rxSubType
     });
     setStatusMessage(`${t("rxImportFolderCompleted")}: ${String(imported.length)}`);
     await refreshAssets();
@@ -1168,7 +1164,7 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
   return (
     <div className="grid gap-4">
       <div className="grid gap-3 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3">
-        <div className="grid gap-2 lg:grid-cols-[minmax(180px,1fr)_190px_96px]">
+        <div className="grid gap-2 lg:grid-cols-[minmax(180px,1fr)_190px]">
           <Input
             placeholder={t("rxSourcePathPlaceholder")}
             value={sourcePath}
@@ -1183,12 +1179,6 @@ export function RxPanel({ currentUser, patient }: { currentUser: User | null; pa
             <option value="ORTOPANTOMOGRAFIA">{t("rxSubTypeOrtopantomografia")}</option>
             <option value="ENDORALE">{t("rxSubTypeEndorale")}</option>
           </select>
-          <Input
-            className="font-mono"
-            placeholder={t("clinicalToothNumber")}
-            value={toothNumber}
-            onChange={(event) => setToothNumber(event.target.value)}
-          />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" onClick={() => void handlePickImport().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("rxGenericError")))}>
