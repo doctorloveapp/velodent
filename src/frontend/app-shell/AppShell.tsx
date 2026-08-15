@@ -85,9 +85,6 @@ export function AppShell({ currentUser }: AppShellProps) {
           </div>
           <div>
             <p className="text-sm font-semibold leading-none text-white">{t("brandName")}</p>
-            <p className="mt-1 text-[10px] font-medium uppercase tracking-widest text-alabaster-grey-500">
-              {t("brandStandard")}
-            </p>
           </div>
         </div>
 
