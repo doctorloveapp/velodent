@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type QuoteStatus = "draft" | "accepted" | "rejected";
+import type { ClinicalRecord } from "@/frontend/clinical/clinicalApi";
+
+export type QuoteStatus = "draft" | "accepted" | "rejected" | "closed";
 export type PaymentStatus = "pending" | "paid" | "partial";
 
 export interface QuoteLine {
@@ -21,13 +23,29 @@ export interface Quote {
   patient_id: number;
   title: string;
   status: QuoteStatus;
+  version: number;
+  parent_quote_id: number | null;
   gross_total_cents: number;
   discount_cents: number;
   net_total_cents: number;
+  previous_paid_cents: number;
+  balance_due_cents: number;
   accepted_at: string | null;
+  last_reminder_snoozed_at: string | null;
+  closed_at: string | null;
   created_at: string;
   updated_at: string;
   lines: QuoteLine[];
+}
+
+export interface QuoteCareAlert {
+  quote_id: number;
+  patient_id: number;
+  show_new_records_alert: boolean;
+  snoozed_until: string | null;
+  new_records: ClinicalRecord[];
+  all_lines_performed: boolean;
+  balance_is_zero: boolean;
 }
 
 export interface InvoiceLine {
@@ -106,6 +124,30 @@ export async function updateQuoteDiscount(session_token: string, quote_id: numbe
 
 export async function updateQuoteStatus(session_token: string, quote_id: number, status: QuoteStatus) {
   return invoke<Quote>("update_quote_status", { request: { session_token, quote_id, status } });
+}
+
+export async function quoteCareAlert(session_token: string, quote_id: number) {
+  return invoke<QuoteCareAlert>("quote_care_alert", { request: { session_token, quote_id } });
+}
+
+export async function updateQuoteWithNewRecords(session_token: string, quote_id: number) {
+  return invoke<Quote>("update_quote_with_new_records", { request: { session_token, quote_id } });
+}
+
+export async function ignoreQuoteNewRecords(session_token: string, quote_id: number) {
+  return invoke<QuoteCareAlert>("ignore_quote_new_records", { request: { session_token, quote_id } });
+}
+
+export async function snoozeQuoteNewRecordsReminder(session_token: string, quote_id: number) {
+  return invoke<QuoteCareAlert>("snooze_quote_new_records_reminder", { request: { session_token, quote_id } });
+}
+
+export async function reviseQuote(session_token: string, quote_id: number) {
+  return invoke<Quote>("revise_quote", { request: { session_token, quote_id } });
+}
+
+export async function closeQuote(session_token: string, quote_id: number) {
+  return invoke<Quote>("close_quote", { request: { session_token, quote_id } });
 }
 
 export async function generateQuotePdf(session_token: string, quote_id: number) {

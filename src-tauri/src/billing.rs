@@ -31,6 +31,8 @@ pub struct FinancialPdf {
     pub gross_total_cents: i64,
     pub discount_cents: i64,
     pub net_total_cents: i64,
+    pub previous_paid_cents: i64,
+    pub balance_due_cents: i64,
 }
 
 pub fn render_financial_pdf(input: &FinancialPdf) -> Result<Vec<u8>, String> {
@@ -107,34 +109,78 @@ pub fn render_financial_pdf(input: &FinancialPdf) -> Result<Vec<u8>, String> {
         y -= 7.0;
     }
 
-    let totals_y = 42.0;
-    write_text(&layer, &font, 10.0, 135.0, totals_y, "Lordo");
-    write_text(
-        &layer,
-        &font,
-        10.0,
-        172.0,
-        totals_y,
-        &format_cents(input.gross_total_cents),
-    );
-    write_text(&layer, &font, 10.0, 135.0, totals_y - 8.0, "Sconto");
-    write_text(
-        &layer,
-        &font,
-        10.0,
-        172.0,
-        totals_y - 8.0,
-        &format_cents(input.discount_cents),
-    );
-    write_text(&layer, &bold_font, 11.0, 135.0, totals_y - 17.0, "Totale");
-    write_text(
-        &layer,
-        &bold_font,
-        11.0,
-        172.0,
-        totals_y - 17.0,
-        &format_cents(input.net_total_cents),
-    );
+    let totals_y = 50.0;
+    if input.previous_paid_cents > 0 {
+        write_text(&layer, &font, 10.0, 125.0, totals_y, "Totale cure");
+        write_text(
+            &layer,
+            &font,
+            10.0,
+            172.0,
+            totals_y,
+            &format_cents(input.net_total_cents),
+        );
+        write_text(
+            &layer,
+            &font,
+            10.0,
+            125.0,
+            totals_y - 8.0,
+            "Pagato in precedenza",
+        );
+        write_text(
+            &layer,
+            &font,
+            10.0,
+            172.0,
+            totals_y - 8.0,
+            &format!("-{}", format_cents(input.previous_paid_cents)),
+        );
+        write_text(
+            &layer,
+            &bold_font,
+            11.0,
+            125.0,
+            totals_y - 17.0,
+            "Saldo rimanente",
+        );
+        write_text(
+            &layer,
+            &bold_font,
+            11.0,
+            172.0,
+            totals_y - 17.0,
+            &format_cents(input.balance_due_cents),
+        );
+    } else {
+        write_text(&layer, &font, 10.0, 135.0, totals_y, "Lordo");
+        write_text(
+            &layer,
+            &font,
+            10.0,
+            172.0,
+            totals_y,
+            &format_cents(input.gross_total_cents),
+        );
+        write_text(&layer, &font, 10.0, 135.0, totals_y - 8.0, "Sconto");
+        write_text(
+            &layer,
+            &font,
+            10.0,
+            172.0,
+            totals_y - 8.0,
+            &format_cents(input.discount_cents),
+        );
+        write_text(&layer, &bold_font, 11.0, 135.0, totals_y - 17.0, "Totale");
+        write_text(
+            &layer,
+            &bold_font,
+            11.0,
+            172.0,
+            totals_y - 17.0,
+            &format_cents(input.net_total_cents),
+        );
+    }
 
     let mut output = Vec::new();
     document

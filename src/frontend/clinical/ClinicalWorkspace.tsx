@@ -1,7 +1,13 @@
-import { CalendarDays, ChevronLeft, ChevronRight, Search, Stethoscope } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, FileText, History, Search, Stethoscope, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listAppointments, type Appointment } from "@/frontend/agenda/agendaApi";
+import { listClinicalRecords, type ClinicalRecord } from "@/frontend/clinical/clinicalApi";
 import { ClinicalPanel } from "@/frontend/clinical/ClinicalPanel";
+import {
+  listPatientConsents,
+  openPatientConsentDocument,
+  type PatientConsent
+} from "@/frontend/consents/consentsApi";
 import { openPatientRecord, searchPatients, type Patient } from "@/frontend/patients/patientsApi";
 import { useL10n } from "@/frontend/shared/i18n/L10nProvider";
 import { Badge } from "@/frontend/shared/ui/badge";
@@ -22,6 +28,7 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
   const [query, setQuery] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const range = useMemo(() => ({
     from: `${date}T00:00:00${localOffset(date, "00:00")}`,
@@ -77,7 +84,15 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
               <h1 className="text-lg font-semibold text-white">{t("clinicalWorkspaceTitle")}</h1>
             </div>
           </div>
-          {statusMessage ? <span className="text-sm text-alabaster-grey-500">{statusMessage}</span> : null}
+          <div className="flex items-center gap-2">
+            {selectedPatient ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => setHistoryOpen(true)}>
+                <History aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+                {t("clinicalHistory")}
+              </Button>
+            ) : null}
+            {statusMessage ? <span className="text-sm text-alabaster-grey-500">{statusMessage}</span> : null}
+          </div>
         </div>
       </div>
 
@@ -172,7 +187,116 @@ export function ClinicalWorkspace({ currentUser, onPatientSelected, selectedPati
           )}
         </section>
       </div>
+      {selectedPatient ? (
+        <ClinicalHistorySidebar
+          currentUser={currentUser}
+          open={historyOpen}
+          patient={selectedPatient}
+          onClose={() => setHistoryOpen(false)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function ClinicalHistorySidebar({
+  currentUser,
+  onClose,
+  open,
+  patient
+}: {
+  currentUser: User;
+  onClose: () => void;
+  open: boolean;
+  patient: Patient;
+}) {
+  const { t } = useL10n();
+  const [records, setRecords] = useState<ClinicalRecord[]>([]);
+  const [consents, setConsents] = useState<PatientConsent[]>([]);
+  const [statusMessage, setStatusMessage] = useState("");
+
+  useEffect(() => {
+    if (!open || !currentUser.session_token) {
+      return;
+    }
+    let cancelled = false;
+    async function loadHistory() {
+      const [nextRecords, nextConsents] = await Promise.all([
+        listClinicalRecords(currentUser.session_token ?? "", patient.id, {}),
+        listPatientConsents(currentUser.session_token ?? "", patient.id)
+      ]);
+      if (cancelled) {
+        return;
+      }
+      setRecords(nextRecords.filter((record) => record.status === "performed"));
+      setConsents(nextConsents.filter((consent) => Boolean(consent.file_asset_id)));
+    }
+    void loadHistory().catch((error: unknown) => {
+      if (!cancelled) {
+        setStatusMessage(error instanceof Error ? error.message : t("clinicalGenericError"));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser.session_token, open, patient.id, t]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/35 backdrop-blur-sm" onClick={onClose}>
+      <aside
+        className="absolute right-0 top-0 grid h-full w-full max-w-[380px] grid-rows-[auto_minmax(0,1fr)] border-l border-alabaster-grey-500/20 bg-glaucous-950 shadow-[-24px_0_80px_rgba(0,0,0,0.45)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-alabaster-grey-500/20 p-4">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-pale-sky-500">{t("clinicalHistory")}</p>
+            <h2 className="truncate text-base font-semibold text-white">{patient.first_name} {patient.last_name}</h2>
+          </div>
+          <Button aria-label={t("mobileCloseMenu")} className="h-9 w-9 justify-center p-0" type="button" variant="secondary" onClick={onClose}>
+            <X aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+          </Button>
+        </div>
+        <div className="grid min-h-0 content-start gap-4 overflow-y-auto p-4">
+          {statusMessage ? <p className="text-xs text-alabaster-grey-500">{statusMessage}</p> : null}
+          <section>
+            <h3 className="text-sm font-semibold text-white">{t("clinicalHistoryPerformedTitle")}</h3>
+            <div className="mt-2 grid gap-2">
+              {records.length ? records.map((record) => (
+                <article key={record.id} className="rounded-md border border-gray-500/25 bg-gray-600/15 p-3">
+                  <p className="truncate text-sm font-semibold text-white">{record.service_name ?? record.pathology_description ?? t("clinicalNoService")}</p>
+                  <p className="mt-1 font-mono text-[11px] text-alabaster-grey-500">{record.created_at.slice(0, 10)} - {record.tooth_number ?? t("clinicalArch")}</p>
+                </article>
+              )) : (
+                <p className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-sm text-alabaster-grey-500">{t("clinicalHistoryEmpty")}</p>
+              )}
+            </div>
+          </section>
+          <section>
+            <h3 className="text-sm font-semibold text-white">{t("clinicalHistoryDocumentsTitle")}</h3>
+            <div className="mt-2 grid gap-2">
+              {consents.length ? consents.map((consent) => (
+                <Button
+                  key={consent.id}
+                  type="button"
+                  variant="secondary"
+                  className="h-auto min-h-10 justify-start py-2 text-left text-xs"
+                  onClick={() => void openPatientConsentDocument(currentUser.session_token ?? "", consent.id).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("clinicalGenericError")))}
+                >
+                  <FileText aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
+                  <span className="min-w-0 truncate">{consent.template_title}</span>
+                </Button>
+              )) : (
+                <p className="rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-3 text-sm text-alabaster-grey-500">{t("clinicalHistoryDocumentsEmpty")}</p>
+              )}
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>
   );
 }
 

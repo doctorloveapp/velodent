@@ -118,6 +118,17 @@ export async function deleteClinicalRecord(session_token: string, record_id: num
   return invoke("delete_clinical_record", { request: { session_token, record_id } });
 }
 
+export async function markClinicalRecordPerformed(session_token: string, record_id: number) {
+  if (isLanSessionToken(session_token)) {
+    return lanFetch<ClinicalRecord>("/api/clinical/records/performed", fromLanSessionToken(session_token), {
+      body: JSON.stringify({ record_id }),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH"
+    });
+  }
+  return invoke<ClinicalRecord>("mark_clinical_record_performed", { request: { session_token, record_id } });
+}
+
 export async function listClinicalRecords(
   session_token: string,
   patient_id: number,

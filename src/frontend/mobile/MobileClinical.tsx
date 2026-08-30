@@ -7,7 +7,9 @@ import {
   getToothStatuses,
   listClinicalRecords,
   listClinicalServices,
+  markClinicalRecordPerformed,
   type ClinicalRecord,
+  type ClinicalRecordStatus,
   type ClinicalService,
   type ToothStatus,
   type ToothState
@@ -52,8 +54,9 @@ const toothStateClasses: Partial<Record<ToothState, string>> = {
   in_progress: "border-powder-blue-500/35 bg-powder-blue-950 text-white",
   missing: "border-dashed border-alabaster-grey-500/20 bg-ink-black-950/40 text-alabaster-grey-500/45",
   pathology: "border-red-500/35 bg-red-500/10 text-white",
-  performed: "border-emerald-400/35 bg-emerald-400/10 text-white"
+  performed: "border-gray-500/55 bg-gray-600/55 text-gray-100"
 };
+const performedToothClass = "border-gray-500/60 bg-gray-600/60 text-gray-100";
 
 interface MobileClinicalProps {
   activePatientId: number | null;
@@ -64,11 +67,14 @@ interface MobileClinicalProps {
   onDiaryOpenChange?: (open: boolean) => void;
   onClinicalDiaryCountChange?: (count: number) => void;
   onSelectedToothRecordInfo: (info: SelectedToothRecordInfo | null) => void;
+  refreshKey?: number;
   sessionToken: string;
 }
 
 export interface SelectedToothRecordInfo {
+  recordId: number;
   serviceName: string;
+  status: ClinicalRecordStatus;
   toothNumber: number;
 }
 
@@ -83,9 +89,11 @@ interface RecordedToothRecord {
   action: QuickAction;
   recordId: number;
   serviceName: string;
+  status: ClinicalRecordStatus;
 }
 
 interface ProsthesisGroup {
+  allPerformed: boolean;
   key: string;
   teeth: number[];
 }
@@ -99,6 +107,7 @@ export function MobileClinical({
   onDiaryOpenChange,
   onMissingPatient,
   onSelectedToothRecordInfo,
+  refreshKey = 0,
   sessionToken
 }: MobileClinicalProps) {
   const { t } = useL10n();
@@ -177,7 +186,7 @@ export function MobileClinical({
         setRecordedToothRecords({});
         setToothStates({});
       });
-  }, [activePatientId, services, sessionToken]);
+  }, [activePatientId, refreshKey, services, sessionToken]);
 
   useEffect(() => {
     onClinicalDiaryCountChange?.(clinicalRecords.length);
@@ -239,7 +248,12 @@ export function MobileClinical({
     }
     setActiveAction(null);
     const recorded = recordedToothRecords[tooth];
-    onSelectedToothRecordInfo(recorded ? { serviceName: recorded.serviceName, toothNumber: tooth } : null);
+    onSelectedToothRecordInfo(recorded ? {
+      recordId: recorded.recordId,
+      serviceName: recorded.serviceName,
+      status: recorded.status,
+      toothNumber: tooth
+    } : null);
     if (selectionMode) {
       setSelectedTeeth((current) => {
         if (current.includes(tooth)) {
@@ -301,7 +315,12 @@ export function MobileClinical({
         if (tooth === null) {
           return;
         }
-        next[tooth] = { action: activeAction, recordId: record.id, serviceName: record.service_name ?? service.name };
+        next[tooth] = {
+          action: activeAction,
+          recordId: record.id,
+          serviceName: record.service_name ?? service.name,
+          status: record.status
+        };
       });
       return next;
     });
@@ -355,6 +374,18 @@ export function MobileClinical({
     await refreshClinicalData();
   }
 
+  async function handleDiaryRecordPerformed(recordId: number) {
+    if (!sessionToken) {
+      return;
+    }
+    await markClinicalRecordPerformed(sessionToken, recordId);
+    setSelectedTeeth([]);
+    setSelectionMode(false);
+    setActiveAction(null);
+    onSelectedToothRecordInfo(null);
+    await refreshClinicalData();
+  }
+
   async function handleGeneralServiceSelect(service: ClinicalService) {
     if (!activePatientId || !sessionToken) {
       return;
@@ -400,10 +431,11 @@ export function MobileClinical({
         </div>
         {statusMessage ? <p className="text-xs text-powder-blue-500">{statusMessage}</p> : null}
         {diaryOpen ? (
-          <MobileClinicalDiaryModal
+        <MobileClinicalDiaryModal
             records={clinicalRecords}
             onClose={() => onDiaryOpenChange?.(false)}
             onDelete={(recordId) => void handleDeleteDiaryRecord(recordId).catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
+            onMarkPerformed={(recordId) => void handleDiaryRecordPerformed(recordId).catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
           />
         ) : null}
       </section>
@@ -449,12 +481,14 @@ export function MobileClinical({
         <div ref={archRef} className="relative grid grid-cols-8 gap-2 overflow-visible pt-8">
           {bridgeGroups.map((group) => {
             const layout = bridgeLayouts[group.key];
-            return layout ? <BridgeArc key={group.key} layout={layout} /> : null;
+            return layout ? <BridgeArc key={group.key} layout={layout} performed={group.allPerformed} /> : null;
           })}
           {teeth.map((tooth) => {
             const selected = selectedTeeth.includes(tooth);
             const included = bridgeGroups.some((group) => group.teeth.includes(tooth));
-            const recordedAction = recordedToothRecords[tooth]?.action;
+            const recorded = recordedToothRecords[tooth];
+            const recordedAction = recorded?.action;
+            const performed = recorded?.status === "performed" || toothStates[tooth] === "performed";
             const toothState = toothStates[tooth];
             const singleProsthesis = singleProsthesisTeeth.has(tooth);
             return (
@@ -465,7 +499,9 @@ export function MobileClinical({
                 }}
                 className={[
                   "relative z-20 flex h-14 flex-col items-center justify-center gap-0.5 rounded-md border text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-powder-blue-500/70",
-                  recordedAction
+                  performed
+                    ? performedToothClass
+                    : recordedAction
                     ? recordedToothClasses[recordedAction]
                     : selected
                       ? "border-powder-blue-500 bg-powder-blue-950 text-white"
@@ -480,7 +516,14 @@ export function MobileClinical({
                 onClick={() => handleToothPress(tooth)}
               >
                 {singleProsthesis ? (
-                  <span className="pointer-events-none absolute inset-1 rounded-full border-2 border-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.5)]" />
+                  <span
+                    className={[
+                      "pointer-events-none absolute inset-1 rounded-full border-2",
+                      performed
+                        ? "border-gray-300 shadow-[0_0_18px_rgba(156,163,175,0.45)]"
+                        : "border-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.5)]"
+                    ].join(" ")}
+                  />
                 ) : null}
                 {selected ? (
                   <span className="absolute -right-1 -top-1 grid h-5 w-5 place-items-center rounded-full bg-powder-blue-500 text-white">
@@ -536,6 +579,7 @@ export function MobileClinical({
           records={clinicalRecords}
           onClose={() => onDiaryOpenChange?.(false)}
           onDelete={(recordId) => void handleDeleteDiaryRecord(recordId).catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
+          onMarkPerformed={(recordId) => void handleDiaryRecordPerformed(recordId).catch(() => setStatusMessage(t("mobileClinicalServiceError")))}
         />
       ) : null}
     </section>
@@ -649,10 +693,12 @@ function QuickActions({
 function MobileClinicalDiaryModal({
   onClose,
   onDelete,
+  onMarkPerformed,
   records
 }: {
   onClose: () => void;
   onDelete: (recordId: number) => void;
+  onMarkPerformed: (recordId: number) => void;
   records: ClinicalRecord[];
 }) {
   const { t } = useL10n();
@@ -695,15 +741,28 @@ function MobileClinicalDiaryModal({
                       {record.created_at} - {record.tooth_number ?? t("clinicalArch")} - {t(recordStatusKey(record.status))}
                     </p>
                   </div>
-                  <Button
-                    aria-label={t("clinicalDeleteRecord")}
-                    className="h-10 w-10 justify-center border-red-500/35 p-0 text-red-300 hover:bg-red-500/15 hover:text-red-100"
-                    type="button"
-                    variant="secondary"
-                    onClick={() => onDelete(record.id)}
-                  >
-                    <X aria-hidden="true" className="h-4 w-4" strokeWidth={2} />
-                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    {record.status !== "performed" ? (
+                      <Button
+                        aria-label={t("clinicalMarkPerformed")}
+                        className="h-10 w-10 justify-center border-gray-400/35 p-0 text-gray-100 hover:bg-gray-500/20"
+                        type="button"
+                        variant="secondary"
+                        onClick={() => onMarkPerformed(record.id)}
+                      >
+                        <Check aria-hidden="true" className="h-4 w-4" strokeWidth={2} />
+                      </Button>
+                    ) : null}
+                    <Button
+                      aria-label={t("clinicalDeleteRecord")}
+                      className="h-10 w-10 justify-center border-red-500/35 p-0 text-red-300 hover:bg-red-500/15 hover:text-red-100"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => onDelete(record.id)}
+                    >
+                      <X aria-hidden="true" className="h-4 w-4" strokeWidth={2} />
+                    </Button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -937,7 +996,8 @@ function clinicalRecordsToToothRecords(
     next[record.tooth_number] = {
       action,
       recordId: record.id,
-      serviceName: record.service_name ?? record.pathology_description ?? ""
+      serviceName: record.service_name ?? record.pathology_description ?? "",
+      status: record.status
     };
   });
   return next;
@@ -1010,6 +1070,7 @@ function buildProsthesisGroups(
     groups.push([tooth]);
   });
   return groups.map((teethGroup) => ({
+    allPerformed: teethGroup.every((tooth) => records[tooth]?.status === "performed"),
     key: teethGroup.join("-"),
     teeth: teethGroup
   }));
@@ -1084,11 +1145,16 @@ function MobileToothGlyph({ toothNumber }: { toothNumber: number }) {
   );
 }
 
-function BridgeArc({ layout }: { layout: BridgeArcLayout }) {
+function BridgeArc({ layout, performed }: { layout: BridgeArcLayout; performed: boolean }) {
   return (
     <svg
       aria-hidden="true"
-      className="pointer-events-none absolute z-10 text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.45)]"
+      className={[
+        "pointer-events-none absolute z-10",
+        performed
+          ? "text-gray-300 drop-shadow-[0_0_10px_rgba(156,163,175,0.45)]"
+          : "text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.45)]"
+      ].join(" ")}
       style={{
         height: layout.height,
         left: layout.left,

@@ -15,6 +15,7 @@ import {
   getToothStatuses,
   listClinicalRecords,
   listClinicalServices,
+  markClinicalRecordPerformed,
   markClinicalRecordReadyForQuote,
   openClinicalView,
   type ClinicalRecord,
@@ -35,9 +36,11 @@ interface RecordedToothRecord {
   action: QuickAction;
   recordId: number;
   serviceName: string;
+  status: ClinicalRecordStatus;
 }
 
 interface ProsthesisGroup {
+  allPerformed: boolean;
   key: string;
   startIndex: number;
   endIndex: number;
@@ -96,8 +99,10 @@ const toothStateClasses: Partial<Record<ToothState, string>> = {
   in_progress: "border-powder-blue-500/35 bg-powder-blue-950 text-white",
   missing: "border-dashed border-alabaster-grey-500/20 bg-ink-black-950/40 text-alabaster-grey-500/45",
   pathology: "border-red-500/35 bg-red-500/10 text-white",
-  performed: "border-emerald-400/35 bg-emerald-400/10 text-white"
+  performed: "border-gray-500/55 bg-gray-600/55 text-gray-100"
 };
+const performedToothClass = "border-gray-500/60 bg-gray-600/60 text-gray-100";
+const performedGlyphClass = "text-gray-200";
 
 export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
   const { t } = useL10n();
@@ -243,6 +248,19 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
     await refreshClinicalData();
   }
 
+  async function handleMarkSelectionPerformed() {
+    const plannedRecordIds = allRecords
+      .filter((record) => record.tooth_number !== null && selectedTeeth.includes(record.tooth_number))
+      .filter((record) => record.status !== "performed")
+      .map((record) => record.id);
+    if (plannedRecordIds.length === 0) {
+      return;
+    }
+    await Promise.all(plannedRecordIds.map((recordId) => markClinicalRecordPerformed(sessionToken, recordId)));
+    setStatusMessage(t("clinicalMarkedPerformed"));
+    await refreshClinicalData();
+  }
+
   async function handleToggleQuote(record: ClinicalRecord) {
     const updated = await markClinicalRecordReadyForQuote(sessionToken, record.id, !record.ready_for_quote);
     setRecords((current) => current.map((item) => (item.id === updated.id ? updated : item)));
@@ -255,6 +273,12 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
     setSelectionMode(false);
     setActiveAction(null);
     setStatusMessage(t("mobileClearTooth"));
+    await refreshClinicalData();
+  }
+
+  async function handleDiaryRecordPerformed(record: ClinicalRecord) {
+    await markClinicalRecordPerformed(sessionToken, record.id);
+    setStatusMessage(t("clinicalMarkedPerformed"));
     await refreshClinicalData();
   }
 
@@ -331,6 +355,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                 {t("mobileRecordedTooth")}
               </p>
               <p className="mt-1 text-xs font-semibold leading-5 text-white">{selectedToothRecordInfo.serviceName}</p>
+              <p className="mt-1 text-[11px] text-alabaster-grey-500">{t(recordStatusKey(selectedToothRecordInfo.status))}</p>
             </div>
           ) : null}
           {selectionMode ? <p className="mt-2 text-[11px] text-powder-blue-500">{t("mobileSelectionMode")}</p> : null}
@@ -351,6 +376,17 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
                   <QuickActionContent action={action} label={quickActionLabel(action, selectedTeeth.length >= 2, t)} />
                 </Button>
               ))}
+              {selectedRecordIds.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-10 justify-center border-gray-400/45 px-2 text-xs text-gray-100 hover:bg-gray-500/20"
+                  onClick={() => void handleMarkSelectionPerformed().catch(() => setStatusMessage(t("clinicalGenericError")))}
+                >
+                  <Check aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  {t("clinicalMarkPerformed")}
+                </Button>
+              ) : null}
               {selectedRecordIds.length > 0 ? (
                 <Button
                   type="button"
@@ -412,11 +448,11 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
       </div>
 
       <section className="min-w-0 rounded-md border border-alabaster-grey-500/20 bg-ink-black-950 p-2">
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-1.5 flex items-center gap-2">
           <ListFilter aria-hidden="true" className="h-4 w-4 text-powder-blue-500" strokeWidth={1.5} />
           <h4 className="text-sm font-semibold text-white">{t("clinicalDiaryTitle")}</h4>
         </div>
-        <div className="grid min-w-0 gap-1.5 md:grid-cols-5">
+        <div className="grid min-w-0 gap-1 md:grid-cols-5">
           <Input className="h-8 text-xs" placeholder={t("clinicalDateFrom")} type="date" value={filters.dateFrom} onChange={(event) => setFilters({ ...filters, dateFrom: event.target.value })} />
           <Input className="h-8 text-xs" placeholder={t("clinicalDateTo")} type="date" value={filters.dateTo} onChange={(event) => setFilters({ ...filters, dateTo: event.target.value })} />
           <Input className="h-8 font-mono text-xs" placeholder={t("clinicalToothNumber")} value={filters.toothNumber} onChange={(event) => setFilters({ ...filters, toothNumber: event.target.value })} />
@@ -428,6 +464,7 @@ export function ClinicalPanel({ currentUser, patient }: ClinicalPanelProps) {
         <ClinicalDiary
           records={records}
           onDelete={(record) => void handleDeleteDiaryRecord(record).catch(() => setStatusMessage(t("clinicalGenericError")))}
+          onMarkPerformed={(record) => void handleDiaryRecordPerformed(record).catch(() => setStatusMessage(t("clinicalGenericError")))}
           onToggleQuote={(record) => void handleToggleQuote(record)}
         />
       </section>
@@ -459,7 +496,12 @@ function OdontogramRow({
         <span
           key={group.key}
           aria-hidden="true"
-          className="pointer-events-none absolute top-1.5 z-10 h-1 rounded-full bg-amber-400 shadow-[0_0_14px_rgba(251,191,36,0.55)]"
+          className={[
+            "pointer-events-none absolute top-1.5 z-10 h-1 rounded-full",
+            group.allPerformed
+              ? "bg-gray-400 shadow-[0_0_14px_rgba(156,163,175,0.5)]"
+              : "bg-amber-400 shadow-[0_0_14px_rgba(251,191,36,0.55)]"
+          ].join(" ")}
           style={{
             left: formatPercent(((group.startIndex + 0.16) / teeth.length) * 100),
             width: formatPercent(((group.endIndex - group.startIndex + 0.68) / teeth.length) * 100)
@@ -468,7 +510,9 @@ function OdontogramRow({
       ))}
       {teeth.map((toothNumber) => {
         const selected = selectedTeeth.includes(toothNumber);
-        const recordedAction = recordedToothRecords[toothNumber]?.action;
+        const recorded = recordedToothRecords[toothNumber];
+        const recordedAction = recorded?.action;
+        const performed = recorded?.status === "performed" || toothStates[toothNumber] === "performed";
         const toothState = toothStates[toothNumber];
         const singleProsthesis = singleProsthesisTeeth.has(toothNumber);
         return (
@@ -477,7 +521,9 @@ function OdontogramRow({
             aria-label={`${t("clinicalToothNumber")} ${String(toothNumber)}`}
             className={[
               "relative z-20 flex min-h-10 min-w-0 flex-col items-center justify-center gap-0.5 rounded-md border px-0.5 py-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-powder-blue-500/70",
-              recordedAction
+              performed
+                ? performedToothClass
+                : recordedAction
                 ? recordedToothClasses[recordedAction]
                 : selected
                   ? "border-powder-blue-500 bg-powder-blue-950 text-white"
@@ -489,14 +535,23 @@ function OdontogramRow({
             whileTap={{ scale: 0.96 }}
             onClick={() => onSelect(toothNumber)}
           >
-            {singleProsthesis ? <span className="pointer-events-none absolute inset-1.5 rounded-full border-2 border-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.5)]" /> : null}
+            {singleProsthesis ? (
+              <span
+                className={[
+                  "pointer-events-none absolute inset-1.5 rounded-full border-2",
+                  performed
+                    ? "border-gray-300 shadow-[0_0_18px_rgba(156,163,175,0.45)]"
+                    : "border-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.5)]"
+                ].join(" ")}
+              />
+            ) : null}
             {selected ? (
               <span className="absolute -right-1 -top-1 grid h-3.5 w-3.5 place-items-center rounded-full bg-powder-blue-500 text-white">
                 <Check aria-hidden="true" className="h-3 w-3" strokeWidth={2} />
               </span>
             ) : null}
             <ToothGlyph
-              className={recordedAction ? recordedToothGlyphClasses[recordedAction] : undefined}
+              className={performed ? performedGlyphClass : recordedAction ? recordedToothGlyphClasses[recordedAction] : undefined}
               toothNumber={toothNumber}
               state={recordedAction ? "healthy" : toothState ?? "healthy"}
             />
@@ -679,26 +734,28 @@ function ClinicalAssetsViewer({
 
 function ClinicalDiary({
   onDelete,
+  onMarkPerformed,
   onToggleQuote,
   records
 }: {
   onDelete: (record: ClinicalRecord) => void;
+  onMarkPerformed: (record: ClinicalRecord) => void;
   onToggleQuote: (record: ClinicalRecord) => void;
   records: ClinicalRecord[];
 }) {
   const { t } = useL10n();
   return (
-    <div className="mt-3 overflow-hidden rounded-md border border-alabaster-grey-500/20">
+    <div className="mt-2 overflow-hidden rounded-md border border-alabaster-grey-500/20">
       <table className="w-full table-fixed border-collapse text-left text-xs">
         <thead className="bg-glaucous-950 text-[10px] uppercase tracking-widest text-alabaster-grey-500">
           <tr>
-            <th className="w-[18%] px-2 py-2">{t("clinicalDiaryDate")}</th>
-            <th className="w-[8%] px-2 py-2">{t("clinicalToothNumber")}</th>
-            <th className="px-2 py-2">{t("clinicalService")}</th>
-            <th className="w-[13%] px-2 py-2">{t("clinicalStatus")}</th>
-            <th className="w-[12%] px-2 py-2">{t("clinicalOperator")}</th>
-            <th className="w-[15%] px-2 py-2">{t("clinicalQuote")}</th>
-            <th className="w-[9%] px-2 py-2 text-right">{t("rxDeleteAction")}</th>
+            <th className="w-[18%] px-2 py-1.5">{t("clinicalDiaryDate")}</th>
+            <th className="w-[8%] px-2 py-1.5">{t("clinicalToothNumber")}</th>
+            <th className="px-2 py-1.5">{t("clinicalService")}</th>
+            <th className="w-[13%] px-2 py-1.5">{t("clinicalStatus")}</th>
+            <th className="w-[12%] px-2 py-1.5">{t("clinicalOperator")}</th>
+            <th className="w-[15%] px-2 py-1.5">{t("clinicalQuote")}</th>
+            <th className="w-[9%] px-2 py-1.5 text-right">{t("rxDeleteAction")}</th>
           </tr>
         </thead>
         <tbody>
@@ -724,15 +781,28 @@ function ClinicalDiary({
                   )}
                 </td>
                 <td className="px-2 py-1.5 text-right">
-                  <Button
-                    aria-label={t("clinicalDeleteRecord")}
-                    className="h-7 w-7 justify-center border-red-500/35 p-0 text-red-300 hover:bg-red-500/15 hover:text-red-100"
-                    type="button"
-                    variant="secondary"
-                    onClick={() => onDelete(record)}
-                  >
-                    <X aria-hidden="true" className="h-4 w-4" strokeWidth={2} />
-                  </Button>
+                  <div className="flex justify-end gap-1">
+                    {record.status !== "performed" ? (
+                      <Button
+                        aria-label={t("clinicalMarkPerformed")}
+                        className="h-7 w-7 justify-center border-gray-400/35 p-0 text-gray-100 hover:bg-gray-500/20"
+                        type="button"
+                        variant="secondary"
+                        onClick={() => onMarkPerformed(record)}
+                      >
+                        <Check aria-hidden="true" className="h-4 w-4" strokeWidth={2} />
+                      </Button>
+                    ) : null}
+                    <Button
+                      aria-label={t("clinicalDeleteRecord")}
+                      className="h-7 w-7 justify-center border-red-500/35 p-0 text-red-300 hover:bg-red-500/15 hover:text-red-100"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => onDelete(record)}
+                    >
+                      <X aria-hidden="true" className="h-4 w-4" strokeWidth={2} />
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))
@@ -758,7 +828,8 @@ function clinicalRecordsToToothRecords(records: ClinicalRecord[], services: Clin
     next[record.tooth_number] = {
       action,
       recordId: record.id,
-      serviceName: record.service_name ?? record.pathology_description ?? ""
+      serviceName: record.service_name ?? record.pathology_description ?? "",
+      status: record.status
     };
   });
   return next;
@@ -837,7 +908,11 @@ function buildProsthesisGroups(records: Partial<Record<number, RecordedToothReco
     }
     groups.push({ endIndex: entry.index, startIndex: entry.index, teeth: [entry.tooth] });
   });
-  return groups.map((group) => ({ ...group, key: group.teeth.join("-") }));
+  return groups.map((group) => ({
+    ...group,
+    allPerformed: group.teeth.every((tooth) => records[tooth]?.status === "performed"),
+    key: group.teeth.join("-")
+  }));
 }
 
 function formatPercent(value: number) {

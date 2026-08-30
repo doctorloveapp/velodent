@@ -103,6 +103,11 @@ pub mod lan {
     }
 
     #[derive(Debug, Deserialize)]
+    struct MarkClinicalRecordPerformedRequest {
+        record_id: i64,
+    }
+
+    #[derive(Debug, Deserialize)]
     struct PatientClinicalQuery {
         patient_id: i64,
     }
@@ -470,6 +475,18 @@ pub mod lan {
                         .delete_clinical_record(user.id, request.record_id)
                         .map_err(|error| error.to_string())?;
                     Ok(json!({ "deleted": true }))
+                })
+            }
+            ("PATCH", "/api/clinical/records/performed") => {
+                with_device_user(&headers, remote_ip, app, |state, user| {
+                    let request =
+                        serde_json::from_str::<MarkClinicalRecordPerformedRequest>(body.trim())
+                            .map_err(|_| "invalid clinical performed body".to_owned())?;
+                    let record = state
+                        .database()?
+                        .mark_clinical_record_performed(user.id, request.record_id)
+                        .map_err(|error| error.to_string())?;
+                    Ok(json!(record))
                 })
             }
             ("GET", "/api/consents/templates") => {
@@ -876,7 +893,7 @@ pub mod lan {
             _ => "OK",
         };
         let mut head = format!(
-            "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type, X-VeloDent-Device-Token\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Private-Network: true\r\nVary: Origin\r\n",
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type, X-VeloDent-Device-Token\r\nAccess-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS\r\nAccess-Control-Allow-Private-Network: true\r\nVary: Origin\r\n",
             body.len()
         );
         head.push_str("Connection: close\r\n\r\n");

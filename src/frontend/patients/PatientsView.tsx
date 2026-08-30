@@ -16,18 +16,25 @@ import {
   createDepositInvoice,
   createInvoiceFromQuote,
   createQuoteFromDiagnosis,
+  closeQuote,
   formatCents,
   generateInvoicePdf,
   generateQuotePdf,
+  ignoreQuoteNewRecords,
   listInvoices,
   listQuotes,
+  quoteCareAlert,
   registerPayment,
+  reviseQuote,
+  snoozeQuoteNewRecordsReminder,
   startSumupPayment,
   updateQuoteDiscount,
+  updateQuoteWithNewRecords,
   updateQuoteStatus,
   euroInputToCents,
   type Invoice,
-  type Quote
+  type Quote,
+  type QuoteCareAlert
 } from "@/frontend/billing/billingApi";
 import {
   createPatient,
@@ -477,6 +484,7 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
   const [paymentAmount, setPaymentAmount] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
   const [depositMethod, setDepositMethod] = useState<"cash" | "bank_transfer" | "sumup_pos">("cash");
+  const [careAlert, setCareAlert] = useState<QuoteCareAlert | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
 
   async function refreshBilling() {
@@ -507,8 +515,32 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
     ? invoices.filter((invoice) => invoice.quote_id === selectedQuote.id && invoice.invoice_kind === "deposit")
     : [];
   const depositTotalCents = depositInvoices.reduce((total, invoice) => total + invoice.total_cents, 0);
-  const selectedQuoteBalanceCents = selectedQuote ? Math.max(0, selectedQuote.net_total_cents - depositTotalCents) : 0;
+  const selectedQuoteBaseBalanceCents = selectedQuote?.balance_due_cents ?? selectedQuote?.net_total_cents ?? 0;
+  const selectedQuoteBalanceCents = selectedQuote ? Math.max(0, selectedQuoteBaseBalanceCents - depositTotalCents) : 0;
   const depositAmountCents = euroInputToCents(depositAmount);
+  const quoteLocked = selectedQuote?.status === "closed" || selectedQuote?.status === "rejected";
+
+  useEffect(() => {
+    if (!currentUser?.session_token || !selectedQuote) {
+      setCareAlert(null);
+      return;
+    }
+    let cancelled = false;
+    void quoteCareAlert(currentUser.session_token, selectedQuote.id)
+      .then((alert) => {
+        if (!cancelled) {
+          setCareAlert(alert);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCareAlert(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.session_token, selectedQuote?.id]);
 
   async function handleCreateQuote() {
     if (!currentUser?.session_token) {
@@ -538,6 +570,57 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
     const quote = await updateQuoteStatus(currentUser.session_token, selectedQuote.id, status);
     setSelectedQuoteId(String(quote.id));
     setStatusMessage(status === "accepted" ? t("billingQuoteAccepted") : t("billingQuoteRejected"));
+    await refreshBilling();
+  }
+
+  async function handleReviseQuote() {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    const quote = await reviseQuote(currentUser.session_token, selectedQuote.id);
+    setSelectedQuoteId(String(quote.id));
+    setDiscount((quote.discount_cents / 100).toFixed(2));
+    setStatusMessage(t("billingQuoteRevised"));
+    await refreshBilling();
+  }
+
+  async function handleAddNewCareToQuote() {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    const quote = await updateQuoteWithNewRecords(currentUser.session_token, selectedQuote.id);
+    setSelectedQuoteId(String(quote.id));
+    setDiscount((quote.discount_cents / 100).toFixed(2));
+    setStatusMessage(t(quote.id === selectedQuote.id ? "billingQuoteUpdatedWithNewCare" : "billingQuoteRevised"));
+    await refreshBilling();
+  }
+
+  async function handleIgnoreNewCare() {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    const alert = await ignoreQuoteNewRecords(currentUser.session_token, selectedQuote.id);
+    setCareAlert(alert);
+    setStatusMessage(t("billingCareIgnored"));
+    await refreshBilling();
+  }
+
+  async function handleSnoozeNewCare() {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    const alert = await snoozeQuoteNewRecordsReminder(currentUser.session_token, selectedQuote.id);
+    setCareAlert(alert);
+    setStatusMessage(t("billingReminderSnoozed"));
+  }
+
+  async function handleCloseQuote() {
+    if (!currentUser?.session_token || !selectedQuote) {
+      return;
+    }
+    const quote = await closeQuote(currentUser.session_token, selectedQuote.id);
+    setSelectedQuoteId(String(quote.id));
+    setStatusMessage(t("billingQuoteClosed"));
     await refreshBilling();
   }
 
@@ -645,6 +728,30 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
 
           {selectedQuote ? (
             <>
+              {careAlert?.show_new_records_alert ? (
+                <div className="grid gap-2 rounded-md border border-amber-400/35 bg-amber-400/10 p-3">
+                  <p className="text-sm font-semibold text-amber-100">{t("billingNewCareAlert")}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" onClick={() => void handleAddNewCareToQuote().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                      {t("billingAlertYes")}
+                    </Button>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => void handleIgnoreNewCare().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                      {t("billingAlertNo")}
+                    </Button>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => void handleSnoozeNewCare().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                      {t("billingAlertLater")}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              {careAlert && (careAlert.all_lines_performed || careAlert.balance_is_zero) && selectedQuote.status !== "closed" ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-400/30 bg-emerald-400/10 p-3">
+                  <p className="text-sm font-semibold text-emerald-100">{t("billingCloseSuggested")}</p>
+                  <Button type="button" size="sm" onClick={() => void handleCloseQuote().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingCloseQuote")}
+                  </Button>
+                </div>
+              ) : null}
               <DenseBillingRows
                 rows={selectedQuote.lines.map((line) => [
                   line.description,
@@ -658,6 +765,13 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                   <h4 className="text-sm font-semibold text-white">{t("billingDepositsTitle")}</h4>
                   <Badge variant="default">{t("billingBalanceDue")}: {formatCents(selectedQuoteBalanceCents)}</Badge>
                 </div>
+                {selectedQuote.previous_paid_cents > 0 ? (
+                  <div className="grid gap-1 rounded-md border border-powder-blue-500/20 bg-ink-black-950 p-2 text-sm">
+                    <span className="text-alabaster-grey-500">{t("billingCareTotal")}: {formatCents(selectedQuote.net_total_cents)}</span>
+                    <span className="text-alabaster-grey-500">{t("billingPreviousPaid")}: -{formatCents(selectedQuote.previous_paid_cents)}</span>
+                    <span className="font-semibold text-powder-blue-100">{t("billingRemainingBalance")}: {formatCents(selectedQuote.balance_due_cents)}</span>
+                  </div>
+                ) : null}
                 {depositInvoices.length ? (
                   <div className="grid gap-2">
                     {depositInvoices.map((invoice) => (
@@ -700,12 +814,13 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                   <span>{t("billingGross")}: {formatCents(selectedQuote.gross_total_cents)}</span>
                   <span>{t("billingDiscount")}: {formatCents(selectedQuote.discount_cents)}</span>
                   <span className="font-semibold text-white">{t("billingNet")}: {formatCents(selectedQuote.net_total_cents)}</span>
+                  {selectedQuote.previous_paid_cents > 0 ? <span>{t("billingPreviousPaid")}: -{formatCents(selectedQuote.previous_paid_cents)}</span> : null}
                   <span>{t("billingDepositsTitle")}: {formatCents(depositTotalCents)}</span>
                   <span className="font-semibold text-powder-blue-100">{t("billingBalanceDue")}: {formatCents(selectedQuoteBalanceCents)}</span>
                 </div>
                 <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 2xl:justify-end">
-                  <Input className="w-28 shrink-0" disabled={selectedQuote.status === "rejected"} type="number" min={0} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} />
-                  <Button disabled={selectedQuote.status === "rejected"} type="button" variant="secondary" size="sm" onClick={() => void handleDiscount().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                  <Input className="w-28 shrink-0" disabled={quoteLocked} type="number" min={0} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} />
+                  <Button disabled={quoteLocked} type="button" variant="secondary" size="sm" onClick={() => void handleDiscount().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
                     {t("billingSaveDiscount")}
                   </Button>
                   <Button disabled={selectedQuote.status !== "draft"} type="button" variant="secondary" size="sm" onClick={() => void handleQuoteStatus("rejected").catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
@@ -720,6 +835,14 @@ export function BillingPanel({ currentUser, patient }: { currentUser: User | nul
                   <Button disabled={selectedQuote.status !== "accepted"} type="button" size="sm" onClick={() => void handleInvoice().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
                     {t("billingIssueInvoice")}
                   </Button>
+                  <Button disabled={selectedQuote.status === "closed"} type="button" variant="secondary" size="sm" onClick={() => void handleReviseQuote().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                    {t("billingUpdateCarePlan")}
+                  </Button>
+                  {selectedQuote.status !== "closed" ? (
+                    <Button type="button" variant="secondary" size="sm" onClick={() => void handleCloseQuote().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : t("billingGenericError")))}>
+                      {t("billingCloseQuote")}
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </>
@@ -1302,6 +1425,10 @@ function quoteStatusKey(status: string): L10nKey {
     return "billingQuoteRejectedStatus";
   }
 
+  if (status === "closed") {
+    return "billingQuoteClosedStatus";
+  }
+
   return "billingQuoteDraftStatus";
 }
 
@@ -1312,6 +1439,10 @@ function quoteBadgeVariant(status: string) {
 
   if (status === "rejected") {
     return "danger" as const;
+  }
+
+  if (status === "closed") {
+    return "default" as const;
   }
 
   return "warning" as const;

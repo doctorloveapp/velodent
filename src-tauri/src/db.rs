@@ -14,7 +14,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 17;
+const CURRENT_SCHEMA_VERSION: i64 = 18;
 const DEFAULT_DEV_KEY: &str = "velodent-development-only-change-me";
 const PRODUCTION_KEY_MASK: &[u8] = b"velodent-db-key-mask-v1";
 const OBFUSCATED_PRODUCTION_KEY: &[u8] = &[
@@ -524,13 +524,30 @@ pub struct Quote {
     pub patient_id: i64,
     pub title: String,
     pub status: String,
+    pub version: i64,
+    pub parent_quote_id: Option<i64>,
     pub gross_total_cents: i64,
     pub discount_cents: i64,
     pub net_total_cents: i64,
+    pub previous_paid_cents: i64,
+    pub balance_due_cents: i64,
     pub accepted_at: Option<String>,
+    pub last_reminder_snoozed_at: Option<String>,
+    pub closed_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub lines: Vec<QuoteLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QuoteCareAlert {
+    pub quote_id: i64,
+    pub patient_id: i64,
+    pub show_new_records_alert: bool,
+    pub snoozed_until: Option<String>,
+    pub new_records: Vec<ClinicalRecord>,
+    pub all_lines_performed: bool,
+    pub balance_is_zero: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2696,6 +2713,330 @@ impl Database {
         }
     }
 
+    pub fn quote_care_alert(
+        &self,
+        actor_user_id: i64,
+        quote_id: i64,
+    ) -> DbResult<QuoteCareAlert> {
+        self.assert_active_user(actor_user_id)?;
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        let new_records = self.quote_new_ready_records_without_tx(&quote)?;
+        let snoozed_until = self.quote_snoozed_until_without_tx(quote.id)?;
+        let all_lines_performed = self.quote_all_lines_performed_without_tx(quote.id)?;
+        let remaining = self.quote_remaining_cents_without_tx(quote.id, quote.balance_due_cents)?;
+
+        Ok(QuoteCareAlert {
+            quote_id: quote.id,
+            patient_id: quote.patient_id,
+            show_new_records_alert: quote.status != "closed"
+                && !new_records.is_empty()
+                && snoozed_until.is_none(),
+            snoozed_until,
+            new_records,
+            all_lines_performed,
+            balance_is_zero: remaining <= 0,
+        })
+    }
+
+    pub fn snooze_quote_new_records_reminder(
+        &self,
+        actor_user_id: i64,
+        quote_id: i64,
+    ) -> DbResult<QuoteCareAlert> {
+        self.assert_active_user(actor_user_id)?;
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        if quote.status == "closed" {
+            return Err(DbError::InvalidFinancialState(
+                "closed quotes cannot be reminded".to_owned(),
+            ));
+        }
+        self.conn.execute(
+            r#"
+            UPDATE quotes
+            SET
+                last_reminder_snoozed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?1
+            "#,
+            [quote_id],
+        )?;
+        self.insert_patient_audit(
+            actor_user_id,
+            quote.patient_id,
+            "FINANCIAL_TRANSACTION",
+            &serde_json::json!({
+                "operation": "quote_new_care_reminder_snoozed",
+                "quote_id": quote_id,
+                "hours": 24,
+            })
+            .to_string(),
+        )?;
+        self.quote_care_alert(actor_user_id, quote_id)
+    }
+
+    pub fn ignore_quote_new_records(
+        &self,
+        actor_user_id: i64,
+        quote_id: i64,
+    ) -> DbResult<QuoteCareAlert> {
+        self.assert_active_user(actor_user_id)?;
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        if quote.status == "closed" {
+            return Err(DbError::InvalidFinancialState(
+                "closed quotes cannot be updated".to_owned(),
+            ));
+        }
+        let records = self.quote_new_ready_records_without_tx(&quote)?;
+        if records.is_empty() {
+            return self.quote_care_alert(actor_user_id, quote_id);
+        }
+        let record_ids: Vec<i64> = records.iter().map(|record| record.id).collect();
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            for record_id in &record_ids {
+                self.conn.execute(
+                    r#"
+                    UPDATE clinical_records
+                    SET
+                        ready_for_quote = 0,
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id = ?1
+                    "#,
+                    [record_id],
+                )?;
+            }
+            self.insert_patient_audit(
+                actor_user_id,
+                quote.patient_id,
+                "FINANCIAL_TRANSACTION",
+                &serde_json::json!({
+                    "operation": "quote_new_care_ignored",
+                    "quote_id": quote_id,
+                    "record_ids": record_ids,
+                })
+                .to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => self.quote_care_alert(actor_user_id, quote_id),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn update_quote_with_new_records(
+        &self,
+        actor_user_id: i64,
+        quote_id: i64,
+    ) -> DbResult<Quote> {
+        self.assert_active_user(actor_user_id)?;
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        if quote.status == "closed" || quote.status != "draft" {
+            return self.revise_quote(actor_user_id, quote_id);
+        }
+        let records = self.quote_new_ready_records_without_tx(&quote)?;
+        if records.is_empty() {
+            return Ok(quote);
+        }
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.append_records_to_quote_without_tx(&quote, &records)?;
+            self.recalculate_quote_totals(quote.id)?;
+            self.insert_patient_audit(
+                actor_user_id,
+                quote.patient_id,
+                "FINANCIAL_TRANSACTION",
+                &serde_json::json!({
+                    "operation": "quote_updated_with_new_care",
+                    "quote_id": quote_id,
+                    "record_ids": records.iter().map(|record| record.id).collect::<Vec<_>>(),
+                })
+                .to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => self.get_quote(quote_id)?.ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn revise_quote(&self, actor_user_id: i64, quote_id: i64) -> DbResult<Quote> {
+        self.assert_active_user(actor_user_id)?;
+        let source = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        let root_quote_id = source.parent_quote_id.unwrap_or(source.id);
+        let previous_paid_cents =
+            self.patient_successful_payments_total_cents_without_tx(source.patient_id)?;
+        let new_records = self.quote_new_ready_records_without_tx(&source)?;
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            let next_version = self.next_quote_version_without_tx(root_quote_id)?;
+            let mut copied_lines = Vec::new();
+            for line in &source.lines {
+                copied_lines.push((
+                    line.clinical_record_id,
+                    line.service_id,
+                    line.description.clone(),
+                    line.quantity,
+                    line.unit_price_cents,
+                    line.total_cents,
+                ));
+            }
+            let new_quote_title = revised_quote_title(&source.title, next_version);
+            let mut gross_total_cents = copied_lines
+                .iter()
+                .try_fold(0_i64, |acc, line| checked_add_cents(acc, line.5))?;
+            for record in &new_records {
+                let unit_price_cents = self.record_service_price_without_tx(record.service_id)?;
+                gross_total_cents = checked_add_cents(gross_total_cents, unit_price_cents)?;
+            }
+
+            self.conn.execute(
+                r#"
+                INSERT INTO quotes (
+                    patient_id,
+                    title,
+                    status,
+                    version,
+                    parent_quote_id,
+                    gross_total_cents,
+                    discount_cents,
+                    previous_paid_cents
+                )
+                VALUES (?1, ?2, 'draft', ?3, ?4, ?5, 0, ?6)
+                "#,
+                params![
+                    source.patient_id,
+                    new_quote_title,
+                    next_version,
+                    root_quote_id,
+                    gross_total_cents,
+                    previous_paid_cents
+                ],
+            )?;
+            let new_quote_id = self.conn.last_insert_rowid();
+
+            for (clinical_record_id, service_id, description, quantity, unit_price_cents, total_cents) in copied_lines {
+                self.conn.execute(
+                    r#"
+                    INSERT INTO quote_lines (
+                        quote_id,
+                        clinical_record_id,
+                        service_id,
+                        description,
+                        quantity,
+                        unit_price_cents,
+                        total_cents
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                    "#,
+                    params![
+                        new_quote_id,
+                        clinical_record_id,
+                        service_id,
+                        description,
+                        quantity,
+                        unit_price_cents,
+                        total_cents
+                    ],
+                )?;
+            }
+
+            let new_quote = Quote {
+                id: new_quote_id,
+                patient_id: source.patient_id,
+                title: String::new(),
+                status: "draft".to_owned(),
+                version: next_version,
+                parent_quote_id: Some(root_quote_id),
+                gross_total_cents,
+                discount_cents: 0,
+                net_total_cents: gross_total_cents,
+                previous_paid_cents,
+                balance_due_cents: gross_total_cents.saturating_sub(previous_paid_cents),
+                accepted_at: None,
+                last_reminder_snoozed_at: None,
+                closed_at: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+                lines: Vec::new(),
+            };
+            self.append_records_to_quote_without_tx(&new_quote, &new_records)?;
+            self.recalculate_quote_totals(new_quote_id)?;
+            self.insert_patient_audit(
+                actor_user_id,
+                source.patient_id,
+                "FINANCIAL_TRANSACTION",
+                &serde_json::json!({
+                    "operation": "quote_revised",
+                    "source_quote_id": source.id,
+                    "new_quote_id": new_quote_id,
+                    "version": next_version,
+                    "previous_paid_cents": previous_paid_cents,
+                })
+                .to_string(),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(new_quote_id)
+        })();
+
+        match result {
+            Ok(new_quote_id) => self.get_quote(new_quote_id)?.ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    pub fn close_quote(&self, actor_user_id: i64, quote_id: i64) -> DbResult<Quote> {
+        self.assert_active_user(actor_user_id)?;
+        let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
+        if quote.status == "closed" {
+            return Ok(quote);
+        }
+        if quote.status == "rejected" {
+            return Err(DbError::InvalidFinancialState(
+                "rejected quotes cannot be closed".to_owned(),
+            ));
+        }
+        self.conn.execute(
+            r#"
+            UPDATE quotes
+            SET
+                status = 'closed',
+                closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?1
+            "#,
+            [quote_id],
+        )?;
+        self.insert_patient_audit(
+            actor_user_id,
+            quote.patient_id,
+            "FINANCIAL_TRANSACTION",
+            &serde_json::json!({
+                "operation": "quote_closed",
+                "quote_id": quote_id,
+            })
+            .to_string(),
+        )?;
+        self.get_quote(quote_id)?.ok_or(DbError::NotFound)
+    }
+
     pub fn add_quote_line(
         &self,
         actor_user_id: i64,
@@ -2768,9 +3109,9 @@ impl Database {
             ));
         }
         let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
-        if quote.status == "rejected" {
+        if quote.status == "rejected" || quote.status == "closed" {
             return Err(DbError::InvalidFinancialState(
-                "rejected quotes cannot be discounted".to_owned(),
+                "final quotes cannot be discounted".to_owned(),
             ));
         }
         if discount_cents > quote.gross_total_cents {
@@ -2810,6 +3151,9 @@ impl Database {
     ) -> DbResult<Quote> {
         self.assert_active_user(actor_user_id)?;
         let status = normalize_quote_status(status)?;
+        if status == "closed" {
+            return self.close_quote(actor_user_id, quote_id);
+        }
         let quote = self.get_quote(quote_id)?.ok_or(DbError::NotFound)?;
         if quote.status != "draft" {
             return Err(DbError::InvalidFinancialState(
@@ -2902,7 +3246,7 @@ impl Database {
         let result = (|| {
             self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
             let deposit_total = self.quote_deposit_total_without_tx(quote.id)?;
-            let final_total = quote.net_total_cents - deposit_total;
+            let final_total = quote.balance_due_cents - deposit_total;
             if final_total <= 0 {
                 return Err(DbError::InvalidFinancialState(
                     "quote is already fully covered by deposit invoices".to_owned(),
@@ -3040,7 +3384,7 @@ impl Database {
         let result = (|| {
             self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
             let remaining =
-                self.quote_remaining_cents_without_tx(quote.id, quote.net_total_cents)?;
+                self.quote_remaining_cents_without_tx(quote.id, quote.balance_due_cents)?;
             if amount_cents > remaining {
                 return Err(DbError::InvalidFinancialState(
                     "deposit exceeds quote remaining balance".to_owned(),
@@ -3163,6 +3507,172 @@ impl Database {
         quote_total_cents: i64,
     ) -> DbResult<i64> {
         Ok(quote_total_cents - self.quote_deposit_total_without_tx(quote_id)?)
+    }
+
+    fn patient_successful_payments_total_cents_without_tx(&self, patient_id: i64) -> DbResult<i64> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT COALESCE(SUM(payments.amount_cents), 0)
+                FROM payments
+                JOIN invoices ON invoices.id = payments.invoice_id
+                WHERE invoices.patient_id = ?1
+                  AND payments.status = 'success'
+                "#,
+                [patient_id],
+                |row| row.get(0),
+            )
+            .map_err(DbError::from)
+    }
+
+    fn quote_snoozed_until_without_tx(&self, quote_id: i64) -> DbResult<Option<String>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT strftime('%Y-%m-%dT%H:%M:%fZ', datetime(last_reminder_snoozed_at, '+24 hours'))
+                FROM quotes
+                WHERE id = ?1
+                  AND last_reminder_snoozed_at IS NOT NULL
+                  AND datetime(last_reminder_snoozed_at, '+24 hours') > datetime('now')
+                "#,
+                [quote_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    fn quote_new_ready_records_without_tx(&self, quote: &Quote) -> DbResult<Vec<ClinicalRecord>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT
+                cr.id,
+                cr.patient_id,
+                cr.service_id,
+                sc.code,
+                sc.name,
+                cr.tooth_number,
+                cr.tooth_surface,
+                cr.pathology_description,
+                cr.status,
+                cr.ready_for_quote,
+                cr.notes,
+                cr.created_by_user_id,
+                users.username,
+                cr.created_at,
+                cr.updated_at
+            FROM clinical_records cr
+            LEFT JOIN clinical_services_catalog sc ON sc.id = cr.service_id
+            LEFT JOIN users ON users.id = cr.created_by_user_id
+            WHERE cr.patient_id = ?1
+              AND cr.status = 'diagnosed'
+              AND cr.ready_for_quote = 1
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM quote_lines ql
+                  WHERE ql.quote_id = ?2
+                    AND ql.clinical_record_id = cr.id
+              )
+            ORDER BY cr.created_at ASC, cr.id ASC
+            "#,
+        )?;
+        let records = statement
+            .query_map(params![quote.patient_id, quote.id], clinical_record_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DbError::from)?;
+        Ok(records)
+    }
+
+    fn append_records_to_quote_without_tx(
+        &self,
+        quote: &Quote,
+        records: &[ClinicalRecord],
+    ) -> DbResult<()> {
+        for record in records {
+            let description = record
+                .service_name
+                .as_deref()
+                .or(record.pathology_description.as_deref())
+                .unwrap_or("Prestazione clinica");
+            let unit_price_cents = self.record_service_price_without_tx(record.service_id)?;
+            self.conn.execute(
+                r#"
+                INSERT INTO quote_lines (
+                    quote_id,
+                    clinical_record_id,
+                    service_id,
+                    description,
+                    quantity,
+                    unit_price_cents,
+                    total_cents
+                )
+                VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)
+                "#,
+                params![
+                    quote.id,
+                    record.id,
+                    record.service_id,
+                    description,
+                    unit_price_cents
+                ],
+            )?;
+            self.conn.execute(
+                r#"
+                UPDATE clinical_records
+                SET
+                    status = 'in_quote',
+                    ready_for_quote = 0,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?1
+                "#,
+                [record.id],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn record_service_price_without_tx(&self, service_id: Option<i64>) -> DbResult<i64> {
+        let Some(service_id) = service_id else {
+            return Ok(0);
+        };
+        self.conn
+            .query_row(
+                "SELECT COALESCE(base_price_cents, 0) FROM clinical_services_catalog WHERE id = ?1",
+                [service_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(DbError::NotFound)
+    }
+
+    fn next_quote_version_without_tx(&self, root_quote_id: i64) -> DbResult<i64> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT COALESCE(MAX(version), 1) + 1
+                FROM quotes
+                WHERE id = ?1 OR parent_quote_id = ?1
+                "#,
+                [root_quote_id],
+                |row| row.get(0),
+            )
+            .map_err(DbError::from)
+    }
+
+    fn quote_all_lines_performed_without_tx(&self, quote_id: i64) -> DbResult<bool> {
+        let (total_lines, performed_lines): (i64, i64) = self.conn.query_row(
+            r#"
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN cr.status = 'performed' THEN 1 ELSE 0 END), 0)
+            FROM quote_lines ql
+            LEFT JOIN clinical_records cr ON cr.id = ql.clinical_record_id
+            WHERE ql.quote_id = ?1
+            "#,
+            [quote_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(total_lines > 0 && total_lines == performed_lines)
     }
 
     pub fn register_payment(
@@ -3939,6 +4449,68 @@ impl Database {
             .ok_or(DbError::NotFound)
     }
 
+    pub fn mark_clinical_record_performed(
+        &self,
+        actor_user_id: i64,
+        record_id: i64,
+    ) -> DbResult<ClinicalRecord> {
+        self.assert_active_user(actor_user_id)?;
+        let record = self
+            .get_clinical_record(record_id)?
+            .ok_or(DbError::NotFound)?;
+        if !matches!(record.status.as_str(), "diagnosed" | "in_quote" | "performed") {
+            return Err(DbError::InvalidClinicalStatus(record.status));
+        }
+
+        let result = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+            self.conn.execute(
+                r#"
+                UPDATE clinical_records
+                SET
+                    status = 'performed',
+                    ready_for_quote = 0,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?1
+                "#,
+                [record_id],
+            )?;
+            if let Some(tooth_number) = record.tooth_number {
+                self.refresh_tooth_status_from_records_without_tx(
+                    record.patient_id,
+                    tooth_number,
+                    actor_user_id,
+                )?;
+            }
+            self.insert_patient_audit(
+                actor_user_id,
+                record.patient_id,
+                "clinical.record_performed",
+                &format!(
+                    r#"{{"record_id":{record_id},"tooth_number":{},"service_id":{}}}"#,
+                    record
+                        .tooth_number
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "null".to_owned()),
+                    record
+                        .service_id
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "null".to_owned())
+                ),
+            )?;
+            self.conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => self.get_clinical_record(record_id)?.ok_or(DbError::NotFound),
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     pub fn delete_clinical_record(&self, actor_user_id: i64, record_id: i64) -> DbResult<()> {
         self.assert_active_user(actor_user_id)?;
         let record = self
@@ -4003,28 +4575,9 @@ impl Database {
             }
 
             if let Some(tooth_number) = record.tooth_number {
-                let remaining_status = self
-                    .conn
-                    .query_row(
-                        r#"
-                        SELECT status
-                        FROM clinical_records
-                        WHERE patient_id = ?1 AND tooth_number = ?2
-                        ORDER BY created_at DESC, id DESC
-                        LIMIT 1
-                        "#,
-                        params![record.patient_id, tooth_number],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?;
-                let next_state = remaining_status
-                    .as_deref()
-                    .map(tooth_state_for_clinical_status)
-                    .unwrap_or("healthy");
-                self.upsert_tooth_status_without_audit(
+                self.refresh_tooth_status_from_records_without_tx(
                     record.patient_id,
                     tooth_number,
-                    next_state,
                     actor_user_id,
                 )?;
             }
@@ -6124,9 +6677,14 @@ impl Database {
                     patient_id,
                     title,
                     status,
+                    version,
+                    parent_quote_id,
                     gross_total_cents,
                     discount_cents,
+                    previous_paid_cents,
                     accepted_at,
+                    last_reminder_snoozed_at,
+                    closed_at,
                     created_at,
                     updated_at
                 FROM quotes
@@ -6140,10 +6698,15 @@ impl Database {
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, i64>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, Option<String>>(6)?,
-                        row.get::<_, String>(7)?,
-                        row.get::<_, String>(8)?,
+                        row.get::<_, Option<i64>>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, String>(12)?,
+                        row.get::<_, String>(13)?,
                     ))
                 },
             )
@@ -6154,9 +6717,14 @@ impl Database {
             patient_id,
             title,
             status,
+            version,
+            parent_quote_id,
             gross_total_cents,
             discount_cents,
+            previous_paid_cents,
             accepted_at,
+            last_reminder_snoozed_at,
+            closed_at,
             created_at,
             updated_at,
         )) = header
@@ -6165,15 +6733,22 @@ impl Database {
         };
 
         let lines = self.quote_lines(id)?;
+        let net_total_cents = net_total_cents(gross_total_cents, discount_cents)?;
         Ok(Some(Quote {
             id,
             patient_id,
             title,
             status,
+            version,
+            parent_quote_id,
             gross_total_cents,
             discount_cents,
-            net_total_cents: net_total_cents(gross_total_cents, discount_cents)?,
+            net_total_cents,
+            previous_paid_cents,
+            balance_due_cents: net_total_cents.saturating_sub(previous_paid_cents),
             accepted_at,
+            last_reminder_snoozed_at,
+            closed_at,
             created_at,
             updated_at,
             lines,
@@ -6433,6 +7008,38 @@ impl Database {
         )?;
 
         Ok(())
+    }
+
+    fn refresh_tooth_status_from_records_without_tx(
+        &self,
+        patient_id: i64,
+        tooth_number: i64,
+        actor_user_id: i64,
+    ) -> DbResult<()> {
+        let remaining_status = self
+            .conn
+            .query_row(
+                r#"
+                SELECT status
+                FROM clinical_records
+                WHERE patient_id = ?1 AND tooth_number = ?2
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                "#,
+                params![patient_id, tooth_number],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let next_state = remaining_status
+            .as_deref()
+            .map(tooth_state_for_clinical_status)
+            .unwrap_or("healthy");
+        self.upsert_tooth_status_without_audit(
+            patient_id,
+            tooth_number,
+            next_state,
+            actor_user_id,
+        )
     }
 
     fn get_clinical_record(&self, id: i64) -> DbResult<Option<ClinicalRecord>> {
@@ -7210,6 +7817,7 @@ fn normalize_quote_status(status: &str) -> DbResult<&'static str> {
         "draft" => Ok("draft"),
         "accepted" => Ok("accepted"),
         "rejected" => Ok("rejected"),
+        "closed" => Ok("closed"),
         value => Err(DbError::InvalidFinancialState(format!(
             "invalid quote status {value}"
         ))),
@@ -7257,6 +7865,16 @@ fn net_total_cents(gross_total_cents: i64, discount_cents: i64) -> DbResult<i64>
         ));
     }
     Ok(gross_total_cents - discount_cents)
+}
+
+fn revised_quote_title(title: &str, version: i64) -> String {
+    let trimmed = title.trim();
+    let base = if let Some((base, _)) = trimmed.rsplit_once(" v") {
+        base.trim()
+    } else {
+        trimmed
+    };
+    format!("{} v{}", base, version)
 }
 
 fn invoice_payment_status(total_cents: i64, paid_cents: i64) -> String {
@@ -7433,6 +8051,16 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
         "invoice_kind",
         "TEXT NOT NULL DEFAULT 'final' CHECK(invoice_kind IN ('final', 'deposit'))",
     )?;
+    ensure_column(conn, "quotes", "version", "INTEGER NOT NULL DEFAULT 1")?;
+    ensure_column(conn, "quotes", "parent_quote_id", "INTEGER")?;
+    ensure_column(
+        conn,
+        "quotes",
+        "previous_paid_cents",
+        "INTEGER NOT NULL DEFAULT 0 CHECK(previous_paid_cents >= 0)",
+    )?;
+    ensure_column(conn, "quotes", "last_reminder_snoozed_at", "TEXT")?;
+    ensure_column(conn, "quotes", "closed_at", "TEXT")?;
     ensure_column(conn, "patient_consents", "template_id", "INTEGER")?;
     ensure_column(conn, "patient_consents", "template_title", "TEXT")?;
     ensure_column(conn, "patient_consents", "rendered_text", "TEXT")?;
@@ -7447,13 +8075,14 @@ fn run_migrations(conn: &Connection) -> DbResult<()> {
     ensure_column(conn, "patient_consents", "signed_device_id", "INTEGER")?;
     seed_consent_templates(conn)?;
     migrate_tooth_status_constraint(conn)?;
+    migrate_quotes_status_constraint(conn)?;
     migrate_sync_jobs_status_constraint(conn)?;
     conn.execute(
         r#"
         INSERT OR IGNORE INTO schema_migrations (version, name)
         VALUES (?1, ?2)
         "#,
-        params![CURRENT_SCHEMA_VERSION, "enterprise_trial_backup_integrity"],
+        params![CURRENT_SCHEMA_VERSION, "clinical_performed_quote_revision"],
     )?;
     Ok(())
 }
@@ -7690,6 +8319,84 @@ fn migrate_tooth_status_constraint(conn: &Connection) -> DbResult<()> {
         FROM clinical_tooth_statuses_legacy;
         DROP TABLE clinical_tooth_statuses_legacy;
         CREATE INDEX IF NOT EXISTS idx_clinical_tooth_statuses_patient ON clinical_tooth_statuses(patient_id);
+        PRAGMA foreign_keys = ON;
+        "#,
+    )?;
+
+    Ok(())
+}
+
+fn migrate_quotes_status_constraint(conn: &Connection) -> DbResult<()> {
+    let table_sql = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'quotes'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+
+    if table_sql.contains("'closed'") {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = OFF;
+        ALTER TABLE quotes RENAME TO quotes_legacy;
+        CREATE TABLE quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'accepted', 'rejected', 'closed')),
+            version INTEGER NOT NULL DEFAULT 1,
+            parent_quote_id INTEGER,
+            gross_total_cents INTEGER NOT NULL DEFAULT 0 CHECK(gross_total_cents >= 0),
+            discount_cents INTEGER NOT NULL DEFAULT 0 CHECK(discount_cents >= 0),
+            previous_paid_cents INTEGER NOT NULL DEFAULT 0 CHECK(previous_paid_cents >= 0),
+            accepted_at TEXT,
+            last_reminder_snoozed_at TEXT,
+            closed_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+            FOREIGN KEY (parent_quote_id) REFERENCES quotes(id) ON DELETE SET NULL
+        );
+        INSERT INTO quotes (
+            id,
+            patient_id,
+            title,
+            status,
+            version,
+            parent_quote_id,
+            gross_total_cents,
+            discount_cents,
+            previous_paid_cents,
+            accepted_at,
+            last_reminder_snoozed_at,
+            closed_at,
+            created_at,
+            updated_at
+        )
+        SELECT
+            id,
+            patient_id,
+            title,
+            CASE WHEN status IN ('draft', 'accepted', 'rejected', 'closed') THEN status ELSE 'draft' END,
+            COALESCE(version, 1),
+            parent_quote_id,
+            gross_total_cents,
+            discount_cents,
+            COALESCE(previous_paid_cents, 0),
+            accepted_at,
+            last_reminder_snoozed_at,
+            closed_at,
+            created_at,
+            updated_at
+        FROM quotes_legacy;
+        DROP TABLE quotes_legacy;
+        CREATE INDEX IF NOT EXISTS idx_quotes_patient ON quotes(patient_id);
+        CREATE INDEX IF NOT EXISTS idx_quotes_parent ON quotes(parent_quote_id);
         PRAGMA foreign_keys = ON;
         "#,
     )?;
@@ -8529,13 +9236,19 @@ CREATE TABLE IF NOT EXISTS quotes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     patient_id INTEGER NOT NULL,
     title TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'accepted', 'rejected')),
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'accepted', 'rejected', 'closed')),
+    version INTEGER NOT NULL DEFAULT 1,
+    parent_quote_id INTEGER,
     gross_total_cents INTEGER NOT NULL DEFAULT 0 CHECK(gross_total_cents >= 0),
     discount_cents INTEGER NOT NULL DEFAULT 0 CHECK(discount_cents >= 0),
+    previous_paid_cents INTEGER NOT NULL DEFAULT 0 CHECK(previous_paid_cents >= 0),
     accepted_at TEXT,
+    last_reminder_snoozed_at TEXT,
+    closed_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE
+    FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_quote_id) REFERENCES quotes(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS quote_lines (
@@ -8690,6 +9403,7 @@ CREATE INDEX IF NOT EXISTS idx_clinical_tooth_statuses_patient ON clinical_tooth
 CREATE INDEX IF NOT EXISTS idx_rx_assets_patient ON rx_assets(patient_id);
 CREATE INDEX IF NOT EXISTS idx_patient_consents_patient ON patient_consents(patient_id);
 CREATE INDEX IF NOT EXISTS idx_quotes_patient ON quotes(patient_id);
+CREATE INDEX IF NOT EXISTS idx_quotes_parent ON quotes(parent_quote_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_patient ON invoices(patient_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_year_number ON invoices(invoice_year, invoice_number);
 CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
@@ -10583,6 +11297,119 @@ mod tests {
             .find(|status| status.tooth_number == 36)
             .expect("tooth status exists");
         assert_eq!(neutral_tooth.state, "healthy");
+    }
+
+    #[test]
+    fn performed_records_quote_revision_and_close_are_transacted() {
+        let db = Database::open(test_database_path(), EncryptionKey::for_tests())
+            .expect("open encrypted db");
+        let admin = db
+            .create_first_admin("admin", "change-me-now", None)
+            .expect("create first admin");
+        let patient = db
+            .create_patient(
+                admin.id,
+                &NewPatient {
+                    first_name: "Marta",
+                    last_name: "Finance",
+                    tax_code: "BNCLGU85T41H501W",
+                    date_of_birth: "1985-12-01",
+                    birth_place: None,
+                    phone: None,
+                    email: None,
+                    address: None,
+                    city: None,
+                    province: None,
+                },
+            )
+            .expect("create patient");
+        let service = db
+            .list_clinical_services(admin.id)
+            .expect("services")
+            .into_iter()
+            .find(|service| service.code == "OTT-001")
+            .expect("base service");
+        let first_record = db
+            .create_clinical_record(
+                admin.id,
+                &NewClinicalRecord {
+                    patient_id: patient.id,
+                    service_id: Some(service.id),
+                    tooth_number: Some(16),
+                    tooth_surface: None,
+                    pathology_description: Some("Carie"),
+                    status: "diagnosed",
+                    ready_for_quote: true,
+                    notes: None,
+                },
+            )
+            .expect("create first clinical record");
+        let quote = db
+            .create_quote_from_ready_records(admin.id, patient.id, "Preventivo test")
+            .expect("quote from diagnosis");
+        let accepted = db
+            .update_quote_status(admin.id, quote.id, "accepted")
+            .expect("accept quote");
+        let deposit_amount = 1_000.min(accepted.net_total_cents);
+        db.create_deposit_invoice(admin.id, accepted.id, deposit_amount, "cash")
+            .expect("deposit invoice");
+        let second_record = db
+            .create_clinical_record(
+                admin.id,
+                &NewClinicalRecord {
+                    patient_id: patient.id,
+                    service_id: Some(service.id),
+                    tooth_number: Some(26),
+                    tooth_surface: None,
+                    pathology_description: Some("Carie"),
+                    status: "diagnosed",
+                    ready_for_quote: true,
+                    notes: None,
+                },
+            )
+            .expect("create second clinical record");
+
+        let alert = db
+            .quote_care_alert(admin.id, accepted.id)
+            .expect("quote care alert");
+        assert!(alert.show_new_records_alert);
+        assert_eq!(alert.new_records.len(), 1);
+        let revised = db
+            .update_quote_with_new_records(admin.id, accepted.id)
+            .expect("revise accepted quote");
+        assert_eq!(revised.version, 2);
+        assert_eq!(revised.parent_quote_id, Some(accepted.id));
+        assert_eq!(revised.previous_paid_cents, deposit_amount);
+        assert_eq!(
+            revised.balance_due_cents,
+            revised.net_total_cents - deposit_amount
+        );
+
+        db.mark_clinical_record_performed(admin.id, first_record.id)
+            .expect("mark first performed");
+        db.mark_clinical_record_performed(admin.id, second_record.id)
+            .expect("mark second performed");
+        let performed_tooth = db
+            .get_tooth_statuses(admin.id, patient.id)
+            .expect("tooth statuses")
+            .into_iter()
+            .find(|status| status.tooth_number == 26)
+            .expect("tooth status exists");
+        assert_eq!(performed_tooth.state, "performed");
+        let close_alert = db
+            .quote_care_alert(admin.id, revised.id)
+            .expect("close alert");
+        assert!(close_alert.all_lines_performed);
+        let closed = db
+            .close_quote(admin.id, revised.id)
+            .expect("close quote");
+        assert_eq!(closed.status, "closed");
+        assert!(
+            db.update_quote_discount(admin.id, closed.id, 10)
+                .expect_err("closed quote cannot change")
+                .to_string()
+                .contains("final quotes")
+        );
     }
 
     #[test]

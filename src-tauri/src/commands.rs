@@ -11,7 +11,8 @@ use crate::{
         ClinicalRecordFilters, ClinicalService, ConsentTemplate, CreateUserInput, DatabaseStatus,
         DeviceAuthorization, GeneratedDocument, GoogleCalendarAccount, GoogleCalendarSyncStatus,
         Invoice, LicenseStatus, NewAgendaBlock, NewClinicalRecord, NewPatient, NewRxAsset, Patient,
-        PatientConsent, PatientTimelineEvent, Payment, Quote, RenderedConsent, RxAsset,
+        PatientConsent, PatientTimelineEvent, Payment, Quote, QuoteCareAlert, RenderedConsent,
+        RxAsset,
         StudioSettings, StudioSettingsUpdate, ToothStatus, User,
     },
     dicom_meta, files,
@@ -419,6 +420,12 @@ pub struct MarkClinicalRecordQuoteRequest {
     session_token: String,
     record_id: i64,
     ready_for_quote: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MarkClinicalRecordPerformedRequest {
+    session_token: String,
+    record_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2243,6 +2250,78 @@ pub fn update_quote_status(
 }
 
 #[tauri::command]
+pub fn quote_care_alert(
+    state: State<'_, AppState>,
+    request: QuoteIdRequest,
+) -> Result<QuoteCareAlert, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .quote_care_alert(actor.id, request.quote_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn update_quote_with_new_records(
+    state: State<'_, AppState>,
+    request: QuoteIdRequest,
+) -> Result<Quote, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .update_quote_with_new_records(actor.id, request.quote_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn ignore_quote_new_records(
+    state: State<'_, AppState>,
+    request: QuoteIdRequest,
+) -> Result<QuoteCareAlert, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .ignore_quote_new_records(actor.id, request.quote_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn snooze_quote_new_records_reminder(
+    state: State<'_, AppState>,
+    request: QuoteIdRequest,
+) -> Result<QuoteCareAlert, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .snooze_quote_new_records_reminder(actor.id, request.quote_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn revise_quote(
+    state: State<'_, AppState>,
+    request: QuoteIdRequest,
+) -> Result<Quote, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .revise_quote(actor.id, request.quote_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn close_quote(
+    state: State<'_, AppState>,
+    request: QuoteIdRequest,
+) -> Result<Quote, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .close_quote(actor.id, request.quote_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn create_invoice_from_quote(
     state: State<'_, AppState>,
     request: QuoteIdRequest,
@@ -2533,6 +2612,18 @@ pub fn mark_clinical_record_ready_for_quote(
     state
         .database()?
         .mark_clinical_record_ready_for_quote(actor.id, request.record_id, request.ready_for_quote)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn mark_clinical_record_performed(
+    state: State<'_, AppState>,
+    request: MarkClinicalRecordPerformedRequest,
+) -> Result<ClinicalRecord, String> {
+    let actor = require_session(&state, &request.session_token)?;
+    state
+        .database()?
+        .mark_clinical_record_performed(actor.id, request.record_id)
         .map_err(|error| error.to_string())
 }
 
@@ -2904,6 +2995,8 @@ fn render_quote_pdf(
         gross_total_cents: quote.gross_total_cents,
         discount_cents: quote.discount_cents,
         net_total_cents: quote.net_total_cents,
+        previous_paid_cents: quote.previous_paid_cents,
+        balance_due_cents: quote.balance_due_cents,
     })
 }
 
@@ -2935,6 +3028,8 @@ fn render_invoice_pdf(
         gross_total_cents: invoice.total_cents,
         discount_cents: 0,
         net_total_cents: invoice.total_cents,
+        previous_paid_cents: 0,
+        balance_due_cents: invoice.total_cents,
     })
 }
 
